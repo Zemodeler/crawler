@@ -1,0 +1,79 @@
+# Roadmap
+
+Each milestone ends in something a student can use. Spikes come first because
+they decide whether a path works at all.
+
+## M0 — Spikes (de-risk)
+
+- [x] **QMplus token login** (2026-10-16): SAML + MFA in an Electron window,
+      token captured and verified, stored with `safeStorage`; Moodle 4.5.15,
+      all planned functions permitted. Details in design 02.
+- [x] **One module end to end** (2026-10-16, `spikes/qmplus-module`): ECS505U.
+      36 sections, 117 activities, 57 files (41.7 MB) downloaded and sorted
+      into `My Studies/2026-27/…` in 14.5 s, with 8 API calls and 4 parallel
+      downloads. 5 assignment deadlines, 4 of them placeholder dates in 2028
+      (→ `needs-check` rule). Findings in design 02 and 03.
+- [x] **Host same-origin AI — Windows** (2026-10-15, Study Hub branch
+      `spike/host`): Electron shell + Node host, cookie auth, "Test connection"
+      passes in the real UI for both `claude` and `codex` with no pairing.
+- [ ] **Host same-origin AI — macOS**, launched from Finder (the `PATH`
+      pitfall). Needs a Mac.
+- [x] **Login window** (2026-10-16): QM's Microsoft SAML sign-in, including the
+      passkey/MFA step, works in an Electron window; the `moodlemobile://`
+      redirect is caught with `protocol.handle`.
+- [ ] **Transcripts**: identify QM's lecture-capture system and whether
+      captions can be fetched from the session.
+
+## M1 — QM crawl to folder (Crawler CLI)
+
+- Moodle adapter (login, modules, items, download) with record/replay tests.
+- Sorter (rules only) and manifest with re-sync safety rules.
+- `Deadlines.json` from structured VLE fields; `Deadlines.ics` export.
+- `crawler login`, `crawler sync`, `crawler doctor <url>`.
+
+*Usable:* run one command, get `My Studies/` with every file and every
+structured deadline.
+
+## M2 — One app, no bridge (Study Hub)
+
+- Electron desktop shell (Windows + macOS) replaces the C# launcher and the
+  bridge; host runs inside it; pairing removed.
+- Library backend; Study Hub opens `My Studies/` with no picker.
+- Multi-module root and module switcher.
+- Calendar view reading `Deadlines.json`, with sources.
+
+*Usable:* double-click, sign in to QMplus, see modules and deadlines in
+Study Hub.
+
+## M3 — Deadlines you can trust
+
+- Text extraction in Node; rule-based candidates; AI extraction via the host's
+  CLI runner; quote verification; week-number resolution.
+- Conflict and TBC states end to end, including the resolve UI.
+- Re-sync every 3 days (plus catch-up on launch and "Sync now"), change
+  detection, `Changes.md`, native notifications on both platforms.
+
+## M4 — Calendar sync
+
+- Google Calendar: own secondary calendar, create/update/delete by id, manual
+  edit detection.
+- Friends added as OAuth test users.
+
+## M5 — Transcripts and subject-neutral Study Hub
+
+- Transcript download for QM (per the M0 spike).
+- Subject profiles in Study Hub (law, STEM, humanities, general).
+
+## M6 — Public release
+
+- README, LICENSE, CONTRIBUTING ("add your university"), CI on Windows and
+  macOS runners, tagged releases with the `.exe` and `.dmg`, auto-update.
+- QM acceptable-use check done.
+- Code signing: Windows (removes the SmartScreen warning) and Apple Developer ID
+  plus notarization for macOS (deferred until here; earlier Mac builds are
+  unsigned and update manually).
+
+## M7 — Surrey (Brightspace)
+
+- Spike: session-auth JSON endpoints and CSRF handling.
+- Brightspace adapter on the same interface; Surrey config.

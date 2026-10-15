@@ -1,0 +1,3 @@
+node_modules/
+# Spike output can hold personal course data.
+spikes/**/out/

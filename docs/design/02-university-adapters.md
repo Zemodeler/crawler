@@ -1,0 +1,177 @@
+# 02 — University adapters
+
+One university = one adapter config. One VLE platform = one adapter module.
+QMplus (Moodle) first; SurreyLearn (Brightspace) second.
+
+## The interface
+
+Everything above the adapter (sorting, extraction, diffing, calendar) is
+platform-neutral and only sees these types.
+
+```ts
+interface UniversityAdapter {
+  id: string;                         // "qmul"
+  platform: "moodle" | "brightspace"; // module that implements it
+  displayName: string;                // "Queen Mary University of London"
+
+  login(browser: LoginBrowser): Promise<Credentials>;   // interactive, real browser
+  refresh?(c: Credentials): Promise<Credentials | null>;
+  whoAmI(c: Credentials): Promise<{ userId: string; name: string }>;
+
+  listModules(c: Credentials): Promise<Module[]>;
+  listItems(c: Credentials, m: Module, since?: Date): Promise<VleItem[]>;
+  download(c: Credentials, f: VleFile): Promise<ReadableStream>;
+}
+
+type VleItem =
+  | { kind: "file";         file: VleFile; section: string }
+  | { kind: "assignment";   id: string; title: string; due?: Date; cutoff?: Date;
+                            briefFiles: VleFile[]; url: string; modified: Date }
+  | { kind: "quiz";         id: string; title: string; opens?: Date; closes?: Date; url: string }
+  | { kind: "event";        id: string; title: string; start: Date; end?: Date; url: string }
+  | { kind: "announcement"; id: string; title: string; body: string; posted: Date; url: string }
+  | { kind: "page";         id: string; title: string; html: string; url: string }
+  | { kind: "recording";    id: string; title: string; transcriptUrl?: string; url: string };
+```
+
+Rules every adapter follows:
+
+- **Read-only.** Never submits, posts, marks read, or changes anything.
+- **Polite.** At most 4 concurrent requests, backoff on 429/5xx, and
+  incremental fetch using the platform's modified timestamps.
+- **No secrets in logs.** Tokens are redacted at the HTTP layer, not by callers.
+- **Fixture-testable.** Every request goes through one client that can record
+  and replay, so the test suite runs on recorded, *synthetic* responses —
+  never real student data in the repo.
+
+## Moodle (QMplus)
+
+### Verified on the live site (2026-10-15)
+
+`tool_mobile_get_public_config` on `qmplus.qmul.ac.uk` reports:
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `enablewebservices` | 1 | REST web services are on |
+| `enablemobilewebservice` | 1 | The mobile-app service is on |
+| `typeoflogin` | 3 | SSO via an embedded browser, token handed back at the end |
+| identity provider | SAML2 (`/auth/saml2/login.php`) | QM's Microsoft sign-in |
+| `launchurl` | `/admin/tool/mobile/launch.php` | Token launch endpoint |
+
+`/webservice/rest/server.php` answers with `invalidtoken` for a bad token,
+confirming the REST endpoint is live.
+
+### Login
+
+1. Generate a random `passport`.
+2. Open the login window at
+   `launch.php?service=moodle_mobile_app&passport=<p>&urlscheme=moodlemobile`.
+3. Student signs in through QM's SAML page (MFA included).
+4. Moodle redirects to `moodlemobile://token=<base64>`. The login window
+   (Electron, see 01) intercepts that navigation in `will-redirect` /
+   `will-navigate`, cancels it and closes.
+5. Decode `signature:::token[:::privatetoken]`, check the signature
+   (`md5(wwwroot + passport)`), store the token in the OS credential store.
+
+### Calls used
+
+| Need | Web service function |
+| --- | --- |
+| Identity | `core_webservice_get_site_info` |
+| Modules | `core_enrol_get_users_courses` |
+| Sections, files, pages | `core_course_get_contents` |
+| Assignments + due dates | `mod_assign_get_assignments` |
+| Quizzes | `mod_quiz_get_quizzes_by_courses` |
+| Calendar events | `core_calendar_get_action_events_by_timesort` |
+| Announcements | `mod_forum_get_forum_discussions` (news forum per course) |
+| Files | `/webservice/pluginfile.php/...?token=` |
+
+Exact availability is per site; on first sync the adapter calls
+`core_webservice_get_site_info`, reads the list of permitted functions, and
+degrades per feature rather than failing (e.g. no quiz function → quizzes come
+only from the calendar).
+
+### Token login — verified (2026-10-16)
+
+Spike: `spikes/qmplus-login/main.mjs`.
+
+- The whole flow works inside an Electron window: QMplus `launch.php` → QM's
+  Microsoft SAML page → Microsoft's passkey/FIDO step and MFA → back to Moodle →
+  `moodlemobile://token=…`, caught by a `protocol.handle("moodlemobile")`
+  handler on the login session. The signature (`md5(wwwroot + passport)`)
+  verified. The user agent has `Electron/x` stripped; Microsoft accepted it.
+- Moodle **4.5.15** (`2024100715`). The token may call **470 functions**,
+  including **every function in the table above**, plus
+  `core_calendar_get_calendar_events`, the forum/resource/page/folder/url
+  `get_*_by_courses` calls, `mod_lti_get_tool_launch_data`, and
+  `tool_mobile_get_autologin_key`.
+- `downloadfiles: true`, so files download with the token. A **private token**
+  is issued too, which `tool_mobile_get_autologin_key` needs to open a logged-in
+  browser page (relevant for transcripts behind LTI).
+- The token is kept encrypted with Electron `safeStorage` and reused without
+  signing in again (`--inspect`). Its lifetime is **unknown**; QMplus doesn't
+  publish it. Record when it stops working, and handle `invalidtoken` as "sign
+  in again".
+- Pitfall: closing the last window quits Electron by default and killed the
+  first run before its report. The login window needs a `window-all-closed`
+  handler (the real app has a tray, so this is spike-only).
+- **Enrolments are broader than "my modules".** One student had 23: current-year
+  modules, all of last year's modules, and non-module sites (e.g. "Academic
+  Integrity at Queen Mary Year 2"). Course names aren't uniform either:
+  `ECS401U - Procedural Programming - 2025/26` vs
+  `ECS505U Software Engineering 2026/27`, and shortnames like
+  `ECS401U/ECS401A - 2025/26`. See module selection in 03.
+
+### Fallback
+
+If a site disables the mobile service, the adapter falls back to the
+logged-in browser session: scrape course pages, and use Moodle's calendar
+export (`/calendar/export.php`) for an authenticated `.ics` of events. Slower
+and more fragile, but it keeps the adapter usable at more universities.
+
+### Adding another Moodle university
+
+A new Moodle site is a config entry, not code:
+
+```ts
+{ id: "kcl", platform: "moodle", displayName: "King's College London",
+  baseUrl: "https://keats.kcl.ac.uk" }
+```
+
+`crawler doctor <url>` reads the public config and reports whether the mobile
+service is on and which login type the site uses — the same check we ran on
+QMplus. That output goes in the pull request that adds the university.
+
+## Brightspace (SurreyLearn) — later, unverified
+
+Confirmed: `surreylearn.surrey.ac.uk` is D2L Brightspace (redirects to
+`/d2l/login`).
+
+- The official Valence API needs an app ID/key registered by the institution.
+  We should not depend on Surrey doing that.
+- Proposed route: sign in through the login window, then call the JSON
+  endpoints Brightspace's own web UI uses from that session (enrolments,
+  content table of contents, dropbox folders with due dates, calendar
+  events, news). **Spike before committing**: confirm which routes accept
+  session-cookie auth and what CSRF header they need.
+- Session lifetime is shorter than a mobile token: plan for "sign in again"
+  more often than at QM.
+
+## Transcripts
+
+In scope: captions/transcripts only, never video files.
+
+- **QM uses Echo360 ("EchoVideo (Q-Review) Lecture Recordings")**, an LTI
+  activity in a "Recordings" section (seen in ECS505U). The token may call
+  `mod_lti_get_tool_launch_data`, and the private token allows
+  `tool_mobile_get_autologin_key` for a logged-in browser page, so the LTI
+  launch can probably be followed from the app. **Spike**: does the Echo360
+  side expose captions/transcripts per recording (VTT/SRT/text), and can they
+  be fetched without scraping the player?
+- Many modules also link YouTube videos as `url` activities (25 of 37 links in
+  ECS505U, mostly worked solutions). YouTube captions are a possible later
+  source; not in v1.
+- Output: one `.txt` per lecture in `Course Materials/Transcripts/`, named to
+  match its lecture where the match is unambiguous.
+- If a module's recordings have no captions, the module page says so; nothing
+  is generated by speech-to-text in v1.

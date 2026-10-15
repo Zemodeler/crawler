@@ -1,0 +1,21 @@
+{
+  "name": "crawler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Syncs a university VLE into a Study Hub folder: files sorted by module, deadlines with their sources.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}
