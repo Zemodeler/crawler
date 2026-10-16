@@ -110,7 +110,7 @@ Engine on Crawler `master`; the desktop side on Study Hub branch `sh/m3-m5`
       never asks from a background sync. Checked: tests, build, Electron
       self-test. Not yet checked: a real scheduled sync over days, macOS.
 
-## M4 — Calendar sync — engine and UI done 2026-10-16; needs a client ID
+## M4 — Calendar sync — engine and UI done 2026-10-16
 
 - [x] **4.1 OAuth and API client** (`src/gcal/oauth.ts`, `src/gcal/client.ts`).
 - [x] **4.2 Event mapping and sync** (`src/gcal/events.ts`, `src/gcal/sync.ts`):
@@ -121,10 +121,7 @@ Engine on Crawler `master`; the desktop side on Study Hub branch `sh/m3-m5`
       (`createCalendarTokenStore`).
 - [x] **4.4 Study Hub side**: "Syncing" and "Google Calendar" on the calendar
       page (connect, update now, disconnect, events the student edited).
-- [ ] **4.5 Friends**: create the Google Cloud OAuth client (desktop app,
-      `calendar.app.created` scope), put it in `google-oauth.json` in the app's
-      data folder or `CRAWLER_GOOGLE_CLIENT_ID`/`_SECRET`, and add each friend
-      as a test user. **Needs the user.** Nothing has run against real Google yet.
+- 4.5 (the Google OAuth client for friends) moved to M6 on 2026-10-17.
 
 ## M5 — Transcripts and subject-neutral Study Hub — done 2026-10-16
 
@@ -146,6 +143,10 @@ Engine on Crawler `master`; the desktop side on Study Hub branch `sh/m3-m5`
 - README, LICENSE, CONTRIBUTING ("add your university"), CI on Windows and
   macOS runners, tagged releases with the `.exe` and `.dmg`, auto-update.
 - QM acceptable-use check done.
+- Google Calendar OAuth client (from M4.5, deferred 2026-10-17): create the
+  Google Cloud desktop client (`calendar.app.created` scope), ship it via
+  `google-oauth.json` or `CRAWLER_GOOGLE_CLIENT_ID`/`_SECRET`, add test users
+  (or verify the app), and run the calendar sync against real Google once.
 - Code signing: Windows (removes the SmartScreen warning) and Apple Developer ID
   plus notarization for macOS (deferred until here; earlier Mac builds are
   unsigned and update manually).
