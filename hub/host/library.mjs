@@ -12,7 +12,7 @@
  */
 
 import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, extname, join, resolve, sep } from "node:path";
 
@@ -212,6 +212,23 @@ export async function readModuleFile(root, module, path) {
     return { text: await readFile(full, "utf8") };
   } catch {
     return { text: null };
+  }
+}
+
+/**
+ * Removes a generated revision file a later automatic run replaced. Only
+ * Revision/ and Flashcards/ files; the caller checked the student left it as written.
+ */
+export async function removeModuleFile(root, module, path) {
+  if (!/^(?:Revision|Flashcards)\//.test(path)) return { error: "Only generated revision files can be removed." };
+  const full = moduleFilePath(root, module, path);
+  if (!full) return { error: "That file is outside Study Hub's area of this module." };
+  try {
+    if (!realpathSync(full).startsWith(realpathSync(moduleDir(root, module)) + sep)) return { error: "That file is outside this module." };
+    await rm(full);
+    return { ok: true };
+  } catch {
+    return { ok: true }; // Already gone.
   }
 }
 

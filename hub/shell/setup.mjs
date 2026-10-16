@@ -295,6 +295,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     calendarConnect,
     calendarSync,
     calendarDisconnect,
+    prefs,
     set onSynced(callback) {
       onSynced = callback;
     },

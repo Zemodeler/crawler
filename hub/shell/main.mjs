@@ -11,7 +11,7 @@
  */
 
 import { app, BrowserWindow, Menu, Notification, Tray, dialog, nativeImage, safeStorage, session, shell } from "electron";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +20,8 @@ import { libraryRoot } from "../host/library.mjs";
 import { formatLibrary } from "../host/auto-format.mjs";
 import { LOGIN_ITEM, createBackground } from "./background.mjs";
 import { createSetup } from "./setup.mjs";
+import { createAutoGenerator } from "./auto-generate.mjs";
+import { listLibrary } from "../host/library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SELFTEST = process.argv.includes("--selftest");
@@ -167,8 +169,28 @@ app.whenReady().then(async () => {
     iconPath: join(HERE, "..", "public", "icon.png"),
     setup, libraryRoot, openPage,
   });
-  setup.onSynced = (result) => background.onSynced(result);
+  const packLog = join(app.getPath("userData"), "study-packs.log");
+  const packs = createAutoGenerator({
+    BrowserWindow, Notification, hostUrl: () => hostUrl, libraryRoot, prefs: setup.prefs,
+    log: (line) => {
+      console.log(line);
+      try {
+        appendFileSync(packLog, `${new Date().toISOString()} ${line}\n`);
+      } catch { /* The log is a convenience. */ }
+    },
+  });
+  setup.onSynced = (result) => {
+    background.onSynced(result);
+    void packs.afterSync(result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
+  };
   background.start();
+  // Modules synced before automatic packs existed get theirs now; up-to-date ones are skipped.
+  listLibrary(libraryRoot())
+    .then((tree) => {
+      const year = tree.years[0]?.year; // newest first
+      return year ? packs.afterSync(tree.years[0].modules.map((m) => `${year}/${m}`)) : [];
+    })
+    .catch((error) => console.error(`Study packs: ${error.message}`));
   const startedAtLogin = BACKGROUND_FLAG || (process.platform === "darwin" && app.getLoginItemSettings(LOGIN_ITEM).wasOpenedAtLogin);
   if (startedAtLogin) await window.loadURL(host.url);
   else {

@@ -8,8 +8,8 @@ import { formatLibrary } from "../host/auto-format.mjs";
 
 test("indexes synced materials, refreshes owned indexes, and preserves edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "studyhub-format-"));
-  const module = join(root, "2026-27", "ECS509U - Probability and Matrices");
-  const materials = join(module, "Course Materials");
+  const moduleDir = join(root, "2026-27", "ECS509U - Probability and Matrices");
+  const materials = join(moduleDir, "Course Materials");
   const index = join(materials, "00 - COURSE MATERIALS INDEX.md");
   await mkdir(materials, { recursive: true });
   await writeFile(join(materials, "Lecture 1.pdf"), "one");

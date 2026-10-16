@@ -590,7 +590,7 @@ export function buildMaterialsIndex(files: InventoryFile[], options: { hasHub?: 
     for (const entry of entries) {
       const label = (entry.name || entry.path.split("/").pop() || entry.path)
         .replace(/\.[^.]+$/, "")
-        .replace(/[\[\]]/g, "");
+        .replace(/[[\]]/g, "");
       out.push(`- ${relLink(self, entry.path, label)}`);
       listed++;
     }

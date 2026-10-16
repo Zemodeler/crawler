@@ -26,10 +26,10 @@ export async function formatLibrary(root, moduleKeys) {
   const tree = await listLibrary(root);
   const selected = moduleKeys ? new Set(moduleKeys) : null;
   const results = [];
-  for (const { year, modules } of tree.years) for (const module of modules) {
-    const key = `${year}/${module}`;
+  for (const { year, modules } of tree.years) for (const folder of modules) {
+    const key = `${year}/${folder}`;
     if (selected && !selected.has(key)) continue;
-    const dir = join(root, year, module);
+    const dir = join(root, year, folder);
     const prefix = `${key}/`;
     const files = tree.files
       .filter((entry) => entry.path.startsWith(prefix))
