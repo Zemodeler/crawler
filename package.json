@@ -20,5 +20,8 @@
     "@types/node": "22.20.5",
     "electron": "^44.7.2",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.2.108"
   }
 }

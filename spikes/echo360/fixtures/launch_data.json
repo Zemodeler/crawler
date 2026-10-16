@@ -1,0 +1,11 @@
+{
+  "endpoint": "https://echo360.example/lti/00000000-0000-0000-0000-000000000000",
+  "parameters": [
+    { "name": "lti_message_type", "value": "basic-lti-launch-request" },
+    { "name": "lti_version", "value": "LTI-1p0" },
+    { "name": "resource_link_id", "value": "42" },
+    { "name": "oauth_consumer_key", "value": "synthetic-key" },
+    { "name": "oauth_signature", "value": "synthetic-signature" }
+  ],
+  "warnings": []
+}
