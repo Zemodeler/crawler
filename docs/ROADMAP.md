@@ -67,8 +67,11 @@ Checked on a sample library in Electron, plus 6 new host tests. First launch
 `link:../Crawler`; the sign-in window and token store come from
 `crawler/electron`). The bridge and the Windows launcher are removed:
 subscription mode runs only through the desktop app (its self-test connects
-with both `claude` and `codex`). Still to do: a real QMplus sign-in through
-the shell, installers, and macOS.
+with both `claude` and `codex`). The Converter (`/generate`) now works on a
+synced module: the host writes only Study Hub's own files (hub, Revision/,
+Flashcards/, materials index, .study-hub/), checked with the same rules as the
+page. The real QMplus sign-in and first sync ran through the app
+(2026-10-16: 4 modules, 214 files). Still to do: installers, and macOS.
 
 ## M3 — Deadlines you can trust
 
