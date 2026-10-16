@@ -11,12 +11,12 @@
  *   CRAWLER_DATA   where the encrypted tokens live (default: Electron's userData)
  */
 
-import { BrowserWindow, app, safeStorage, session } from "electron";
+import { BrowserWindow, app, safeStorage, session, shell } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../src/cli.ts";
-import { createLoginBrowser, createTokenStore } from "./electron-env.mjs";
+import { createCalendarTokenStore, createLoginBrowser, createTokenStore, readGoogleClient } from "./electron-env.mjs";
 
 app.setName("Crawler");
 if (process.env.CRAWLER_DATA) app.setPath("userData", process.env.CRAWLER_DATA);
@@ -27,8 +27,14 @@ const loginBrowser = createLoginBrowser({ BrowserWindow, session });
 app.on("window-all-closed", () => {});
 
 app.whenReady().then(async () => {
+  const calendar = {
+    tokens: createCalendarTokenStore({ safeStorage, dir: join(app.getPath("userData"), "tokens") }),
+    openBrowser: (url) => shell.openExternal(url),
+    ...readGoogleClient({ env: process.env, file: join(app.getPath("userData"), "google-oauth.json") }),
+  };
   const argv = process.argv.slice(app.isPackaged ? 1 : 2);
   const code = await runCli(argv, {
+    calendar,
     tokenStore,
     loginBrowser,
     defaultRoot: join(homedir(), "Documents", "My Studies"),

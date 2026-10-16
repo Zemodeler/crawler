@@ -13,7 +13,7 @@
  */
 
 import { join, resolve } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { createMoodleAdapter } from "./adapters/moodle.ts";
 import { UNIVERSITIES } from "./adapters/universities.ts";
@@ -24,7 +24,14 @@ import type { SyncEvent, SyncResult } from "./sync.ts";
 import { VleError } from "./types.ts";
 import type { LoginBrowser, TokenStore, UniversityAdapter } from "./types.ts";
 
+import { connectCalendar, disconnectCalendar, syncCalendarFromRoot } from "./calendar-run.ts";
+import type { CalendarEnv } from "./calendar-run.ts";
+import type { CalendarSyncReport } from "./calendar-types.ts";
+import { GoogleAuthError } from "./gcal/oauth.ts";
+import { describeFreshness, syncDue } from "./schedule.ts";
+
 export type CliEnv = {
+  calendar?: CalendarEnv;
   tokenStore: TokenStore;
   loginBrowser: LoginBrowser;
   /** "Documents/My Studies" unless overridden by --root. */
@@ -53,13 +60,15 @@ export function parseArgs(argv: string[]): Parsed {
   return { command, positionals, flags };
 }
 
-const VALUE_FLAGS = new Set(["root", "university", "site"]);
+const VALUE_FLAGS = new Set(["root", "university", "site", "every"]);
 
 const HELP = `Crawler — sync your university's course site into a folder of files and deadlines.
 
   crawler login    Sign in (opens the university's own sign-in page)
   crawler sync     Download new files and refresh deadlines
   crawler courses  List your courses; "enable"/"disable <name>" turns one on or off
+  crawler calendar connect|sync|disconnect|status [--root <folder>]
+  crawler schedule [--root <folder>] [--every 1|3|7]
   crawler doctor <url>   Check whether a Moodle site works with Crawler
 
 Options:
@@ -104,6 +113,48 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
         return result.verdict === "works" ? 0 : 1;
       }
 
+      case "calendar": {
+        const calendar = env.calendar;
+        if (!calendar) return fail(env, "Google Calendar is unavailable in this environment.");
+        const action = parsed.positionals[0];
+        const root = resolve(typeof parsed.flags.get("root") === "string" ? parsed.flags.get("root") as string : env.defaultRoot);
+        if (action === "connect") env.out(await connectCalendar(calendar));
+        else if (action === "disconnect") env.out(await disconnectCalendar(calendar));
+        else if (action === "status") env.out(await calendar.tokens.load() ? "Google Calendar connected." : "Google Calendar not connected; run crawler calendar connect.");
+        else if (action === "sync") {
+          const report = await syncCalendarFromRoot(root, calendar);
+          if (!report) return fail(env, "Google Calendar not connected; run crawler calendar connect.");
+          env.out(calendarSummary(report));
+        } else return fail(env, "Usage: crawler calendar connect|sync|disconnect|status [--root <folder>]");
+        return 0;
+      }
+
+      case "schedule": {
+        const root = resolve(typeof parsed.flags.get("root") === "string" ? parsed.flags.get("root") as string : env.defaultRoot);
+        const file = join(root, STATE_DIR, "schedule.json");
+        let everyDays: 1 | 3 | 7 = 3;
+        const repairing = parsed.flags.has("every");
+        try {
+          const saved = JSON.parse(await readFile(file, "utf8")) as { everyDays?: unknown } | null;
+          if (saved && (saved.everyDays === 1 || saved.everyDays === 3 || saved.everyDays === 7)) everyDays = saved.everyDays;
+          else if (!repairing) return fail(env, "Invalid schedule.json: everyDays must be 1, 3 or 7. Fix it with: crawler schedule --every 3");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !repairing) return fail(env, "Could not read schedule.json. Fix it with: crawler schedule --every 3");
+        }
+        if (repairing) {
+          const value = parsed.flags.get("every");
+          if (value !== "1" && value !== "3" && value !== "7") return fail(env, "--every must be 1, 3 or 7.");
+          everyDays = Number(value) as 1 | 3 | 7;
+          await mkdir(join(root, STATE_DIR), { recursive: true });
+          await writeFile(file, `${JSON.stringify({ everyDays }, null, 2)}\n`);
+        }
+        const state = await readState(root);
+        const at = now();
+        const due = syncDue(state.lastSync, at, { everyDays });
+        env.out(`${describeFreshness(state.lastSync, at)}; sync ${due.due ? "due" : "not due"}; every ${everyDays} day(s).`);
+        return 0;
+      }
+
       case "login": {
         const adapter = adapterFor(parsed, env);
         if (typeof adapter === "string") return fail(env, adapter);
@@ -135,6 +186,14 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
         });
         summarize(env, result, root);
         const problems = result.courses.some((c) => c.status === "failed" || c.files.failed > 0);
+        if (!problems && env.calendar) {
+          try {
+            const report = await syncCalendarFromRoot(root, env.calendar);
+            if (report) env.out(calendarSummary(report));
+          } catch (error) {
+            env.err(`Warning: ${calendarError(error)}`);
+          }
+        }
         return problems ? 2 : 0;
       }
 
@@ -144,6 +203,7 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
         return 1;
     }
   } catch (error) {
+    if (error instanceof GoogleAuthError) return fail(env, calendarError(error));
     if (error instanceof VleError && error.code === "invalid_token") {
       return fail(env, "Your sign-in has expired. Run: crawler login");
     }
@@ -214,4 +274,16 @@ async function coursesCommand(parsed: Parsed, env: CliEnv, adapter: UniversityAd
     env.out(`${on ? "[x]" : "[ ]"} ${placement.year.padEnd(8)} ${course.fullname}${chosen === undefined ? "" : "  (set by you)"}`);
   }
   return 0;
+}
+
+function calendarError(error: unknown): string {
+  if (error instanceof GoogleAuthError && error.code === "revoked") return "Google Calendar access was revoked; run crawler calendar connect";
+  return error instanceof Error ? error.message : String(error);
+}
+
+function calendarSummary(report: CalendarSyncReport): string {
+  const reasons = new Map<string, number>();
+  for (const skipped of report.skipped) reasons.set(skipped.reason, (reasons.get(skipped.reason) ?? 0) + 1);
+  const edited = report.editedByUser.map((event) => JSON.stringify(event.summary)).join(", ");
+  return `Google Calendar: ${report.created.length} created, ${report.updated.length} updated, ${report.deleted.length} deleted, ${report.unchanged} unchanged; student edits kept: ${edited || "none"}; skipped: ${[...reasons].map(([reason, count]) => `${count} ${reason}`).join(", ") || "0"}.`;
 }

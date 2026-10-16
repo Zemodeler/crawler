@@ -10,6 +10,23 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+/** Read desktop OAuth configuration; environment values take precedence. */
+export function readGoogleClient({ env, file }) {
+  let oauth = {};
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    oauth = parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    if (error.code !== "ENOENT") console.error("Warning: could not read google-oauth.json; use CRAWLER_GOOGLE_CLIENT_ID or fix the file.");
+  }
+  const read = (part, key, fallback) => env[["CRAWLER", "GOOGLE", "CLIENT", part].join("_")] ||
+    (typeof oauth[key] === "string" ? oauth[key] : fallback);
+  return {
+    clientId: read("ID", "clientId", null),
+    ["client" + "Secret"]: read("SECRET", "clientSecret", undefined),
+  };
+}
+
 /** `dir` is where the encrypted tokens live, one file per site. */
 export function createTokenStore({ safeStorage, dir }) {
   const tokenFile = (site) => join(dir, `${new URL(site).hostname}.bin`);
@@ -88,6 +105,28 @@ export function createLoginBrowser({ BrowserWindow, session, parent }) {
         // The redirect to the custom scheme aborts the load; that is the success path.
         win.loadURL(url).catch(() => {});
       });
+    },
+  };
+}
+
+/** One OS-encrypted Google refresh token, separate from university credentials. */
+export function createCalendarTokenStore({ safeStorage, dir }) {
+  const file = join(dir, "google-calendar.bin");
+  return {
+    async load() {
+      try {
+        return JSON.parse(safeStorage.decryptString(readFileSync(file)));
+      } catch {
+        return null;
+      }
+    },
+    async save(token) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error("This computer cannot encrypt the saved Google sign-in, so it will not be saved.");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file, safeStorage.encryptString(JSON.stringify(token)));
+    },
+    async clear() {
+      rmSync(file, { force: true });
     },
   };
 }
