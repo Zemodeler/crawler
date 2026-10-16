@@ -17,17 +17,24 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { once } from "node:events";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines } from "./deadlines.ts";
 import { toIcs } from "./ics.ts";
 import { placeCourse } from "./naming.ts";
+import { eventsFromDiff, filesSummary } from "./notifications.ts";
+import type { NotificationEvent } from "./notifications.ts";
+import { textDeadlines } from "./pipeline.ts";
+import type { TextCounts } from "./pipeline.ts";
 import { planFiles } from "./sorter.ts";
 import type { FileJob } from "./sorter.ts";
+import { renameWithRetry } from "./fs-retry.ts";
+import { syncTranscripts } from "./transcripts.ts";
 import { VleError } from "./types.ts";
 import type {
+  AiRunner,
   Course,
   Credentials,
   Deadline,
@@ -50,6 +57,18 @@ export type SyncOptions = {
   select?: (course: Course, placement: ModulePlacement) => boolean;
   /** Parallel downloads within a course. Default 4 (the adapter also limits requests). */
   concurrency?: number;
+  /** Finds deadlines hidden in documents with the AI CLI, besides the rules. Off without a runner. */
+  ai?: AiRunner;
+  /** Asked before the first AI run over more than 20 documents; no callback means no AI run. */
+  confirmAi?: (documents: number) => Promise<boolean>;
+  /** Read downloaded documents, announcements and pages for deadlines. Default true. */
+  textDeadlines?: boolean;
+  /** Save lecture-recording captions (Echo360) as text in Transcripts/. Default true. */
+  transcripts?: boolean;
+  /** Injected for tests; the Echo360 client uses global fetch otherwise. */
+  transcriptFetch?: typeof fetch;
+  /** Pause between Echo360 requests, in ms (default 500). */
+  transcriptPauseMs?: number;
   onProgress?: (event: SyncEvent) => void;
 };
 
@@ -68,6 +87,12 @@ export type CourseReport = {
   error?: string;
   files: Record<FileResult, number> & { videosSkipped: number };
   deadlines: number;
+  /** Counts from the text step; absent when it did not run. */
+  text?: TextCounts;
+  /** Set when the text step failed; the VLE deadlines were kept. */
+  textError?: string;
+  /** Lecture transcripts saved this run; absent when the step did not run. */
+  transcripts?: { added: number; skippedNoCaptions: number; failed: number; error?: string };
 };
 
 export type SyncResult = {
@@ -77,6 +102,8 @@ export type SyncResult = {
   deadlines: Deadline[];
   /** What went into Changes.md this run. */
   changes: string[];
+  /** What is worth a native notification: date changes, new deadlines and conflicts, new files. */
+  notifications: NotificationEvent[];
 };
 
 /** Per-course switches the student can set in .crawler/state.json. */
@@ -132,6 +159,9 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const freshDeadlines: Deadline[] = [];
   const syncedKeys = new Set<string>();
   const fileChanges: string[] = [];
+  const newFiles: { module: string; added: number }[] = [];
+  const readText = options.textDeadlines !== false;
+  if (readText) await rm(join(root, STATE_DIR, "rejected.json"), { force: true });
 
   for (const course of courses) {
     const placement = placeCourse(course);
@@ -161,9 +191,50 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
         else if (result.line) fileChanges.push(`${label} · ${result.line}`);
         emit({ type: "file", course: course.shortname, path: job.relativePath, result: result.result });
       });
+      if (options.transcripts !== false && adapter.ltiLaunch) {
+        const got = await syncTranscripts({
+          adapter,
+          credentials,
+          course,
+          placement,
+          items: items as VleItem[],
+          root,
+          manifest,
+          now,
+          ...(options.transcriptFetch ? { fetch: options.transcriptFetch } : {}),
+          ...(options.transcriptPauseMs !== undefined ? { pauseMs: options.transcriptPauseMs } : {}),
+        });
+        report.transcripts = { added: got.added.length, skippedNoCaptions: got.skippedNoCaptions, failed: got.failed, ...(got.error ? { error: got.error } : {}) };
+        for (const path of got.added) emit({ type: "file", course: course.shortname, path, result: "new" });
+        if (got.added.length) fileChanges.push(`${label} · ${got.added.length} new lecture transcript${got.added.length === 1 ? "" : "s"} in Transcripts/`);
+        report.files.new += got.added.length;
+        newFiles.push({ module: label, added: got.added.length });
+      }
       fileChanges.push(...describeNewFiles(label, added));
+      newFiles.push({ module: label, added: added.length });
 
-      const deadlines = deadlinesFromItems(items as VleItem[], course, placement, now);
+      let deadlines = deadlinesFromItems(items as VleItem[], course, placement, now);
+      if (readText) {
+        try {
+          const found = await textDeadlines({
+            universityId: adapter.id,
+            root,
+            course,
+            placement,
+            items: items as VleItem[],
+            // Spoken lectures are not read for deadlines: too easy to misquote.
+            manifest: [...manifest.values()].filter((e) => e.module === course.shortname && e.category !== "Transcripts"),
+            deadlines,
+            now,
+            ...(options.ai ? { ai: options.ai } : {}),
+            ...(options.confirmAi ? { confirmAi: options.confirmAi } : {}),
+          });
+          deadlines = found.deadlines;
+          report.text = found.counts;
+        } catch (error) {
+          report.textError = error instanceof Error ? error.message : String(error);
+        }
+      }
       freshDeadlines.push(...deadlines);
       syncedKeys.add(`${placement.year}|${placement.code ?? course.shortname}`);
       report.deadlines = deadlines.length;
@@ -199,7 +270,10 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   await writeJson(join(root, STATE_DIR, "state.json"), state);
   await clearTmp(root);
 
-  return { startedAt, finishedAt: new Date().toISOString(), courses: reports, deadlines, changes };
+  const summary = filesSummary(newFiles);
+  const notifications = [...eventsFromDiff(previousSynced, merged), ...(summary ? [summary] : [])];
+
+  return { startedAt, finishedAt: new Date().toISOString(), courses: reports, deadlines, changes, notifications };
 }
 
 /* ------------------------------------------------------------- one file */
@@ -228,7 +302,7 @@ async function syncFile(ctx: FileContext): Promise<{ result: FileResult; line?: 
       const tmp = join(root, STATE_DIR, "tmp", randomBytes(8).toString("hex"));
       const got = job.html !== undefined ? await writeHtml(tmp, job.html) : await downloadTo(ctx.adapter, ctx.credentials, job.file, tmp);
       await mkdir(dirname(target), { recursive: true });
-      await rename(tmp, target);
+      await renameWithRetry(tmp, target);
       return got;
     };
     const record = (localPath: string, sha256: string, vleId = job.vleId) => {
@@ -440,7 +514,7 @@ async function writeText(path: string, text: string): Promise<void> {
   const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(tmp, text, "utf8");
-  await rename(tmp, path);
+  await renameWithRetry(tmp, path);
 }
 
 const writeJson = (path: string, value: unknown) => writeText(path, `${JSON.stringify(value, null, 2)}\n`);

@@ -243,9 +243,28 @@ export function sortDeadlines(deadlines: Deadline[]): Deadline[] {
   return [...deadlines].sort(compareDeadlines);
 }
 
-function mergeOne(p: Deadline, f: Deadline, at: string): Deadline {
+/** The source that gives `due`, else the strongest one. */
+function sourceForDate(sources: Source[], due: Instant | null): Source | undefined {
+  return sources.find((s) => s.date !== null && sameDate(s.date, due)) ?? sources[0];
+}
+
+function mergeOne(p: Deadline, fresh: Deadline, at: string): Deadline {
   const history = [...p.history];
-  const sources = mergeSources(p.sources, f.sources);
+  const sources = mergeSources(p.sources, fresh.sources);
+  let f = fresh;
+
+  // A date quoted from a document is not found again while the document is
+  // unchanged (the AI only reads changed documents), so the fresh deadline can
+  // arrive undated. Keep the date while the VLE field still gives none and the
+  // quoting source is still on record.
+  if (f.due === null && p.due !== null && p.status !== "user-verified") {
+    const quoted = sources.find((s) => s.type !== "vle-field" && s.date !== null && sameDate(s.date, p.due));
+    if (quoted) {
+      f = { ...f, due: p.due, status: p.status === "conflict" ? "confirmed" : p.status };
+      if (p.checkReason !== undefined) f.checkReason = p.checkReason;
+      else delete f.checkReason;
+    }
+  }
 
   if (p.status === "user-verified") {
     // Back after a removal: record it, so that a later removal is reported again.
@@ -269,7 +288,8 @@ function mergeOne(p: Deadline, f: Deadline, at: string): Deadline {
 
   if (!sameDate(p.due, f.due)) {
     const change: Change = { at, field: "due", from: p.due?.iso ?? null, to: f.due?.iso ?? null };
-    if (f.sources[0]) change.source = f.sources[0];
+    const source = sourceForDate(f.sources, f.due);
+    if (source) change.source = source;
     history.push(change);
   }
   if (p.title !== f.title) history.push({ at, field: "title", from: p.title, to: f.title });
@@ -313,7 +333,8 @@ export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Dat
     const p = previousById.get(f.id);
     if (!p) {
       const added: Change = { at, field: "added", from: null, to: f.due?.iso ?? null };
-      if (f.sources[0]) added.source = f.sources[0];
+      const source = sourceForDate(f.sources, f.due);
+      if (source) added.source = source;
       out.push(detectConflict({ ...f, sources: mergeSources([], f.sources), history: [...f.history, added] }));
     } else {
       out.push(mergeOne(p, f, at));

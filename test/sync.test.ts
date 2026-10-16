@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { currentAcademicYear, safeJoin, sync, VleError } from "../src/index.ts";
-import type { Course, Credentials, Deadline, UniversityAdapter, VleFile, VleItem } from "../src/index.ts";
+import type { AiRunner, Course, Credentials, Deadline, UniversityAdapter, VleFile, VleItem } from "../src/index.ts";
 
 const CREDENTIALS: Credentials = { site: "https://moodle.example.ac.uk", token: "x", privateToken: null };
 const NOW = new Date("2026-10-16T09:00:00Z");
@@ -36,6 +36,7 @@ class FakeVle implements UniversityAdapter {
   files = new Map<number, FileSpec[]>();
   assignments = new Map<number, { id: number; title: string; due: string | null }[]>();
   failing = new Set<number>();
+  announcements = new Map<number, { id: number; subject: string; body: string }[]>();
   tokenExpired = false;
   downloads: string[] = [];
   brokenDownloads = new Set<string>();
@@ -78,6 +79,9 @@ class FakeVle implements UniversityAdapter {
         url: `${CREDENTIALS.site}/mod/assign/view.php?id=${a.id}`,
         modified: null,
       });
+    }
+    for (const n of this.announcements.get(c.id) ?? []) {
+      items.push({ kind: "announcement", id: n.id, subject: n.subject, bodyHtml: `<p>${n.body}</p>`, posted: unix("2026-10-10T09:00:00Z"), url: `${CREDENTIALS.site}/mod/forum/discuss.php?d=${n.id}` });
     }
     return items;
   }
@@ -367,6 +371,151 @@ test("a hostile file name cannot write outside the folder", async () => {
     const outside = join(t.root, "..", "evil.pdf");
     assert.equal(await exists(outside), false);
     for (const e of await t.manifest()) assert.ok(!e.localPath.includes(".."));
+  } finally {
+    await t.cleanup();
+  }
+});
+
+const EXTENDED = "Coursework 1 deadline has been extended to 21 December 2026 at 12:00 for everyone in the module.";
+
+test("an announcement that extends a deadline shows as a conflict, with a notification", async () => {
+  const t = await setup();
+  try {
+    const first = await t.run();
+    assert.equal(first.deadlines[0]!.status, "confirmed");
+    assert.deepEqual(first.courses[0]!.text, { sources: 0, candidates: 0, verified: 0, rejected: 0, adjusted: 0, aiRuns: 0, aiMs: 0 });
+    // First sync: one summary event, then the files line.
+    assert.deepEqual(first.notifications.map((n) => [n.kind, n.title]), [
+      ["new-deadline", "Found 1 deadline in 1 module"],
+      ["files-summary", "3 new files in 2 modules"],
+    ]);
+
+    t.vle.announcements.set(1, [{ id: 7, subject: "Coursework 1", body: EXTENDED }]);
+    const result = await t.run(LATER);
+    assert.deepEqual(result.courses[0]!.text, { sources: 1, candidates: 1, verified: 1, rejected: 0, adjusted: 0, aiRuns: 0, aiMs: 0 });
+    const d = result.deadlines[0]!;
+    assert.equal(d.status, "conflict");
+    assert.equal(d.due?.iso, "2026-12-14T10:00:00.000Z");
+    assert.deepEqual(d.sources.map((s) => s.type), ["vle-field", "announcement"]);
+    assert.ok(result.changes.some((l) => l.includes("conflict: sources disagree (14 Dec 10:00 vs 21 Dec 12:00)")), result.changes.join("\n"));
+    assert.deepEqual(result.notifications.map((n) => [n.kind, n.deadlineId]), [["new-conflict", d.id]]);
+    assert.equal(result.notifications[0]!.sourceUrl, `${CREDENTIALS.site}/mod/assign/view.php?id=5`);
+
+    const saved = JSON.parse(await read(t.path("Deadlines.json"))) as Deadline[];
+    assert.equal(saved[0]!.status, "conflict");
+    assert.deepEqual(JSON.parse(await read(t.path(".crawler", "rejected.json"))), []);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("a deadline only an announcement mentions is added and notified", async () => {
+  const t = await setup();
+  try {
+    await t.run();
+    t.vle.announcements.set(1, [{ id: 8, subject: "Exam", body: "Remember that the final exam takes place on 12 January 2027 at 10:00 in the main hall." }]);
+    const result = await t.run(LATER);
+    assert.equal(result.deadlines.length, 2);
+    const exam = result.deadlines.find((d) => d.id.includes(":text:"))!;
+    assert.match(exam.id, /^tst:TST101U:text:/);
+    assert.deepEqual(result.notifications.map((n) => [n.kind, n.title]), [["new-deadline", "TST101U · Final exam"]]);
+    assert.ok(result.changes.some((l) => l.includes("Final exam — new deadline, due 12 Jan 10:00")), result.changes.join("\n"));
+    assert.equal(result.courses[0]!.deadlines, 2);
+
+    // Still there on the next sync even though the VLE never lists it.
+    const again = await t.run(new Date("2026-10-22T09:00:00Z"));
+    assert.equal(again.deadlines.length, 2);
+    assert.deepEqual(again.notifications, []);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("a failing text step keeps the VLE deadlines and does not fail the course", async () => {
+  const t = await setup();
+  try {
+    const broken: AiRunner = {
+      available: async () => {
+        throw new Error("the AI tool crashed");
+      },
+      structured: async () => assert.fail("not called"),
+    };
+    const result = await t.run(NOW, { ai: broken });
+    assert.equal(result.courses[0]!.status, "synced");
+    assert.equal(result.courses[0]!.text, undefined);
+    assert.equal(result.courses[0]!.textError, "the AI tool crashed");
+    assert.equal(result.courses[0]!.files.new, 2);
+    assert.equal(result.deadlines.length, 1);
+    assert.equal(result.deadlines[0]!.status, "confirmed");
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("textDeadlines: false leaves the VLE deadlines alone", async () => {
+  const t = await setup();
+  try {
+    t.vle.announcements.set(1, [{ id: 7, subject: "Coursework 1", body: EXTENDED }]);
+    const result = await t.run(NOW, { textDeadlines: false });
+    assert.equal(result.courses[0]!.text, undefined);
+    assert.equal(result.deadlines[0]!.status, "confirmed");
+    assert.equal(await exists(t.path(".crawler", "rejected.json")), false);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("downloaded text documents are read for deadlines in the same sync", async () => {
+  const t = await setup();
+  try {
+    t.vle.files.set(1, [{ id: 40, name: "Brief.txt", content: "The lab test is due on 3 December 2026 at 16:00 and counts for 10% of the module.", modified: "2026-09-25T10:00:00Z", activity: "Assessment brief" }]);
+    const result = await t.run();
+    const lab = result.deadlines.find((d) => d.id.includes(":text:"))!;
+    assert.equal(lab.sources[0]!.type, "document");
+    assert.match(lab.sources[0]!.localPath ?? "", /Brief\.txt$/);
+    assert.equal(lab.due?.iso, "2026-12-03T16:00:00.000Z");
+    assert.equal(result.courses[0]!.text?.sources, 1);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("lecture captions become transcripts once, are not read for deadlines, and count as new files", async () => {
+  const t = await setup();
+  try {
+    const recordings: VleItem = {
+      kind: "external-tool", toolName: "EchoVideo (Q-Review) Lecture Recordings", instance: 42, section: "Recordings", sectionIndex: 0,
+      activity: "EchoVideo (Q-Review) Lecture Recordings", activityType: "lti", activityId: 70, activityUrl: `${CREDENTIALS.site}/mod/lti/view.php?id=70`,
+    };
+    const listItems = t.vle.listItems.bind(t.vle);
+    t.vle.listItems = async (c, k) => (k.id === 1 ? [...(await listItems(c, k)), recordings] : listItems(c, k));
+    Object.assign(t.vle, { ltiLaunch: async () => ({ endpoint: "https://echo.example/lti/1", fields: new URLSearchParams() }) });
+    const section = "11111111-1111-1111-1111-111111111111";
+    let captionRequests = 0;
+    const transcriptFetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/lti/")) return new Response(`<title>Class List</title> section/${section}`);
+      if (url.endsWith("/syllabus")) {
+        return Response.json({ data: [{ lesson: { lesson: { id: "l1", displayName: "Lecture 1" }, startTimeUTC: "2026-09-22T09:00:00Z", medias: [{ id: "m1", isAvailable: true }] } }] });
+      }
+      captionRequests++;
+      return new Response("WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\nThe exam is on 12 January 2027 at 10:00.\n", { headers: { "content-type": "text/vtt" } });
+    }) as typeof fetch;
+
+    const first = await t.run(NOW, { transcriptFetch, transcriptPauseMs: 0 });
+    const tst = first.courses.find((c) => c.shortname.startsWith("TST101U"))!;
+    assert.equal(tst.transcripts?.added, 1);
+    const saved = await readdir(t.path("2026-27", "TST101U - Testing Basics", "Course Materials", "Transcripts"));
+    assert.deepEqual(saved, ["01 - Lecture 1 (2026-09-22).txt"]);
+    assert.ok(first.changes.some((line) => /1 new lecture transcript in Transcripts\//.test(line)));
+    assert.ok(!first.deadlines.some((d) => d.kind === "exam"), "spoken dates are not turned into deadlines");
+
+    const second = await t.run(LATER, { transcriptFetch, transcriptPauseMs: 0 });
+    assert.equal(second.courses.find((c) => c.shortname.startsWith("TST101U"))!.transcripts?.added, 0);
+    assert.equal(captionRequests, 1);
+
+    const off = await t.run(LATER, { transcriptFetch, transcripts: false });
+    assert.equal(off.courses.find((c) => c.shortname.startsWith("TST101U"))!.transcripts, undefined);
   } finally {
     await t.cleanup();
   }
