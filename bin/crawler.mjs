@@ -15,6 +15,7 @@ import { BrowserWindow, app, safeStorage, session, shell } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { createCliAiRunner } from "../src/ai-runner.ts";
 import { runCli } from "../src/cli.ts";
 import { createCalendarTokenStore, createLoginBrowser, createTokenStore, readGoogleClient } from "./electron-env.mjs";
 
@@ -35,6 +36,7 @@ app.whenReady().then(async () => {
   const argv = process.argv.slice(app.isPackaged ? 1 : 2);
   const code = await runCli(argv, {
     calendar,
+    ai: createCliAiRunner(process.env.CRAWLER_AI === "codex" ? { prefer: "codex" } : {}),
     tokenStore,
     loginBrowser,
     defaultRoot: join(homedir(), "Documents", "My Studies"),

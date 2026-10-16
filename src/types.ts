@@ -57,7 +57,7 @@ export type VleItem =
   | ({ kind: "file"; file: VleFile } & Placement)
   | ({ kind: "page"; html: string; files: VleFile[] } & Placement)
   | ({ kind: "link"; target: string } & Placement)
-  | ({ kind: "external-tool"; toolName: string } & Placement)
+  | ({ kind: "external-tool"; toolName: string; instance?: number } & Placement)
   | {
       kind: "assignment";
       id: number;
@@ -106,6 +106,7 @@ export interface UniversityAdapter {
   whoAmI(credentials: Credentials): Promise<{ userId: number; permittedFunctions: string[] }>;
   listCourses(credentials: Credentials): Promise<Course[]>;
   listItems(credentials: Credentials, course: Course): Promise<VleItem[]>;
+  ltiLaunch?(credentials: Credentials, instance: number): Promise<{ endpoint: string; fields: URLSearchParams }>;
   download(credentials: Credentials, file: VleFile): Promise<ReadableStream<Uint8Array>>;
 }
 

@@ -166,6 +166,7 @@ type MoodleFile = {
 };
 type MoodleModule = {
   id: number;
+  instance?: number;
   name: string;
   modname: string;
   url?: string;
@@ -380,7 +381,7 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
             if (contents[0]?.fileurl) items.push({ kind: "link", target: stripToken(contents[0].fileurl), ...placement });
             break;
           case "lti":
-            items.push({ kind: "external-tool", toolName: mod.name, ...placement });
+            items.push({ kind: "external-tool", toolName: mod.name, ...(mod.instance === undefined ? {} : { instance: mod.instance }), ...placement });
             break;
           default:
             // label, subsection, forum, questionnaire: nothing to keep here.
@@ -489,6 +490,25 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
     },
 
     whoAmI,
+
+    async ltiLaunch(credentials, instance) {
+      const what = "mod_lti_get_tool_launch_data";
+      try {
+        const data = await ws<{ endpoint: string; parameters: { name: string; value: string }[] }>(
+          credentials, what, { toolid: instance },
+        );
+        if (typeof data.endpoint !== "string" || !Array.isArray(data.parameters)) throw new Error();
+        const fields = new URLSearchParams();
+        for (const parameter of data.parameters) {
+          if (typeof parameter.name !== "string" || typeof parameter.value !== "string") throw new Error();
+          fields.append(parameter.name, parameter.value);
+        }
+        return { endpoint: data.endpoint, fields };
+      } catch (error) {
+        // Moodle exception messages can contain signed launch fields too.
+        throw new VleError(error instanceof VleError ? error.code : "bad_response", `${what}: launch failed.`);
+      }
+    },
 
     async listCourses(credentials: Credentials): Promise<Course[]> {
       const userid = userIds.get(credentials.token) ?? (await whoAmI(credentials)).userId;

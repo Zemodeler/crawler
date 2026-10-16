@@ -61,6 +61,19 @@ const COURSE: Course = {
 const ofKind = <K extends VleItem["kind"]>(items: VleItem[], kind: K) =>
   items.filter((item): item is Extract<VleItem, { kind: K }> => item.kind === kind);
 
+test("LTI items expose module instance and launch uses toolid with signed fields", async () => {
+  const { adapter, calls } = adapterWith({
+    core_course_get_contents: () => json([{ name: "Recordings", modules: [{ id: 7, instance: 42, name: "Echo360", modname: "lti" }] }]),
+    mod_lti_get_tool_launch_data: () => json({ endpoint: "https://echo.example/lti", parameters: [{ name: "oauth_signature", value: "synthetic-signature" }] }),
+  });
+  const items = await adapter.listItems(CREDENTIALS, COURSE);
+  assert.equal(ofKind(items, "external-tool")[0]?.instance, 42);
+  const launch = await adapter.ltiLaunch!(CREDENTIALS, 42);
+  assert.equal(launch.endpoint, "https://echo.example/lti");
+  assert.equal(launch.fields.get("oauth_signature"), "synthetic-signature");
+  assert.equal(calls.find((c) => c.params.get("wsfunction") === "mod_lti_get_tool_launch_data")?.params.get("toolid"), "42");
+});
+
 const exception = (exception: string, errorcode: string, message: string) => () =>
   json({ exception, errorcode, message });
 
@@ -620,6 +633,7 @@ test("maps url and lti activities and skips the rest of the contents", async () 
     {
       kind: "external-tool",
       toolName: "Lecture Recordings (Example Video Platform)",
+      instance: 1201,
       section: "Recordings",
       sectionIndex: 2,
       activity: "Lecture Recordings (Example Video Platform)",

@@ -22,7 +22,7 @@ import { placeCourse } from "./naming.ts";
 import { defaultSelection, readState, STATE_DIR, sync } from "./sync.ts";
 import type { SyncEvent, SyncResult } from "./sync.ts";
 import { VleError } from "./types.ts";
-import type { LoginBrowser, TokenStore, UniversityAdapter } from "./types.ts";
+import type { AiRunner, LoginBrowser, TokenStore, UniversityAdapter } from "./types.ts";
 
 import { connectCalendar, disconnectCalendar, syncCalendarFromRoot } from "./calendar-run.ts";
 import type { CalendarEnv } from "./calendar-run.ts";
@@ -32,6 +32,8 @@ import { describeFreshness, syncDue } from "./schedule.ts";
 
 export type CliEnv = {
   calendar?: CalendarEnv;
+  /** Used by `sync --ai`: the local claude/codex CLI. */
+  ai?: AiRunner;
   tokenStore: TokenStore;
   loginBrowser: LoginBrowser;
   /** "Documents/My Studies" unless overridden by --root. */
@@ -76,6 +78,8 @@ Options:
   --site <url>        Any Moodle site, instead of --university
   --root <folder>     Where files go (default: Documents/My Studies)
   --include-past      sync: also sync last year's modules
+  --ai                sync: also let your claude or codex CLI read changed documents for deadlines
+  --no-transcripts    sync: skip lecture-recording captions
 `;
 
 function adapterFor(parsed: Parsed, env: CliEnv): UniversityAdapter | string {
@@ -182,6 +186,9 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
           root,
           now: now(),
           ...(parsed.flags.has("include-past") ? { select: (_c: unknown, p: { isModule: boolean }) => p.isModule } : {}),
+          // --ai: the student asked for it on the command line, so no further confirmation.
+          ...(parsed.flags.has("ai") && env.ai ? { ai: env.ai, confirmAi: async () => true } : {}),
+          ...(parsed.flags.has("no-transcripts") ? { transcripts: false } : {}),
           onProgress: (event) => progress(env, event),
         });
         summarize(env, result, root);
@@ -239,6 +246,13 @@ function summarize(env: CliEnv, result: SyncResult, root: string): void {
   }
   const skipped = result.courses.filter((c) => c.status === "skipped").length;
   if (skipped) env.out(`${skipped} other course(s) not synced — see: crawler courses`);
+  const transcripts = result.courses.reduce((n, c) => n + (c.transcripts?.added ?? 0), 0);
+  if (transcripts) env.out(`${transcripts} lecture transcript(s) saved in Transcripts/`);
+  const aiRuns = result.courses.reduce((n, c) => n + (c.text?.aiRuns ?? 0), 0);
+  if (aiRuns) {
+    const seconds = Math.round(result.courses.reduce((n, c) => n + (c.text?.aiMs ?? 0), 0) / 1000);
+    env.out(`AI read ${aiRuns} document(s) in ${seconds}s; every date it found was checked against the document`);
+  }
   const needCheck = result.deadlines.filter((d) => d.status === "needs-check").length;
   const conflicts = result.deadlines.filter((d) => d.status === "conflict").length;
   if (needCheck) env.out(`${needCheck} deadline(s) need checking (the date looks wrong); see Deadlines.json`);
