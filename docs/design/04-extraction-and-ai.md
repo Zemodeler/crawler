@@ -54,8 +54,8 @@ Done locally in Node, never by the AI:
 | PPTX / DOCX / XLSX | unzip + XML text, per slide / paragraph / sheet (port Study Hub's `lib/source-extract.ts` to run in Node) |
 | HTML (pages, announcements) | strip to text, keep links |
 
-Extracted text is cached in `.crawler/text/` by file hash so re-syncs don't
-re-parse unchanged files.
+Extracted text is cached in `.crawler/text/<sha256>.<format>.json` (file hash
+plus detected format) so re-syncs don't re-parse unchanged files.
 
 ## Calling the CLI
 

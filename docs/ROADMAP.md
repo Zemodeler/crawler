@@ -73,85 +73,73 @@ Flashcards/, materials index, .study-hub/), checked with the same rules as the
 page. The real QMplus sign-in and first sync ran through the app
 (2026-10-16: 4 modules, 214 files). Still to do: installers, and macOS.
 
-## M3 — Deadlines you can trust
+## M3 — Deadlines you can trust — engine done 2026-10-16
 
-Contracts: `src/extraction-types.ts`. Engine work lives in this repo; the
-notification toasts, the resolve UI polish and the launch-time catch-up live in
-Study Hub's shell (`m2-library` branch).
+Engine on Crawler `master`; the desktop side on Study Hub branch `sh/m3-m5`
+(built on `m2-library`, not yet merged into it).
 
-- [ ] **3.1 Text extraction** (`src/extract/`): PDF per page (`pdfjs-dist`),
-      PPTX/DOCX/XLSX per slide/paragraph/sheet, HTML to text with links; cache
-      in `.crawler/text/` by file hash.
-- [ ] **3.2 Rule candidates and week map** (`src/candidates.ts`, `src/weeks.ts`):
-      date patterns near assessment words ("due", "deadline", "submit by",
-      "exam", "test", "presentation", "week N"), weights, formative flag;
-      per-term week map from adapter config (QM semester dates), overridden by
-      a verified "Week 1 starts …" quote; reading weeks from config.
-- [ ] **3.3 Quote verification and AI extraction** (`src/quotes.ts`,
-      `src/ai-extract.ts`): whitespace/quote-mark-normalised quote search; the
-      date must parse from the quote itself; JSON-schema prompt with fenced
-      material; queue of at most 2 through `AiRunner`; only changed documents
-      that rules flagged; run count and duration reported; confirm before more
-      than 20 documents on a term's first sync.
-- [ ] **3.4 Schedule, change detection, notification events**
-      (`src/schedule.ts`, `src/notifications.ts`): next-sync-due and catch-up
-      rule (1/3/7 days), local "due in 48h" reminders from `Deadlines.json`,
-      notification events from the diff of two deadline lists (date changed,
-      new deadline, new conflict; new files as one summary line).
-- [ ] **3.5 Pipeline integration** (`src/sync.ts`, `src/deadlines.ts`,
-      `src/cli.ts`): extract, candidates, AI, verify, merge into
-      `Deadlines.json` with the status rules; per-module staging in
-      `.crawler/staging/`, committed when the module finishes; `lastSyncAt` in
-      state; `crawler sync --ai` and a `crawler schedule` command. Done by the
-      lead after 3.1-3.4 land.
-- [ ] **3.6 Study Hub side** (`m2-library`): native notifications from the
-      shell, timer for 48h reminders, start-at-login option, tray "Sync now",
-      badge on the calendar; conflict and TBC lists already exist (resolve
-      writes `user-verified`).
+- [x] **3.1 Text extraction** (`src/extract/`): PDF per page (`pdfjs-dist`),
+      PPTX/DOCX/XLSX per slide/paragraph/sheet, HTML to text with links;
+      cached in `.crawler/text/<sha256>.<format>.json`.
+- [x] **3.2 Rule candidates and week map** (`src/candidates.ts`, `src/weeks.ts`).
+      QM 2026-27: teaching week 1 is Mon 21 Sep 2026 (Semester A) and Mon 25 Jan
+      2027 (Semester B); QM numbers its reading week as week 7 (checked against
+      ECS519U's "Assessment 1 - Week 11: Monday 30/11/2026"). Year-long modules
+      get no week map, so "week N" stays TBC.
+- [x] **3.3 Quote verification and AI extraction** (`src/quotes.ts`,
+      `src/ai-extract.ts`): a date must parse from its own quote; "week N" only
+      through the week map; a weekday alone never dates anything; a time must
+      match the quote or the date becomes all-day. Known limit: injected text
+      that contains its own date and is quoted verbatim passes, because the
+      page really says it.
+- [x] **3.4 Schedule and notification events** (`src/schedule.ts`,
+      `src/notifications.ts`), including a notification when a new source
+      disagrees with a date the student verified.
+- [x] **3.5 Pipeline** (`src/pipeline.ts`, `src/sync.ts`): documents,
+      announcements, pages and assignment briefs; AI only on changed documents
+      that rules flag, asked first above 20; quoted dates fill undated VLE
+      deadlines and are kept across syncs; ambiguous titles fill nothing;
+      rejected candidates in `.crawler/rejected.json`. `crawler sync --ai`,
+      `crawler schedule [--every 1|3|7]` (`src/ai-runner.ts` runs the local
+      `claude`/`codex` with the host's guards).
+- [x] **3.6 Study Hub side** (`shell/background.mjs`, `shell/setup.mjs`):
+      sync every 1/3/7 days and once on launch when overdue; tray with "Sync
+      now", "Start at login" and Quit (closing the window keeps it in the
+      tray); native notifications (at most 4, then a summary); 48h reminders on
+      a timer; the sync reads documents with the student's chosen assistant and
+      never asks from a background sync. Checked: tests, build, Electron
+      self-test. Not yet checked: a real scheduled sync over days, macOS.
 
-*Usable:* deadlines hidden in documents and announcements show up with their
-quote, conflicts are shown not chosen, and the app syncs every 3 days.
+## M4 — Calendar sync — engine and UI done 2026-10-16; needs a client ID
 
-## M4 — Calendar sync
+- [x] **4.1 OAuth and API client** (`src/gcal/oauth.ts`, `src/gcal/client.ts`).
+- [x] **4.2 Event mapping and sync** (`src/gcal/events.ts`, `src/gcal/sync.ts`):
+      never touches events without a `crawlerId`, never overwrites a student's
+      edit, reconciles duplicate copies, strips credentials from event text.
+- [x] **4.3 Wiring**: `crawler calendar connect | sync | disconnect | status`,
+      automatic update after `crawler sync`, encrypted token
+      (`createCalendarTokenStore`).
+- [x] **4.4 Study Hub side**: "Syncing" and "Google Calendar" on the calendar
+      page (connect, update now, disconnect, events the student edited).
+- [ ] **4.5 Friends**: create the Google Cloud OAuth client (desktop app,
+      `calendar.app.created` scope), put it in `google-oauth.json` in the app's
+      data folder or `CRAWLER_GOOGLE_CLIENT_ID`/`_SECRET`, and add each friend
+      as a test user. **Needs the user.** Nothing has run against real Google yet.
 
-Contracts: `src/calendar-types.ts`; no new dependencies (`fetch`, `node:crypto`).
+## M5 — Transcripts and subject-neutral Study Hub — done 2026-10-16
 
-- [ ] **4.1 OAuth and API client** (`src/gcal/oauth.ts`, `src/gcal/client.ts`):
-      installed-app flow, loopback `127.0.0.1` redirect, PKCE, system browser,
-      `calendar.app.created` scope first; refresh-token store behind
-      `CalendarTokenStore`; `CalendarClient` over the REST API with etags.
-- [ ] **4.2 Event mapping and sync** (`src/gcal/events.ts`, `src/gcal/sync.ts`):
-      one event per deadline keyed by `crawlerId`; content hash; create /
-      update / delete from `Deadlines.json`; `conflict` prefixed with ⚠ and
-      listing every source; `needs-check` and `tbc` without a window never
-      placed; etag mismatch means the student edited it, so report it and do
-      not overwrite. Tested with a fake `CalendarClient`.
-- [ ] **4.3 Wiring** (lead): `crawler calendar connect | sync | disconnect`,
-      run after each sync, token in the OS credential store via the Electron
-      env, `.ics` stays as the Apple/other path.
-- [ ] **4.4 Study Hub side**: "Connect Google Calendar" in settings, status
-      line, list of events edited by the student.
-- [ ] **4.5 Friends**: Google Cloud project in testing mode; add each friend as
-      a test user (up to 100). Needs the user to create the OAuth client ID.
-
-*Usable:* a "University deadlines" calendar in Google Calendar that follows
-`Deadlines.json`.
-
-## M5 — Transcripts and subject-neutral Study Hub
-
-- [ ] **5.1 Transcript spike** (research first, then live check): how QM's
-      Echo360 ("EchoVideo (Q-Review)") exposes captions to a signed-in session
-      (LTI launch, then Echo360 session cookies, then caption/VTT endpoints);
-      what the Moodle side gives (`external-tool` items); legal/acceptable-use
-      note. Output: a section in design 02 and a runnable
-      `spikes/echo360` script to try with the real session.
-- [ ] **5.2 Transcript download** (after 5.1): adapter support, saved as plain
-      text in `Transcripts/` beside the lecture, manifest entries, sorter
-      category already exists.
-- [ ] **5.3 Subject profiles in Study Hub** (planned by a read-only helper
-      against the Study Hub repo): law, STEM, humanities and general profiles
-      that change the prompts, card styles and revision structure; chosen per
-      module, default general.
+- [x] **5.1 Transcript spike**, run live on ECS505U: LTI 1.0 form post,
+      syllabus JSON, WebVTT captions (design 02, "Verified on QMplus").
+- [x] **5.2 Transcript download** (`src/adapters/echo360.ts`,
+      `src/transcripts.ts`): captions saved as text in
+      `Course Materials/Transcripts/NN - <lecture> (<date>).txt`, once per
+      recording, at most 40 new per sync, paced; transcripts are not read for
+      deadlines. `crawler sync --no-transcripts` skips them. Not yet run
+      against QMplus end to end (the spike was).
+- [x] **5.3 Subject profiles in Study Hub** (`lib/subject-profiles.ts`): law,
+      STEM, humanities, general; chosen per module in `.study-hub/profile.json`,
+      suggested from the module code and title; existing law modules stay law
+      and produce byte-identical files and prompts.
 
 ## M6 — Public release
 

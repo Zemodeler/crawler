@@ -46,6 +46,7 @@ Only for things that matter, never per file:
 | A deadline's date changed | Yes |
 | New deadline found | Yes |
 | New conflict | Yes |
+| A new source disagrees with a date the student verified | Yes (the student's date is kept) |
 | Deadline in the next 48h (once) | Yes (opt-out) |
 | New files | Summary line only ("12 new files in 3 modules") |
 
