@@ -362,8 +362,10 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
       continue;
     }
     // The same assessment quoted twice under different titles: same kind, same London day.
+    // A bare "the deadline is …" (kind other) is the named assessment due that day.
+    const sameKind = (d: Deadline) => d.kind === candidate.kind || d.kind === "other" || candidate.kind === "other";
     const sameDay = candidate.date
-      ? [...fresh.values()].find((d) => d.kind === candidate.kind && d.due !== null && londonDay(d.due.iso) === londonDay(candidate.date!.iso))
+      ? [...fresh.values()].find((d) => sameKind(d) && d.due !== null && londonDay(d.due.iso) === londonDay(candidate.date!.iso))
       : undefined;
     const id = sameDay?.id ?? textDeadlineId(universityId, module, candidate.title, candidate.kind);
     const existing = fresh.get(id);
@@ -375,6 +377,9 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
         Object.assign(next, statusFor(dueDate, placement.year, course), { due: candidate.date });
         if (next.status !== "needs-check") delete next.checkReason;
       }
+      // The named assessment gives the title; a timed date beats an all-day one on the same day.
+      if (existing.kind === "other" && candidate.kind !== "other") Object.assign(next, { title: candidate.title, kind: candidate.kind });
+      if (next.due?.allDay && candidate.date && !candidate.date.allDay) next.due = candidate.date;
       if (next.weight === undefined && candidate.weight !== undefined) next.weight = candidate.weight;
       if (next.formative === undefined && candidate.formative) next.formative = true;
       fresh.set(id, next);

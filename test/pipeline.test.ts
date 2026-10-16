@@ -521,3 +521,21 @@ test("a generic title that fits several undated VLE deadlines equally fills none
     await t.cleanup();
   }
 });
+
+test("a bare 'the deadline is …' on the same day as a named coursework is one deadline with the named title and the timed date", async () => {
+  const t = await setup();
+  try {
+    const items = [
+      announcement(1, "You can submit from week 12. The deadline is Thursday 14 January."),
+      announcement(2, "Coursework: Create and Query Your Database. Due Thursday 14 January 2027 at 15:00 on QMplus."),
+    ];
+    const { deadlines } = await t.run(items);
+    const onDay = deadlines.filter((d) => d.due?.iso.startsWith("2027-01-14"));
+    assert.equal(onDay.length, 1, JSON.stringify(deadlines.map((d) => [d.title, d.kind, d.due?.iso])));
+    assert.equal(onDay[0]!.kind, "coursework");
+    assert.equal(onDay[0]!.due?.iso, "2027-01-14T15:00:00.000Z");
+    assert.equal(onDay[0]!.sources.length, 2);
+  } finally {
+    await t.cleanup();
+  }
+});
