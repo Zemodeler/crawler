@@ -2,3 +2,13 @@ node_modules/
 # Spike output can hold personal course data.
 spikes/**/out/
 /out/
+
+# Study Hub (hub/)
+hub/node_modules/
+hub/.next/
+hub/.vinext/
+hub/dist/
+hub/.wrangler/
+hub/outputs/
+hub/work/
+*.tsbuildinfo
