@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { startHost } from "../host/index.mjs";
 import { libraryRoot } from "../host/library.mjs";
+import { formatLibrary } from "../host/auto-format.mjs";
 import { LOGIN_ITEM, createBackground } from "./background.mjs";
 import { createSetup } from "./setup.mjs";
 
@@ -138,6 +139,7 @@ app.whenReady().then(async () => {
   let host;
   let setup;
   try {
+    await formatLibrary(libraryRoot()).catch((error) => console.error(`Study Hub materials index: ${error.message}`));
     setup = createSetup({ app, BrowserWindow, safeStorage, session, shell, dialog, libraryRoot, parent: () => mainWindow });
     host = await startHost({ setup });
   } catch (error) {

@@ -33,6 +33,10 @@ Files go to `Documents/My Studies/<year>/<module>/…` (change it with
 calendar) and `Changes.md` beside them. Files you edit or move are never
 overwritten. Run `pnpm test` for the test suite (synthetic data, no network).
 
+After each sync, Study Hub creates or refreshes a materials index inside each
+module. It leaves hand-edited indexes alone. Topic packs and flashcards are
+built separately in Study Hub after you review the proposed topics.
+
 ## Docs
 
 - [Vision](docs/VISION.md)

@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { createCliAiRunner } from "../src/ai-runner.ts";
-import { runCli } from "../src/cli.ts";
+import { parseArgs, runCli } from "../src/cli.ts";
 import { createCalendarTokenStore, createLoginBrowser, createTokenStore, readGoogleClient } from "./electron-env.mjs";
 
 app.setName("Crawler");
@@ -46,5 +46,17 @@ app.whenReady().then(async () => {
     console.error(error instanceof Error ? error.message : String(error));
     return 1;
   });
+  if (argv[0] === "sync" && (code === 0 || code === 2)) {
+    try {
+      const { formatLibrary } = await import("../hub/host/auto-format.mjs");
+      const rootFlag = parseArgs(argv).flags.get("root");
+      const root = typeof rootFlag === "string" ? rootFlag : join(homedir(), "Documents", "My Studies");
+      const formatted = await formatLibrary(root);
+      const created = formatted.filter((entry) => entry.action === "created" || entry.action === "updated");
+      if (created.length) console.log(`Study Hub: indexed course materials in ${created.length} module(s).`);
+    } catch (error) {
+      console.error(`Study Hub materials index: ${error.message}`);
+    }
+  }
   app.exit(code);
 });

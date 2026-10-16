@@ -565,7 +565,7 @@ function materialGroup(path: string, category: string): string {
 }
 
 /** Derived entirely from the inventory. Zero AI calls. */
-export function buildMaterialsIndex(files: InventoryFile[]): string {
+export function buildMaterialsIndex(files: InventoryFile[], options: { hasHub?: boolean } = {}): string {
   const self = SPEC.materialsIndex;
   const relevant = files.filter((f) => {
     const category = f.category || inferCategory(f.path, f.ext || "");
@@ -588,14 +588,16 @@ export function buildMaterialsIndex(files: InventoryFile[]): string {
     if (!entries.length) continue;
     out.push(`## ${group.title}`, "");
     for (const entry of entries) {
-      const label = (entry.name || entry.path.split("/").pop() || entry.path).replace(/\.[^.]+$/, "");
+      const label = (entry.name || entry.path.split("/").pop() || entry.path)
+        .replace(/\.[^.]+$/, "")
+        .replace(/[\[\]]/g, "");
       out.push(`- ${relLink(self, entry.path, label)}`);
       listed++;
     }
     out.push("");
   }
   if (!listed) out.push("No original course materials were found in this folder.", "");
-  out.push(`${relLink(self, SPEC.hub, "Back to the revision hub")}`, "");
+  if (options.hasHub !== false) out.push(`${relLink(self, SPEC.hub, "Back to the revision hub")}`, "");
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 

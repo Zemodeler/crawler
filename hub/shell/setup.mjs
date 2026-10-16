@@ -31,6 +31,7 @@ import { createCalendarTokenStore, createLoginBrowser, createTokenStore, readGoo
 
 import { createHostAiRunner } from "./ai-runner.mjs";
 import { readSchedule, writeSchedule } from "./background.mjs";
+import { formatLibrary } from "../host/auto-format.mjs";
 
 const ASSISTANTS = new Set(["claude", "codex"]);
 
@@ -223,6 +224,11 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       },
     })
       .then(async (result) => {
+        try {
+          await formatLibrary(root, result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
+        } catch (error) {
+          console.error(`Study Hub materials index: ${error.message}`);
+        }
         run = { ...run, state: "done", course: null, finishedAt: new Date().toISOString(), summary: summarize(result) };
         try {
           onSynced(result);

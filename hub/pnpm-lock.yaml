@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       crawler:
-        specifier: link:../Crawler
-        version: link:../Crawler
+        specifier: link:..
+        version: link:..
       pdfjs-dist:
         specifier: ^6.2.108
         version: 6.2.108
