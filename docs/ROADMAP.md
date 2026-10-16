@@ -54,6 +54,17 @@ integration (M2); Google Calendar (M4).
 *Usable:* double-click, sign in to QMplus, see modules and deadlines in
 Study Hub.
 
+*Progress (2026-10-16, Study Hub branch `m2-library`):* UI choices settled
+(modules listed in the sidebar with a colour dot each, past years folded away,
+calendar opening as a list with a month view, deadline details in a side panel,
+"Next 7 days" on the overview, a three-step first launch). Done: the host
+serves `My Studies/` (`/api/library/*`, files at `/library/<path>`) with no
+picker; module sidebar; flashcards follow the chosen module; `/calendar` with
+the side panel and "Use this date" / "Enter date" writing `user-verified`.
+Checked on a sample library in Electron, plus 6 new host tests. Still to do:
+the first-launch screens and sync inside the shell, removing `bridge/` and
+`launcher/`, progress for every module side by side, and macOS.
+
 ## M3 — Deadlines you can trust
 
 - Text extraction in Node; rule-based candidates; AI extraction via the host's
