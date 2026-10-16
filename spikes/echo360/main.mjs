@@ -97,6 +97,19 @@ function describe(response) {
   };
 }
 
+/** Route shapes of the links on a page (redacted), never the links themselves. */
+function linkShapes(html, base) {
+  const shapes = new Set();
+  for (const match of html.matchAll(/href=["']([^"']+)["']/gi)) {
+    try {
+      shapes.add(redactUrl(new URL(match[1], base).href));
+    } catch {
+      shapes.add("<invalid-url>");
+    }
+  }
+  return [...shapes].slice(0, 15);
+}
+
 async function cookieNames(ses) {
   const cookies = await ses.cookies.get({});
   return cookies.map((c) => `${c.domain} ${c.name}${c.httpOnly ? " (httpOnly)" : ""}`).sort();
@@ -148,10 +161,30 @@ async function run() {
     }),
   );
   const landingHtml = await guard("lti-post", "body-unreadable", () => landed.text());
-  const { host, sectionId } = await guard("lti-post", "landing-url-invalid", () => sectionFromUrl(landed.url));
+  let host = null;
+  let sectionId = null;
+  try {
+    ({ host, sectionId } = sectionFromUrl(landed.url));
+  } catch {
+    // reported below as sectionFound: false, with the landing route shape
+  }
+  // Electron's fetch may not report the final URL of a POST; the landing page
+  // (a single-page app) still names its section.
+  const inPage = [...new Set([...landingHtml.matchAll(/section[s]?[\/"':= ]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi)].map((m) => m[1]))];
+  if (!sectionId && inPage.length) {
+    sectionId = inPage[0];
+    host = new URL(endpoint).origin;
+  }
   step("lti-post", {
     ...describe(landed),
     sectionFound: Boolean(sectionId),
+    sectionIdsInPage: inPage.length,
+    landingBytes: landingHtml.length,
+    landingTitle: (/<title>([^<]{0,80})/i.exec(landingHtml)?.[1] ?? "").trim(),
+    // Shapes only: which kind of next hop the landing page asks for.
+    metaRefresh: /<meta[^>]+http-equiv=["']?refresh/i.test(landingHtml),
+    scriptRedirect: /(window\.)?location(\.href)?\s*=|location\.replace\(/i.test(landingHtml),
+    landingLinks: linkShapes(landingHtml, landed.url),
     // An auto-submitting form means a second hop (e.g. LTI 1.3 or a SAML bounce) the spike doesn't follow.
     autoSubmitForm: /<form[^>]+(onload|submit\(\))/i.test(landingHtml) || /document\.forms\[0\]\.submit/i.test(landingHtml),
     cookies: await cookieNames(ses),

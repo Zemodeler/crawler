@@ -175,7 +175,7 @@ In scope: captions/transcripts only, never video files.
 
 ## Lecture transcripts (Echo360)
 
-Research for M5.1 (2026-10-16). Spike: `spikes/echo360/` (not yet run live).
+Research for M5.1 (2026-10-16). Spike: `spikes/echo360/`, **run live on ECS505U on 2026-10-16: captions download** (see "Verified on QMplus" below).
 
 ### What we know, and from where
 
@@ -183,12 +183,12 @@ Research for M5.1 (2026-10-16). Spike: `spikes/echo360/` (not yet run live).
 | --- | --- | --- |
 | The recordings appear as `lti` modules, which our adapter turns into `external-tool` items with `toolName` | Verified | `src/adapters/moodle.ts`, ECS505U |
 | The token may call `mod_lti_get_tool_launch_data`, and the private token unlocks `tool_mobile_get_autologin_key` | Verified | login spike, 2026-10-16 |
-| `mod_lti_get_tool_launch_data(toolid = module instance)` returns `endpoint` plus signed `parameters[]` (name/value) to post as a form | From docs, not run | Moodle external API (the call the mobile app uses to open LTI); not yet run on QMplus |
+| `mod_lti_get_tool_launch_data(toolid = module instance)` returns `endpoint` plus signed `parameters[]` (name/value) to post as a form | Verified (live) | QMplus, ECS505U: LTI 1.0, endpoint on `echo360.org.uk` |
 | Echo360 transcripts are WebVTT; instructors can "Download Original/Edited" in the media details | Verified (public docs) | Echo360 support [1], UQ eLearning [2], Stony Brook KB [3] |
-| Echo360 Cloud lands an LTI launch on `<host>/section/<uuid>/home`, and `<host>/section/<uuid>/syllabus` returns JSON (`data[].lesson.lesson.id`, `lesson.medias[]`, `hasVideo`) using the browser session's cookies | Community code only | open-source downloaders: soraxas/echo360 `course.py` [4], peter-tanner/echo360 README [5] |
-| QM's region host (e.g. `echo360.org.uk`) | Guess | UK tenants usually use `echo360.org.uk`; the spike reports the real one |
-| A per-media caption endpoint that students may call | **Unknown**: not in any public doc we found | the spike tries candidate paths |
-| Student access to captions at all | Unknown per institution | instructors choose whether captions are published |
+| An LTI launch lands on a section page, and `<host>/section/<uuid>/syllabus` returns JSON (`data[].lesson.lesson.id`, `lesson.medias[]`, `hasVideo`) using the session's cookies | Verified (live); first seen in community code | open-source downloaders: soraxas/echo360 `course.py` [4], peter-tanner/echo360 README [5] |
+| QM's region host | Verified (live) | `echo360.org.uk` |
+| A per-media caption endpoint that students may call | Verified (live) | `/api/ui/echoplayer/lessons/<lesson>/medias/<media>/transcript-file?format=vtt` returns `text/vtt`; `…/transcript` returns the same as JSON |
+| Student access to captions at all | Verified for ECS505U | 12 of 12 lessons have video; the first lecture's VTT has 1,688 cues (about 12,600 words). Other modules may differ |
 | Rate limits | Not published | assume tight: one request at a time, with pauses |
 
 Sources (checked 2026-10-16):
@@ -236,12 +236,22 @@ only. Before shipping: check QM's Echo360 terms and the recording policy
 folder only, and drop the feature cleanly (module page says "no transcripts")
 if Echo360 or QM objects or the routes change.
 
-### Questions only a live session answers
+### Verified on QMplus (2026-10-16, ECS505U, the student's own session)
 
-- Which LTI version does QMplus use (`lti_version` in the launch data)?
-- Does a plain form POST land on `/section/<uuid>/home`, or is the hidden
-  window needed? Which cookies does Echo360 set?
-- Does `/section/<uuid>/syllabus` return JSON for a student, and with which keys?
-- Which request returns the VTT when a student turns CC on in the player
-  (devtools Network tab, path shape only)?
-- Do QM's recordings have captions published to students at all?
+- **LTI version:** `LTI-1p0`. A plain form POST of the signed fields works; no
+  hidden window, autologin key or SAML bounce is needed.
+- **Session:** Echo360 answers 200 with its "Class List" page and sets
+  `ECHO_JWT`, `PLAY_SESSION` and CloudFront signed cookies on
+  `echo360.org.uk`. The landing page names its section id (Electron's
+  `session.fetch` does not report the final URL of the POST, so the id is
+  read from the page).
+- **Syllabus:** `GET /section/<id>/syllabus` returns JSON
+  `{status, message, data[]}` with `SyllabusLessonType` rows: `lesson`,
+  `medias[]` (`id`, `mediaType`, `title`, `isAvailable`,
+  `isHiddenDueToCaptions`, …), `hasVideo`, `startTimeUTC`, `captureStartedAt`.
+- **Captions:** `GET /api/ui/echoplayer/lessons/<lesson>/medias/<media>/transcript-file?format=vtt`
+  returns WebVTT; `vttToText` turns it into plain text. Four Moodle calls and
+  three Echo360 requests in total, paced.
+- **Consequence for the flow above:** step 3 can use plain Node `fetch` with a
+  small cookie jar (`getSetCookie()`), keeping the engine free of Electron;
+  step 4 reads the section id from the landing page when the URL has none.
