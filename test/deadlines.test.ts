@@ -440,3 +440,19 @@ test("deadlines not born on the VLE are never cancelled by a sync", () => {
   const [kept] = mergeDeadlines([manual], [], later);
   assert.deepEqual(kept, manual);
 });
+
+test("an all-day date agrees with a timed date on the same London day", () => {
+  const [base] = mergeDeadlines([], deadlinesFromItems([assignment(1, "Coursework 2", unix("2027-01-14T15:00:00Z"))], course, placement, now), now);
+  const dayOnly: Source = {
+    type: "document",
+    strength: "quoted",
+    url: "https://vle.example/brief.pdf",
+    quote: "The deadline is Thursday 14 January.",
+    date: { iso: "2027-01-14T00:00:00.000Z", allDay: true, tz: "Europe/London" },
+    seenAt: now.toISOString(),
+    origin: "rule",
+  };
+  assert.equal(detectConflict({ ...base!, sources: [...base!.sources, dayOnly] }).status, "confirmed");
+  const otherDay = { ...dayOnly, date: { iso: "2027-01-15T00:00:00.000Z", allDay: true, tz: "Europe/London" as const } };
+  assert.equal(detectConflict({ ...base!, sources: [...base!.sources, otherDay] }).status, "conflict");
+});

@@ -196,9 +196,20 @@ function sameDate(a: Instant | null, b: Instant | null): boolean {
   return Date.parse(a.iso) === Date.parse(b.iso);
 }
 
-/** Distinct non-null dates the sources claim, as ms. */
+/** "2027-01-14", the London calendar day of an instant. */
+function londonDayKey(iso: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+}
+
+/**
+ * Distinct dates the sources claim, as ms. An all-day date agrees with a
+ * timed one on the same London day ("14 January" and "14 January at 15:00").
+ */
 function sourceDates(sources: Source[]): number[] {
-  return [...new Set(sources.flatMap((s) => (s.date ? [Date.parse(s.date.iso)] : [])))];
+  const dated = sources.flatMap((s) => (s.date ? [s.date] : []));
+  const timedDays = new Set(dated.filter((d) => !d.allDay).map((d) => londonDayKey(d.iso)));
+  const kept = dated.filter((d) => !d.allDay || !timedDays.has(londonDayKey(d.iso)));
+  return [...new Set(kept.map((d) => Date.parse(d.iso)))];
 }
 
 /** Marks a deadline 'conflict' when its sources disagree on the date, unless the student verified it. */
@@ -381,10 +392,11 @@ export function changeLines(previous: Deadline[], merged: Deadline[]): string[] 
       } else if (change.field === "added") {
         lines.push(`${label} — new deadline, ${d.due ? `due ${formatShort(d.due)}` : "date TBC"}`);
       } else if (change.field === "removed") {
+        const fromText = d.id.includes(":text:");
         lines.push(
           d.status === "user-verified"
-            ? `${label} — removed from QMplus, but kept because you confirmed it`
-            : `${label} — removed from QMplus`,
+            ? `${label} — ${fromText ? "no longer found in the course material" : "removed from QMplus"}, but kept because you confirmed it`
+            : `${label} — ${fromText ? "no longer found in the course material" : "removed from QMplus"}`,
         );
       } else if (change.field === "title") {
         lines.push(`${label} — renamed from "${change.from ?? ""}"`);
