@@ -221,6 +221,9 @@ function sourceKey(s: Source): string {
 
 /** Fresh sources replace previous ones from the same place; others are kept. Structured first. */
 function mergeSources(previous: Source[], fresh: Source[]): Source[] {
+  // At most one vle-field source, even if a fresh deadline arrives with several.
+  let seenVle = false;
+  fresh = fresh.filter((s) => s.type !== "vle-field" || (seenVle ? false : (seenVle = true)));
   const freshKeys = new Set(fresh.map(sourceKey));
   const merged = [...fresh, ...previous.filter((s) => !freshKeys.has(sourceKey(s)))];
   return merged.sort((a, b) => (a.strength === b.strength ? 0 : a.strength === "structured" ? -1 : 1));
@@ -245,6 +248,10 @@ function mergeOne(p: Deadline, f: Deadline, at: string): Deadline {
   const sources = mergeSources(p.sources, f.sources);
 
   if (p.status === "user-verified") {
+    // Back after a removal: record it, so that a later removal is reported again.
+    if (p.history.at(-1)?.field === "removed") {
+      history.push({ at, field: "added", from: "removed", to: p.status });
+    }
     const previousByKey = new Map(p.sources.map((s) => [sourceKey(s), s]));
     for (const s of f.sources) {
       const old = previousByKey.get(sourceKey(s));
@@ -307,7 +314,7 @@ export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Dat
     if (!p) {
       const added: Change = { at, field: "added", from: null, to: f.due?.iso ?? null };
       if (f.sources[0]) added.source = f.sources[0];
-      out.push(detectConflict({ ...f, history: [...f.history, added] }));
+      out.push(detectConflict({ ...f, sources: mergeSources([], f.sources), history: [...f.history, added] }));
     } else {
       out.push(mergeOne(p, f, at));
     }
@@ -333,7 +340,9 @@ export function changeLines(previous: Deadline[], merged: Deadline[]): string[] 
     const fresh = d.history.slice(p ? p.history.length : 0);
 
     for (const change of fresh) {
-      if (change.field === "added") {
+      if (change.field === "added" && change.from === "removed") {
+        lines.push(`${label} — back on QMplus`);
+      } else if (change.field === "added") {
         lines.push(`${label} — new deadline, ${d.due ? `due ${formatShort(d.due)}` : "date TBC"}`);
       } else if (change.field === "removed") {
         lines.push(

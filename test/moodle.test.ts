@@ -298,6 +298,40 @@ test("a cancelled download frees its slot", async () => {
   assert.equal(counter.cancelled, 5);
 });
 
+test("a download nobody reads is abandoned and frees its slot", async () => {
+  const counter = { started: 0, cancelled: 0 };
+  const fake = fakeMoodle({
+    GET: () => {
+      counter.started++;
+      return new Response(
+        new ReadableStream<Uint8Array>({ pull: (c) => c.enqueue(new Uint8Array(4)), cancel: () => void counter.cancelled++ }),
+      );
+    },
+  });
+  const adapter = createMoodleAdapter({ id: "tst", displayName: "Test University", site: SITE }, { ...fake, streamIdleMs: 30 });
+  // Four streams that are never read hold every slot...
+  const abandoned = await Promise.all(Array.from({ length: 4 }, () => adapter.download(CREDENTIALS, FILE)));
+  // ...until the idle timeout frees them, so a fifth download can start.
+  const fifth = await adapter.download(CREDENTIALS, FILE);
+  assert.equal(counter.started, 5);
+  // A stream that is read steadily is not abandoned, however long it takes.
+  const reader = fifth.getReader();
+  for (let i = 0; i < 10; i++) {
+    assert.equal((await reader.read()).done, false);
+    await delay(10);
+  }
+  assert.equal(counter.cancelled, 4); // the four unread ones, not the fifth
+  // Reading an abandoned stream fails clearly, without the token.
+  await assert.rejects(abandoned[0]!.getReader().read(), (error: unknown) => {
+    assert.ok(error instanceof VleError);
+    assert.equal(error.code, "unavailable");
+    assert.ok(!error.message.includes(TOKEN));
+    return true;
+  });
+  await reader.cancel();
+  assert.equal(counter.cancelled, 5);
+});
+
 test("a download cut off mid-stream errors as unavailable and frees its slot", async () => {
   let started = 0;
   // The first body breaks once read; the others never end on their own.

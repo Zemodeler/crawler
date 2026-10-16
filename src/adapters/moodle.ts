@@ -14,9 +14,14 @@ import { VleError } from "../types.ts";
 import type { Course, Credentials, LoginBrowser, Placement, UniversityAdapter, VleFile, VleItem } from "../types.ts";
 
 export type MoodleSiteConfig = { id: string; displayName: string; site: string };
-export type MoodleDeps = { fetch?: typeof fetch };
+export type MoodleDeps = {
+  fetch?: typeof fetch;
+  /** A download nobody reads for this long is abandoned, freeing its request slot. */
+  streamIdleMs?: number;
+};
 
 const MAX_IN_FLIGHT = 4;
+const DEFAULT_STREAM_IDLE_MS = 120_000;
 const RETRIES = 2;
 const BACKOFF_MS = 300;
 const DAY = 24 * 60 * 60;
@@ -78,33 +83,72 @@ function limiter(max: number) {
   };
 }
 
-/** Passes `body` through, calling `release` once it ends, errors or is cancelled. */
-function releasing(body: ReadableStream<Uint8Array>, release: () => void, what: string): ReadableStream<Uint8Array> {
+/**
+ * Passes `body` through, calling `release` once it ends, errors or is cancelled.
+ * A caller that stops reading would otherwise keep the request slot for good, so
+ * a stream nobody has read for `idleMs` is abandoned: its slot is freed and the
+ * next read fails with 'unavailable'. Nothing is read from the network ahead of
+ * the consumer (highWaterMark 0), so the idle clock only runs while the consumer
+ * is not asking for data.
+ */
+function releasing(
+  body: ReadableStream<Uint8Array>,
+  release: () => void,
+  what: string,
+  idleMs: number,
+): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let cancelled = false;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      let chunk: Awaited<ReturnType<typeof reader.read>>;
-      try {
-        chunk = await reader.read();
-      } catch {
-        release();
-        // The underlying error can quote the URL, which carries the token.
-        if (!cancelled) controller.error(new VleError("unavailable", `${what}: the transfer was cut off.`));
-        return;
-      }
-      if (cancelled) return;
-      if (chunk.done) {
-        release();
-        controller.close();
-      } else controller.enqueue(chunk.value);
-    },
-    async cancel(reason) {
-      cancelled = true;
+  let abandoned = false;
+  let idle: ReturnType<typeof setTimeout> | undefined;
+  const disarm = () => {
+    if (idle !== undefined) clearTimeout(idle);
+    idle = undefined;
+  };
+  const arm = () => {
+    disarm();
+    idle = setTimeout(() => {
+      abandoned = true;
       release();
-      await reader.cancel(reason).catch(() => {});
+      reader.cancel().catch(() => {});
+    }, idleMs);
+  };
+  arm();
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        disarm();
+        if (abandoned) {
+          controller.error(new VleError("unavailable", `${what}: the download was abandoned because it was not read.`));
+          return;
+        }
+        let chunk: Awaited<ReturnType<typeof reader.read>>;
+        try {
+          chunk = await reader.read();
+        } catch {
+          release();
+          // The underlying error can quote the URL, which carries the token.
+          if (!cancelled) controller.error(new VleError("unavailable", `${what}: the transfer was cut off.`));
+          return;
+        }
+        if (cancelled) return;
+        if (chunk.done) {
+          release();
+          controller.close();
+        } else {
+          controller.enqueue(chunk.value);
+          arm();
+        }
+      },
+      async cancel(reason) {
+        cancelled = true;
+        disarm();
+        release();
+        await reader.cancel(reason).catch(() => {});
+      },
     },
-  });
+    { highWaterMark: 0 },
+  );
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -475,7 +519,7 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
       // The stream keeps its slot until it ends, errors or is cancelled.
       return fetchFile(credentials, file.url, what, async (response, keep) => {
         if (!response.body) throw new VleError("bad_response", `${what}: empty body.`);
-        return releasing(response.body, keep(), what);
+        return releasing(response.body, keep(), what, deps.streamIdleMs ?? DEFAULT_STREAM_IDLE_MS);
       });
     },
   };

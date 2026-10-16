@@ -338,6 +338,41 @@ test("a user-verified deadline removed from QMplus is kept and reported once", (
   assert.deepEqual(changeLines([kept!], [again!]), []);
 });
 
+test("a user-verified deadline that is removed, restored and removed again is reported both times", () => {
+  const items = [assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))];
+  const [base] = mergeDeadlines([], deadlinesFromItems(items, course, placement, now), now);
+  const verified: Deadline = { ...base!, status: "user-verified" };
+  const [removed] = mergeDeadlines([verified], [], later);
+  const evenLater = new Date(later.getTime() + 86_400_000);
+  const [restored] = mergeDeadlines([removed!], deadlinesFromItems(items, course, placement, evenLater), evenLater);
+  assert.equal(restored?.status, "user-verified");
+  assert.deepEqual(
+    restored!.history.map((h) => h.field),
+    ["added", "removed", "added"],
+  );
+  assert.deepEqual(changeLines([removed!], [restored!]), ["ECS505U · Coursework 2 — back on QMplus"]);
+  const muchLater = new Date(evenLater.getTime() + 86_400_000);
+  const [removedAgain] = mergeDeadlines([restored!], [], muchLater);
+  assert.deepEqual(
+    removedAgain!.history.map((h) => h.field),
+    ["added", "removed", "added", "removed"],
+  );
+  assert.deepEqual(changeLines([restored!], [removedAgain!]), ["ECS505U · Coursework 2 — removed from QMplus, but kept because you confirmed it"]);
+});
+
+test("a fresh deadline with two vle-field sources keeps only one, so it cannot conflict with itself", () => {
+  const [base] = mergeDeadlines([], deadlinesFromItems([assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))], course, placement, now), now);
+  const first = base!.sources[0]!;
+  const other = { ...first, url: `${first.url}&other=1`, date: { ...first.date!, iso: "2027-03-10T12:00:00.000Z" }, quote: "Cut-off: 10 Mar" };
+  const fresh: Deadline = { ...base!, sources: [first, other] };
+  const [merged] = mergeDeadlines([], [fresh], now);
+  assert.equal(merged?.sources.filter((s) => s.type === "vle-field").length, 1);
+  assert.equal(merged?.status, "confirmed");
+  const [again] = mergeDeadlines([base!], [fresh], later);
+  assert.equal(again?.sources.filter((s) => s.type === "vle-field").length, 1);
+  assert.equal(again?.status, "confirmed");
+});
+
 test("a deadline that a document, announcement or page also backs is not cancelled by the VLE", () => {
   const [base] = mergeDeadlines([], deadlinesFromItems([assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))], course, placement, now), now);
   for (const type of ["document", "announcement", "page"] as const) {
