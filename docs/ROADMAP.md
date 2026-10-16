@@ -61,9 +61,13 @@ calendar opening as a list with a month view, deadline details in a side panel,
 serves `My Studies/` (`/api/library/*`, files at `/library/<path>`) with no
 picker; module sidebar; flashcards follow the chosen module; `/calendar` with
 the side panel and "Use this date" / "Enter date" writing `user-verified`.
-Checked on a sample library in Electron, plus 6 new host tests. Still to do:
-the first-launch screens and sync inside the shell, removing `bridge/` and
-`launcher/`, progress for every module side by side, and macOS.
+Checked on a sample library in Electron, plus 6 new host tests. First launch
+(`/welcome`: university sign-in, then choosing the assistant, then the first sync) and a sidebar
+"Sync now" run Crawler inside the shell (Study Hub depends on `crawler` via
+`link:../Crawler`; the sign-in window and token store come from
+`crawler/electron`). Still to do: a real QMplus sign-in through the shell,
+removing `bridge/` and `launcher/`, progress for every module side by side,
+and macOS.
 
 ## M3 — Deadlines you can trust
 
