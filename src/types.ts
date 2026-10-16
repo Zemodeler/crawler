@@ -177,9 +177,8 @@ export type Source = {
   date: Instant | null;
   seenAt: string; // ISO
   /**
-   * Who found a quoted source. Rules re-read every document each sync, so a
-   * rule source that is not found again is gone; the AI only reads changed
-   * documents, so its sources are kept until the document changes.
+     * Who found a quoted source. A successful rule read or AI reread replaces
+     * that origin's earlier quotes; unavailable or skipped sources are kept.
    */
   origin?: "rule" | "ai";
 };

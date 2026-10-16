@@ -114,6 +114,75 @@ async function setup() {
 const exists = (p: string) => stat(p).then(() => true, () => false);
 const read = (p: string) => readFile(p, "utf8");
 
+test("text disabled or failed retains text deadlines and document-filled VLE dates", async () => {
+  const t = await setup();
+  try {
+    t.vle.assignments.set(1, [{ id: 5, title: "Coursework 1", due: null }]);
+    t.vle.announcements.set(1, [
+      { id: 1, subject: "Assessment", body: "Coursework 1 is due on 14 December 2026 at 10:00 through the QMplus link." },
+      { id: 2, subject: "Exam", body: "The final exam takes place on 12 January 2027 at 10:00 in the main hall." },
+    ]);
+    const first = await t.run();
+    const before = first.deadlines.filter((d) => d.module === "TST101U");
+    assert.equal(before.length, 2);
+    assert.ok(before.every((d) => d.due));
+    const off = await t.run(LATER, { textDeadlines: false });
+    const evidence = (deadlines: Deadline[]) => deadlines.filter((d) => d.module === "TST101U").map((d) => ({ ...d, sources: d.sources.filter((s) => s.type !== "vle-field") }));
+    assert.deepEqual(evidence(off.deadlines), evidence(before));
+    const failed = await t.run(LATER, { ai: {
+      available: async () => { throw new Error("temporary runner failure"); },
+      structured: async () => { throw new Error("must not run"); },
+    } });
+    assert.match(failed.courses[0]!.textError!, /temporary runner failure/);
+    assert.deepEqual(evidence(failed.deadlines), evidence(before));
+    assert.equal(failed.changes.length, 0);
+  } finally { await t.cleanup(); }
+});
+
+test("local document deletion preserves its deadlines; VLE removal expires them", async () => {
+  const t = await setup();
+  try {
+    t.vle.files.set(1, [{ id: 30, name: "Brief.txt", content: "The lab test is due on 3 December 2026 at 16:00 and counts for 10% of the module.", modified: NOW.toISOString(), activity: "Assessment brief" }]);
+    const first = await t.run();
+    const lab = first.deadlines.find((d) => d.kind === "lab")!;
+    assert.ok(lab?.due);
+    const entry = (await t.manifest()).find((e) => e.localPath.endsWith("Brief.txt"))!;
+    await rm(t.path(entry.localPath));
+    const deleted = await t.run(LATER);
+    assert.deepEqual(deleted.deadlines.find((d) => d.id === lab.id), lab);
+    t.vle.files.set(1, []);
+    const removed = await t.run(LATER);
+    assert.equal(removed.deadlines.find((d) => d.id === lab.id)!.status, "cancelled");
+  } finally { await t.cleanup(); }
+});
+
+test("a successful AI reread can clear a document-filled VLE date", async () => {
+  const t = await setup();
+  try {
+    t.vle.assignments.set(1, [{ id: 5, title: "Oral presentation", due: null }]);
+    const body = "The oral presentation is worth 10% of the module mark. It happens on 4 December 2026 at 12:00.";
+    t.vle.announcements.set(1, [{ id: 1, subject: "Presentation", body }]);
+    let requests = 0;
+    let items: unknown[] = [{ title: "Oral presentation", kind: "presentation", date: "2026-12-04T12:00", weekNumber: null, quote: "It happens on 4 December 2026 at 12:00.", page: 1, weight: 10, formative: false }];
+    const ai: AiRunner = {
+      available: async () => ({ cli: "codex" }),
+      structured: async <T>() => { requests++; return { items } as T; },
+    };
+    const first = await t.run(NOW, { ai });
+    const d = first.deadlines.find((d) => d.title === "Oral presentation")!;
+    assert.equal(d.due?.iso, "2026-12-04T12:00:00.000Z");
+    const second = await t.run(LATER, { ai });
+    assert.equal(requests, 1);
+    assert.equal(second.deadlines.find((v) => v.id === d.id)!.due?.iso, d.due!.iso);
+    items = [];
+    t.vle.announcements.set(1, [{ id: 1, subject: "Presentation", body: `${body} Updated.` }]);
+    const third = await t.run(LATER, { ai });
+    assert.equal(requests, 2);
+    assert.equal(third.deadlines.find((v) => v.id === d.id)!.due, null);
+    assert.equal(third.deadlines.find((v) => v.id === d.id)!.status, "tbc");
+  } finally { await t.cleanup(); }
+});
+
 test("currentAcademicYear starts on 1 August", () => {
   assert.equal(currentAcademicYear(new Date("2026-07-31T23:00:00Z")), "2025-26");
   assert.equal(currentAcademicYear(new Date("2026-08-01T00:00:00Z")), "2026-27");

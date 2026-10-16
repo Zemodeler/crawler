@@ -259,23 +259,16 @@ function sourceForDate(sources: Source[], due: Instant | null): Source | undefin
   return sources.find((s) => s.date !== null && sameDate(s.date, due)) ?? sources[0];
 }
 
-/**
- * Previous sources that still count without being found again: the VLE field
- * and what the AI quoted (it only re-reads changed documents). A rule source
- * that was not found again no longer stands; neither does one from before
- * sources recorded who found them.
- */
-const lasting = (s: Source) => s.type === "vle-field" || s.origin === "ai";
+/** True only when this source was successfully checked during this sync. */
+export type SourceWasRead = (source: Source, deadline: Deadline) => boolean;
 
-function mergeOne(p: Deadline, fresh: Deadline, at: string): Deadline {
+function mergeOne(p: Deadline, fresh: Deadline, at: string, wasRead: SourceWasRead): Deadline {
   const history = [...p.history];
-  const sources = mergeSources(p.sources.filter(lasting), fresh.sources);
+  const sources = mergeSources(p.sources.filter((s) => s.type === "vle-field" || !wasRead(s, p)), fresh.sources);
   let f = fresh;
 
-  // A date quoted from a document is not found again while the document is
-  // unchanged (the AI only reads changed documents), so the fresh deadline can
-  // arrive undated. Keep the date while the VLE field still gives none and the
-  // quoting source is still on record.
+  // A source can be unchanged, unavailable, or skipped. Keep its date while
+  // the VLE gives none and the quoting source has not been superseded.
   if (f.due === null && p.due !== null && p.status !== "user-verified") {
     const quoted = sources.find((s) => s.type !== "vle-field" && s.date !== null && sameDate(s.date, p.due));
     if (quoted) {
@@ -327,16 +320,22 @@ function mergeOne(p: Deadline, fresh: Deadline, at: string): Deadline {
  * one stays and records 'removed' once; anything a document, announcement or
  * page also speaks for, or that did not come from the VLE, is kept unchanged.
  */
-function missingFromVle(p: Deadline, at: string): Deadline {
+function missingFromVle(p: Deadline, at: string, wasRead: SourceWasRead): Deadline {
   if (p.status === "cancelled") return p;
-  // Found in text and not found again: it stands only on what the AI quoted.
-  if (p.id.includes(":text:")) {
-    const kept = p.sources.filter(lasting);
-    if (kept.length > 0 || p.status === "user-verified") return kept.length === p.sources.length ? p : { ...p, sources: kept.length ? kept : p.sources };
-    return { ...p, status: "cancelled", history: [...p.history, { at, field: "removed", from: p.status, to: "cancelled" }] };
+  const textBorn = p.id.includes(":text:");
+  if (!textBorn && !p.id.startsWith("moodle:")) return p;
+  const kept = p.sources.filter((s) => s.type !== "vle-field" && !wasRead(s, p));
+  if (kept.length && p.status === "user-verified") return p;
+  if (kept.length && p.status !== "user-verified") {
+    if (kept.length === p.sources.filter((s) => s.type !== "vle-field").length) return p;
+    const due = kept.find((s) => sameDate(s.date, p.due))?.date ?? kept.find((s) => s.date)?.date ?? null;
+    const status = due ? (p.checkReason ? "needs-check" : "confirmed") : "tbc";
+    const next = detectConflict({ ...p, due, status, sources: kept });
+    next.history = [...p.history];
+    if (!sameDate(p.due, due)) next.history.push({ at, field: "due", from: p.due?.iso ?? null, to: due?.iso ?? null });
+    if (p.status !== next.status) next.history.push({ at, field: "status", from: p.status, to: next.status });
+    return next;
   }
-  if (!p.id.startsWith("moodle:")) return p;
-  if (p.sources.some((s) => s.type !== "vle-field")) return p;
   if (p.status === "user-verified") {
     if (p.history.at(-1)?.field === "removed") return p;
     return { ...p, history: [...p.history, { at, field: "removed", from: p.status, to: p.status }] };
@@ -346,10 +345,12 @@ function missingFromVle(p: Deadline, at: string): Deadline {
 
 /**
  * Merges a fresh sync into the previous deadlines, recording history. Ids
- * missing from `fresh` go through missingFromVle. Result is sorted by due,
- * then title, undated last.
+ * missing from `fresh` go through missingFromVle. A text source expires only
+ * when `wasRead` confirms a successful refresh or removal from the VLE;
+ * without that evidence it is retained. Result is sorted by due, then title,
+ * undated last.
  */
-export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Date): Deadline[] {
+export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Date, wasRead: SourceWasRead = () => false): Deadline[] {
   const at = now.toISOString();
   const previousById = new Map(previous.map((d) => [d.id, d]));
   const freshIds = new Set(fresh.map((d) => d.id));
@@ -363,12 +364,12 @@ export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Dat
       if (source) added.source = source;
       out.push(detectConflict({ ...f, sources: mergeSources([], f.sources), history: [...f.history, added] }));
     } else {
-      out.push(mergeOne(p, f, at));
+      out.push(mergeOne(p, f, at, wasRead));
     }
   }
 
   for (const p of previous) {
-    if (!freshIds.has(p.id)) out.push(missingFromVle(p, at));
+    if (!freshIds.has(p.id)) out.push(missingFromVle(p, at, wasRead));
   }
 
   return sortDeadlines(out);

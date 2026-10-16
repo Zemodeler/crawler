@@ -59,7 +59,12 @@ export type TextDeadlinesInput = {
   confirmAi?: (documents: number) => Promise<boolean>;
 };
 
-export type TextDeadlinesResult = { deadlines: Deadline[]; counts: TextCounts };
+export type TextDeadlinesResult = {
+  deadlines: Deadline[];
+  counts: TextCounts;
+  /** Successful reads, including reads which found no deadlines. */
+  refreshed: { ruleUrls: string[]; aiUrls: string[] };
+};
 
 /* ------------------------------------------------------------- week map */
 
@@ -121,7 +126,7 @@ function itemSources(items: VleItem[], manifest: ManifestEntry[]): TextSource[] 
   const add = (source: Omit<TextSource, "pages"> & { html: string }) => {
     const { html, ...rest } = source;
     const text = htmlToText(html);
-    if (isPage(text)) out.push({ ...rest, pages: [{ page: 1, text }] });
+    out.push({ ...rest, pages: [{ page: 1, text }] });
   };
   for (const item of items) {
     if (item.kind === "announcement") {
@@ -214,7 +219,8 @@ function matchVle(candidate: DateCandidate, vle: Deadline[]): number {
   if (tied) return -1;
   if (best >= 0 || !candidate.date) return best;
   const day = londonDay(candidate.date.iso);
-  return vle.findIndex((d) => d.kind === candidate.kind && d.due !== null && londonDay(d.due.iso) === day);
+  const matches = vle.flatMap((d, i) => d.kind === candidate.kind && d.due !== null && londonDay(d.due.iso) === day ? [i] : []);
+  return matches.length === 1 ? matches[0]! : -1;
 }
 
 export function textDeadlineId(universityId: string, module: string, title: string, kind: Deadline["kind"]): string {
@@ -271,10 +277,12 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
   const counts: TextCounts = { sources: 0, candidates: 0, verified: 0, rejected: 0, adjusted: 0, aiRuns: 0, aiMs: 0 };
 
   const sources = [...(await documentSources(root, input.manifest)), ...itemSources(input.items, input.manifest)];
-  counts.sources = sources.length;
+  counts.sources = sources.filter((s) => s.pages.some((p) => isPage(p.text))).length;
+  const refreshed = { ruleUrls: sources.map((s) => s.url), aiUrls: [] as string[] };
   const map = weekMapForCourse(universityId, course, placement);
 
   const candidates: DateCandidate[] = sources.flatMap((s) => findCandidates(s, { year: placement.year, ...(map ? { weekMap: map } : {}), now }));
+  let updatedHashes: { path: string; hashes: Record<string, string> } | undefined;
 
   if (input.ai) {
     const hashesPath = join(stateDir, "ai-hashes.json");
@@ -283,6 +291,14 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
     if (!available.cli) {
       counts.aiSkipped = "no AI command-line tool is available";
     } else {
+      // A changed source that no longer contains assessment text has nothing
+      // for the AI to find. Expire its old AI quotes without a CLI request.
+      for (const source of sources) {
+        if (hashes[source.url] !== undefined && hashes[source.url] !== sourceHash(source) && !looksLikeAssessmentText(source.pages)) {
+          refreshed.aiUrls.push(source.url);
+          hashes[source.url] = sourceHash(source);
+        }
+      }
       const toRun = planAiRuns(
         sources.filter((s) => looksLikeAssessmentText(s.pages)),
         hashes,
@@ -305,9 +321,12 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
         counts.aiMs = result.ms;
         const failed = new Set(result.failures.map((f) => f.url));
         if (failed.size > 0) counts.aiFailures = result.failures.length;
-        for (const source of toRun) if (!failed.has(source.url)) hashes[source.url] = sourceHash(source);
-        await writeJson(hashesPath, hashes);
+        for (const source of toRun) if (!failed.has(source.url)) {
+          hashes[source.url] = sourceHash(source);
+          refreshed.aiUrls.push(source.url);
+        }
       }
+      if (refreshed.aiUrls.length) updatedHashes = { path: hashesPath, hashes };
     }
   }
   counts.candidates = candidates.length;
@@ -402,5 +421,6 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
   }
 
   const out = [...vle.map((d, i) => (touched.has(i) ? detectConflict(d) : d)), ...[...fresh.values()].map(detectConflict)];
-  return { deadlines: out, counts };
+  if (updatedHashes) await writeJson(updatedHashes.path, updatedHashes.hashes);
+  return { deadlines: out, counts, refreshed };
 }

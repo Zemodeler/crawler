@@ -158,6 +158,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const reports: CourseReport[] = [];
   const freshDeadlines: Deadline[] = [];
   const syncedKeys = new Set<string>();
+  const textRefresh = new Map<string, { rule: Set<string>; ai: Set<string>; current: Set<string> }>();
   const fileChanges: string[] = [];
   const newFiles: { module: string; added: number }[] = [];
   const readText = options.textDeadlines !== false;
@@ -216,6 +217,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
       let deadlines = deadlinesFromItems(items as VleItem[], course, placement, now);
       if (readText) {
         try {
+          const currentFiles = new Set(plan.jobs.map((job) => job.vleId));
           const found = await textDeadlines({
             universityId: adapter.id,
             root,
@@ -223,7 +225,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
             placement,
             items: items as VleItem[],
             // Spoken lectures are not read for deadlines: too easy to misquote.
-            manifest: [...manifest.values()].filter((e) => e.module === course.shortname && e.category !== "Transcripts"),
+            manifest: [...manifest.values()].filter((e) => e.module === course.shortname && e.category !== "Transcripts" && currentFiles.has(e.vleId)),
             deadlines,
             now,
             ...(options.ai ? { ai: options.ai } : {}),
@@ -231,6 +233,12 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
           });
           deadlines = found.deadlines;
           report.text = found.counts;
+          const current = new Set(plan.jobs.map((job) => job.file.url));
+          for (const item of items) {
+            if (item.kind === "announcement" || item.kind === "assignment") current.add(item.url);
+            else if (item.kind === "page") current.add(item.activityUrl);
+          }
+          textRefresh.set(`${placement.year}|${label}`, { rule: new Set(found.refreshed.ruleUrls), ai: new Set(found.refreshed.aiUrls), current });
         } catch (error) {
           report.textError = error instanceof Error ? error.message : String(error);
         }
@@ -256,7 +264,12 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const inSync = (d: Deadline) => syncedKeys.has(`${d.year}|${d.module}`);
   const previousSynced = previousDeadlines.filter(inSync);
   const untouched = previousDeadlines.filter((d) => !inSync(d));
-  const merged = mergeDeadlines(previousSynced, freshDeadlines, now);
+  const merged = mergeDeadlines(previousSynced, freshDeadlines, now, (source, deadline) => {
+    const refreshed = textRefresh.get(`${deadline.year}|${deadline.module}`);
+    if (!refreshed) return false; // Text disabled or failed: retain previous evidence.
+    if (!refreshed.current.has(source.url)) return true; // Removed from the VLE.
+    return (source.origin === "ai" ? refreshed.ai : refreshed.rule).has(source.url);
+  });
   const deadlines = sortAll([...untouched, ...merged]);
   const deadlineLines = changeLines(previousSynced, merged);
 

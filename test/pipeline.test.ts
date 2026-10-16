@@ -86,6 +86,55 @@ function fakeRunner(answer: (prompt: string) => AiItem[], cli: "claude" | "codex
 const ORAL = "The oral presentation is worth 10% of the module mark. It happens in week 11 on Friday.";
 const ORAL_QUOTE = "It happens in week 11 on Friday.";
 
+test("AI rereads expire old quotes while unchanged and failed reads retain them", async () => {
+  const t = await setup();
+  try {
+    const ai = fakeRunner(() => [aiItem({ weekNumber: 11, quote: ORAL_QUOTE })]);
+    const first = await t.run([announcement(1, ORAL)], { ai });
+    const previous = mergeDeadlines([], first.deadlines, NOW);
+    const merge = (result: Awaited<ReturnType<typeof t.run>>) => mergeDeadlines(previous, result.deadlines, NOW,
+      (s) => (s.origin === "ai" ? result.refreshed.aiUrls : result.refreshed.ruleUrls).includes(s.url));
+    const unchanged = await t.run([announcement(1, ORAL)], { ai });
+    assert.deepEqual(merge(unchanged), previous);
+    const failing: AiRunner = { available: ai.available, structured: async () => { throw new Error("offline"); } };
+    const failed = await t.run([announcement(1, `${ORAL} Updated.`)], { ai: failing });
+    assert.equal(failed.counts.aiFailures, 1);
+    assert.deepEqual(merge(failed), previous);
+    const empty = fakeRunner(() => []);
+    const reread = await t.run([announcement(1, `${ORAL} Updated.`)], { ai: empty });
+    assert.equal(empty.requests, 1);
+    assert.equal(merge(reread)[0]!.status, "cancelled");
+    const irrelevant = await t.run([announcement(1, "Welcome to the module. Bring a laptop to the next lecture.")], { ai: empty });
+    assert.equal(empty.requests, 1, "no request needed when assessment text is removed");
+    assert.equal(merge(irrelevant)[0]!.status, "cancelled");
+  } finally { await t.cleanup(); }
+});
+
+test("removing a conflicting rule source restores the remaining AI date", async () => {
+  const t = await setup();
+  try {
+    const ai = fakeRunner(() => [aiItem({ weekNumber: 11, quote: ORAL_QUOTE })]);
+    const first = await t.run([announcement(1, ORAL)], { ai });
+    const d = first.deadlines[0]!;
+    const other = { ...d.sources[0]!, origin: "rule" as const, url: "https://example.test/old", date: { ...d.due!, iso: "2026-12-05T00:00:00.000Z" } };
+    const previous: Deadline = { ...d, due: other.date, status: "conflict", sources: [other, ...d.sources] };
+    const merged = mergeDeadlines([previous], [], NOW, (s) => s.url === other.url)[0]!;
+    assert.equal(merged.status, "confirmed");
+    assert.equal(merged.due?.iso, d.due!.iso);
+    assert.deepEqual(merged.sources, d.sources);
+  } finally { await t.cleanup(); }
+});
+
+test("same-day fallback refuses two equally suitable VLE deadlines", async () => {
+  const t = await setup();
+  try {
+    const second = { ...(assignment("Portfolio B") as Extract<VleItem, { kind: "assignment" }>), id: 6, activityId: 6, url: `${SITE}/mod/assign/view.php?id=6` };
+    const result = await t.run([assignment("Portfolio A"), second, announcement(1, "Please remember the coursework is due on 14 December 2026 at 10:00 for all of you.")]);
+    assert.equal(result.deadlines.length, 3);
+    assert.ok(result.deadlines.filter((d) => d.id.startsWith("moodle:")).every((d) => d.sources.length === 1));
+  } finally { await t.cleanup(); }
+});
+
 test("a rule candidate becomes a second source on the VLE deadline and a different date is a conflict", async () => {
   const t = await setup();
   try {
