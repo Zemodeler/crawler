@@ -176,7 +176,12 @@ export function topicName(pathOrLabel: string): string {
  * a rename would change every card id and every saved checkbox key.
  */
 export function canonicalTopicKey(labelOrPath: string): string {
-  return topicLabel(labelOrPath)
+  // A bare topic name ("Design Patterns") is its own label; only paths need
+  // topicLabel, which would call an unnumbered name "General".
+  const label = labelOrPath.includes("/")
+    ? topicLabel(labelOrPath)
+    : labelOrPath.replace(/\.(md|csv|txt)$/i, "").replace(/\s*\(Topic Pack\)/i, "").trim();
+  return label
     .replace(/^\d{1,2}\s*[-–.]\s*/, "")
     .replace(/\s*&\s*/g, " and ")
     .replace(/[‘’]/g, "'")

@@ -663,3 +663,12 @@ test("the report hash changes only when the folder materially changes", () => {
   assert.notEqual(validateCourse(base).hash, validateCourse(bigger).hash);
   assert.notEqual(validateCourse(base).hash, validateCourse(extra).hash);
 });
+
+test("topic names without a number keep their own key, so a plan keeps all its topics", async () => {
+  const { canonicalTopicKey, topicLabel: label } = await import("../lib/course-format.ts");
+  const names = ["Introduction and Overview", "Design Patterns", "Software Testing"];
+  assert.deepEqual(names.map(canonicalTopicKey), ["introduction and overview", "design patterns", "software testing"]);
+  assert.equal(canonicalTopicKey("02 - Design Patterns"), "design patterns");
+  assert.equal(canonicalTopicKey("Revision/Topic Packs/02 - Design Patterns (Topic Pack).md"), "design patterns");
+  assert.equal(label("Flashcards/02 - Design Patterns/Pack Essentials.csv"), "02 - Design Patterns");
+});
