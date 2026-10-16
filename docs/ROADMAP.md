@@ -24,15 +24,24 @@ they decide whether a path works at all.
 - [ ] **Transcripts**: identify QM's lecture-capture system and whether
       captions can be fetched from the session.
 
-## M1 — QM crawl to folder (Crawler CLI)
+## M1 — QM crawl to folder (Crawler CLI) — done 2026-10-16
 
-- Moodle adapter (login, modules, items, download) with record/replay tests.
-- Sorter (rules only) and manifest with re-sync safety rules.
-- `Deadlines.json` from structured VLE fields; `Deadlines.ics` export.
-- `crawler login`, `crawler sync`, `crawler doctor <url>`.
+- [x] Moodle adapter (login, courses, items, download), with synthetic fixtures.
+- [x] Course naming and rule-based sorter; manifest with re-sync safety rules.
+- [x] `Deadlines.json` from structured VLE fields with `needs-check`;
+      `Deadlines.ics`; `Changes.md`.
+- [x] `crawler login | sync | courses | doctor <url>`, run with
+      `pnpm crawler <command>` (Electron supplies the sign-in window and the OS
+      token encryption).
+- [x] Run against real QMplus (2026-10-16): 4 current modules, 211 files
+      (291 MB) in 77 s; a second sync took 4 s and changed nothing.
+- 112 tests; the three engine branches were reviewed by helpers, and the sync
+  and CLI by the lead only.
 
-*Usable:* run one command, get `My Studies/` with every file and every
-structured deadline.
+*Usable now:* `pnpm crawler login`, then `pnpm crawler sync`.
+
+*Not in M1:* deadlines hidden in documents and announcements (M3); Study Hub
+integration (M2); Google Calendar (M4).
 
 ## M2 — One app, no bridge (Study Hub)
 

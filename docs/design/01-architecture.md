@@ -124,7 +124,7 @@ once. Tauri would be smaller, but it adds Rust to a TypeScript project.
 | --- | --- | --- | --- |
 | Course files, deadlines, `.ics` | `Documents\My Studies` | `~/Documents/My Studies` | The folder contract — see 03. Changeable. |
 | Crawl manifest | `My Studies/.crawler/` | same | Hidden; Study Hub already skips dotfolders. |
-| VLE tokens, Google refresh token | encrypted with Electron `safeStorage` (DPAPI) | `safeStorage` (Keychain) | Never in the folder, never in logs. |
+| VLE tokens, Google refresh token | encrypted with Electron `safeStorage` (DPAPI) | `safeStorage` (Keychain) | Never in the folder, never in logs. On Windows the key lives in `Local State` inside the app-data folder, so a token only decrypts there: **never change the app name or the data folder** without migrating both files. |
 | Settings, logs | `%APPDATA%\StudyHub` | `~/Library/Application Support/StudyHub` | Re-sync interval, calendar choice, enabled modules. |
 | Study progress | app window storage (IndexedDB) | same | Study Hub's existing model. |
 

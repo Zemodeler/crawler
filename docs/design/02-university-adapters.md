@@ -8,31 +8,25 @@ QMplus (Moodle) first; SurreyLearn (Brightspace) second.
 Everything above the adapter (sorting, extraction, diffing, calendar) is
 platform-neutral and only sees these types.
 
+The code is the reference: `src/types.ts` (`UniversityAdapter`, `VleItem`,
+`Course`, `VleFile`, `Credentials`, `LoginBrowser`, `VleError`). In short:
+
 ```ts
 interface UniversityAdapter {
-  id: string;                         // "qmul"
-  platform: "moodle" | "brightspace"; // module that implements it
-  displayName: string;                // "Queen Mary University of London"
-
-  login(browser: LoginBrowser): Promise<Credentials>;   // interactive, real browser
-  refresh?(c: Credentials): Promise<Credentials | null>;
-  whoAmI(c: Credentials): Promise<{ userId: string; name: string }>;
-
-  listModules(c: Credentials): Promise<Module[]>;
-  listItems(c: Credentials, m: Module, since?: Date): Promise<VleItem[]>;
-  download(c: Credentials, f: VleFile): Promise<ReadableStream>;
+  id: string; platform: "moodle" | "brightspace"; displayName: string; site: string;
+  login(browser: LoginBrowser): Promise<Credentials>;      // real browser window
+  whoAmI(c): Promise<{ userId: number; permittedFunctions: string[] }>;
+  listCourses(c): Promise<Course[]>;
+  listItems(c, course): Promise<VleItem[]>;
+  download(c, file): Promise<ReadableStream<Uint8Array>>;  // adds the token itself
 }
-
-type VleItem =
-  | { kind: "file";         file: VleFile; section: string }
-  | { kind: "assignment";   id: string; title: string; due?: Date; cutoff?: Date;
-                            briefFiles: VleFile[]; url: string; modified: Date }
-  | { kind: "quiz";         id: string; title: string; opens?: Date; closes?: Date; url: string }
-  | { kind: "event";        id: string; title: string; start: Date; end?: Date; url: string }
-  | { kind: "announcement"; id: string; title: string; body: string; posted: Date; url: string }
-  | { kind: "page";         id: string; title: string; html: string; url: string }
-  | { kind: "recording";    id: string; title: string; transcriptUrl?: string; url: string };
+// VleItem kinds: file, page (html + files), link, external-tool (e.g. Echo360),
+// assignment, quiz, event, announcement. Times are unix seconds.
+// Errors are VleError with code invalid_token | access_denied | unavailable | bad_response.
 ```
+
+Dates are plain unix seconds; naming, sorting and deadlines are done above the
+adapter, so a Brightspace adapter only has to produce these types.
 
 Rules every adapter follows:
 
@@ -40,9 +34,12 @@ Rules every adapter follows:
 - **Polite.** At most 4 concurrent requests, backoff on 429/5xx, and
   incremental fetch using the platform's modified timestamps.
 - **No secrets in logs.** Tokens are redacted at the HTTP layer, not by callers.
-- **Fixture-testable.** Every request goes through one client that can record
-  and replay, so the test suite runs on recorded, *synthetic* responses —
-  never real student data in the repo.
+- **Fixture-testable.** `fetch` is injected, so the suite runs on hand-written,
+  *synthetic* responses (`test/fixtures/moodle/`), never real student data in
+  the repo.
+- **Nothing credential-bearing leaves the adapter**: every URL it returns has
+  `token`/`wstoken` stripped; a download or response body keeps its request slot
+  until it is fully read, and an unread download is abandoned after 2 minutes.
 
 ## Moodle (QMplus)
 

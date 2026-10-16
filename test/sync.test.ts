@@ -150,6 +150,19 @@ test("first sync writes files, manifest, deadlines, ics and changes for this yea
   }
 });
 
+test("Changes.md names a few new files but summarises many", async () => {
+  const t = await setup();
+  try {
+    t.vle.files.set(1, Array.from({ length: 8 }, (_, i) => ({ id: 100 + i, name: `Slides${i + 1}.pdf`, content: `s${i}`, modified: "2026-09-25T10:00:00Z", activity: `Week ${i + 1} lecture slides` })));
+    const result = await t.run();
+    assert.ok(result.changes.includes("TST101U · 8 new files (Lectures 8)"), result.changes.join(" | "));
+    assert.ok(result.changes.includes("TST202U · new file Notes.pdf"));
+    assert.equal(result.changes.filter((l) => l.includes("Slides")).length, 0);
+  } finally {
+    await t.cleanup();
+  }
+});
+
 test("a second sync with nothing changed downloads nothing and writes no changes", async () => {
   const t = await setup();
   try {

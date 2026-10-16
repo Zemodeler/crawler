@@ -6,3 +6,5 @@ export * from "./sorter.ts";
 export * from "./deadlines.ts";
 export * from "./ics.ts";
 export * from "./sync.ts";
+export * from "./doctor.ts";
+export * from "./cli.ts";

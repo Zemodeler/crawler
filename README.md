@@ -13,8 +13,25 @@ for revision.
 - **Optional AI** runs through the `claude` or `codex` CLI you already have.
 - **Windows and macOS**: one desktop app that re-syncs every 3 days.
 
-Status: **design phase**. First target: Queen Mary (QMplus). Next: Surrey
-(SurreyLearn).
+Status: **early**. The command-line sync works against Queen Mary's QMplus
+(Moodle). The desktop app, calendar sync and Study Hub integration are next;
+see the [roadmap](docs/ROADMAP.md). After that: Surrey (SurreyLearn).
+
+## Try it (Windows, Node 22.18+)
+
+```
+pnpm install
+node node_modules/electron/install.js   # only if Electron's binary is missing
+pnpm crawler doctor <your-moodle-site>  # does the site work with Crawler?
+pnpm crawler login                      # sign in on the university's own page
+pnpm crawler courses                    # what will sync (this year's modules)
+pnpm crawler sync                       # download files, refresh deadlines
+```
+
+Files go to `Documents/My Studies/<year>/<module>/…` (change it with
+`--root <folder>`), with `Deadlines.json`, `Deadlines.ics` (import into any
+calendar) and `Changes.md` beside them. Files you edit or move are never
+overwritten. Run `pnpm test` for the test suite (synthetic data, no network).
 
 ## Docs
 

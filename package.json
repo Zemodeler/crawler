@@ -12,10 +12,12 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "crawler": "electron bin/crawler.mjs"
   },
   "devDependencies": {
     "@types/node": "22.20.5",
+    "electron": "^44.7.2",
     "typescript": "5.9.3"
   }
 }

@@ -152,12 +152,16 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
       const plan = planFiles(items, placement);
       report.files.videosSkipped = plan.skipped.length;
 
+      const label = placement.code ?? course.shortname;
+      const added: { name: string; category: string }[] = [];
       await runPool(plan.jobs, concurrency, async (job) => {
         const result = await syncFile({ adapter, credentials, root, course, job, manifest, now });
         report.files[result.result]++;
-        if (result.line) fileChanges.push(`${placement.code ?? course.shortname} · ${result.line}`);
+        if (result.result === "new") added.push({ name: job.relativePath.split("/").slice(-1)[0] ?? job.relativePath, category: job.category });
+        else if (result.line) fileChanges.push(`${label} · ${result.line}`);
         emit({ type: "file", course: course.shortname, path: job.relativePath, result: result.result });
       });
+      fileChanges.push(...describeNewFiles(label, added));
 
       const deadlines = deadlinesFromItems(items as VleItem[], course, placement, now);
       freshDeadlines.push(...deadlines);
@@ -288,6 +292,16 @@ async function syncFile(ctx: FileContext): Promise<{ result: FileResult; line?: 
     if (error instanceof VleError && error.code === "invalid_token") throw error;
     return { result: "failed", line: `could not download ${display}: ${error instanceof Error ? error.message : String(error)}` };
   }
+}
+
+/** A few new files are named; many become one line with a count per category. */
+export function describeNewFiles(label: string, added: { name: string; category: string }[]): string[] {
+  if (added.length === 0) return [];
+  if (added.length <= 5) return added.map((f) => `${label} · new file ${f.name}`);
+  const byCategory = new Map<string, number>();
+  for (const f of added) byCategory.set(f.category, (byCategory.get(f.category) ?? 0) + 1);
+  const parts = [...byCategory].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([c, n]) => `${c} ${n}`);
+  return [`${label} · ${added.length} new files (${parts.join(", ")})`];
 }
 
 /* ------------------------------------------------------------- file helpers */
