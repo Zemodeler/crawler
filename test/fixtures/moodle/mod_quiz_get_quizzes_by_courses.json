@@ -1,0 +1,38 @@
+{
+  "quizzes": [
+    {
+      "id": 1001,
+      "coursemodule": 5105,
+      "course": 101,
+      "name": "Week 1 check-in quiz",
+      "intro": "<p>Five questions.</p>",
+      "introformat": 1,
+      "introfiles": [],
+      "timeopen": 1790650000,
+      "timeclose": 1791255600,
+      "timelimit": 1800,
+      "preferredbehaviour": "deferredfeedback",
+      "attempts": 1,
+      "grademethod": 1,
+      "sumgrades": 5,
+      "grade": 10,
+      "hasfeedback": 0,
+      "section": 1,
+      "visible": 1,
+      "groupmode": 0,
+      "groupingid": 0
+    },
+    {
+      "id": 1002,
+      "coursemodule": 5107,
+      "course": 101,
+      "name": "Practice quiz",
+      "intro": "",
+      "introformat": 1,
+      "introfiles": [],
+      "timeopen": 0,
+      "timeclose": 0
+    }
+  ],
+  "warnings": []
+}

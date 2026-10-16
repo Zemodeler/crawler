@@ -1,0 +1,37 @@
+{
+  "discussions": [
+    {
+      "id": 88001,
+      "name": "CW1 deadline moved",
+      "groupid": -1,
+      "timemodified": 1791000500,
+      "usermodified": 11,
+      "timestart": 0,
+      "timeend": 0,
+      "discussion": 66001,
+      "parent": 0,
+      "userid": 11,
+      "created": 1791000000,
+      "modified": 1791000500,
+      "mailed": 1,
+      "subject": "CW1 deadline moved",
+      "message": "<p>Coursework 1 is now due a week later.</p>",
+      "messageformat": 1,
+      "messagetrust": 0,
+      "attachment": false,
+      "totalscore": 0,
+      "mailnow": 0,
+      "userfullname": "Teaching Team",
+      "usermodifiedfullname": "Teaching Team",
+      "numreplies": 0,
+      "numunread": 0,
+      "pinned": false,
+      "locked": false,
+      "starred": false,
+      "canreply": false,
+      "canlock": false,
+      "canfavourite": true
+    }
+  ],
+  "warnings": []
+}

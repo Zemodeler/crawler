@@ -1,0 +1,47 @@
+{
+  "events": [
+    {
+      "id": 3001,
+      "name": "Coursework 1: Unit tests is due",
+      "description": "",
+      "format": 1,
+      "courseid": 101,
+      "categoryid": 0,
+      "groupid": 0,
+      "userid": 11,
+      "repeatid": 0,
+      "modulename": "assign",
+      "instance": 901,
+      "eventtype": "due",
+      "timestart": 1793030400,
+      "timeduration": 0,
+      "visible": 1,
+      "uuid": "",
+      "sequence": 1,
+      "timemodified": 1790400000,
+      "subscriptionid": null
+    },
+    {
+      "id": 3002,
+      "name": "TST101U in-class test",
+      "description": "<p>Room to be announced.</p>",
+      "format": 1,
+      "courseid": 101,
+      "categoryid": 0,
+      "groupid": 0,
+      "userid": 11,
+      "repeatid": 0,
+      "modulename": "",
+      "instance": 0,
+      "eventtype": "course",
+      "timestart": 1795435200,
+      "timeduration": 3600,
+      "visible": 1,
+      "uuid": "",
+      "sequence": 1,
+      "timemodified": 1790400000,
+      "subscriptionid": null
+    }
+  ],
+  "warnings": []
+}

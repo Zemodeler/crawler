@@ -1,0 +1,31 @@
+{
+  "sitename": "Example Learning",
+  "username": "tst-student",
+  "firstname": "Test",
+  "lastname": "Student",
+  "fullname": "Test Student",
+  "lang": "en",
+  "userid": 4242,
+  "siteurl": "https://moodle.example.ac.uk",
+  "userpictureurl": "https://moodle.example.ac.uk/theme/image.php/boost/core/1/u/f1",
+  "functions": [
+    { "name": "core_webservice_get_site_info", "version": "2024100700" },
+    { "name": "core_enrol_get_users_courses", "version": "2024100700" },
+    { "name": "core_course_get_contents", "version": "2024100700" },
+    { "name": "mod_assign_get_assignments", "version": "2024100700" }
+  ],
+  "downloadfiles": 1,
+  "uploadfiles": 1,
+  "release": "4.5.15 (Build: 20260901)",
+  "version": "2024100715",
+  "mobilecssurl": "",
+  "advancedfeatures": [],
+  "usercanmanageownfiles": true,
+  "userquota": 0,
+  "usermaxuploadfilesize": -1,
+  "userhomepage": 1,
+  "siteid": 1,
+  "sitecalendartype": "gregorian",
+  "usercalendartype": "gregorian",
+  "theme": "boost"
+}

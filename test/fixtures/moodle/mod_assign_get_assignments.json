@@ -1,0 +1,77 @@
+{
+  "courses": [
+    {
+      "id": 101,
+      "fullname": "TST101U Testing Basics 2026/27",
+      "shortname": "TST101U 2026/27",
+      "timemodified": 1790000000,
+      "assignments": [
+        {
+          "id": 901,
+          "cmid": 5104,
+          "course": 101,
+          "name": "Coursework 1: Unit tests",
+          "nosubmissions": 0,
+          "submissiondrafts": 0,
+          "sendnotifications": 0,
+          "sendlatenotifications": 0,
+          "sendstudentnotifications": 1,
+          "duedate": 1793030400,
+          "allowsubmissionsfromdate": 1790600000,
+          "grade": 100,
+          "timemodified": 1790400000,
+          "completionsubmit": 1,
+          "cutoffdate": 1793635200,
+          "gradingduedate": 0,
+          "teamsubmission": 0,
+          "requireallteammemberssubmit": 0,
+          "teamsubmissiongroupingid": 0,
+          "blindmarking": 0,
+          "hidegrader": 0,
+          "revealidentities": 0,
+          "attemptreopenmethod": "untilpass",
+          "maxattempts": -1,
+          "markingworkflow": 0,
+          "markingallocation": 0,
+          "requiresubmissionstatement": 1,
+          "preventsubmissionnotingroup": 0,
+          "configs": [],
+          "intro": "<p>Write unit tests for the provided calculator.</p>",
+          "introformat": 1,
+          "introfiles": [],
+          "introattachments": [
+            {
+              "filename": "CW1 brief.pdf",
+              "filepath": "/",
+              "filesize": 65536,
+              "fileurl": "https://moodle.example.ac.uk/webservice/pluginfile.php/7104/mod_assign/introattachment/0/CW1%20brief.pdf",
+              "timemodified": 1790400000,
+              "mimetype": "application/pdf",
+              "isexternalfile": false
+            }
+          ],
+          "activity": "",
+          "activityformat": 1,
+          "activityattachments": [],
+          "timelimit": 0,
+          "submissionattachments": 0
+        },
+        {
+          "id": 902,
+          "cmid": 5199,
+          "course": 101,
+          "name": "Coursework 2: To be confirmed",
+          "duedate": 0,
+          "cutoffdate": 0,
+          "timemodified": 1790400100,
+          "intro": "",
+          "introformat": 1,
+          "introfiles": [],
+          "introattachments": [],
+          "configs": []
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

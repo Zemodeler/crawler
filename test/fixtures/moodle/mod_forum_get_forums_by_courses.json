@@ -1,0 +1,37 @@
+[
+  {
+    "id": 301,
+    "course": 101,
+    "type": "news",
+    "name": "Announcements",
+    "intro": "General news and announcements",
+    "introformat": 1,
+    "introfiles": [],
+    "duedate": 0,
+    "cutoffdate": 0,
+    "assessed": 0,
+    "scale": 0,
+    "maxbytes": 0,
+    "maxattachments": 1,
+    "forcesubscribe": 1,
+    "trackingtype": 1,
+    "timemodified": 1790000000,
+    "cmid": 5001,
+    "numdiscussions": 1,
+    "cancreatediscussions": false,
+    "lockdiscussionafter": 0,
+    "istracked": false
+  },
+  {
+    "id": 302,
+    "course": 101,
+    "type": "general",
+    "name": "Q&A",
+    "intro": "",
+    "introformat": 1,
+    "introfiles": [],
+    "timemodified": 1790000000,
+    "cmid": 5008,
+    "numdiscussions": 4
+  }
+]
