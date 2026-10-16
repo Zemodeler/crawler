@@ -75,22 +75,83 @@ page. The real QMplus sign-in and first sync ran through the app
 
 ## M3 — Deadlines you can trust
 
-- Text extraction in Node; rule-based candidates; AI extraction via the host's
-  CLI runner; quote verification; week-number resolution.
-- Conflict and TBC states end to end, including the resolve UI.
-- Re-sync every 3 days (plus catch-up on launch and "Sync now"), change
-  detection, `Changes.md`, native notifications on both platforms.
+Contracts: `src/extraction-types.ts`. Engine work lives in this repo; the
+notification toasts, the resolve UI polish and the launch-time catch-up live in
+Study Hub's shell (`m2-library` branch).
+
+- [ ] **3.1 Text extraction** (`src/extract/`): PDF per page (`pdfjs-dist`),
+      PPTX/DOCX/XLSX per slide/paragraph/sheet, HTML to text with links; cache
+      in `.crawler/text/` by file hash.
+- [ ] **3.2 Rule candidates and week map** (`src/candidates.ts`, `src/weeks.ts`):
+      date patterns near assessment words ("due", "deadline", "submit by",
+      "exam", "test", "presentation", "week N"), weights, formative flag;
+      per-term week map from adapter config (QM semester dates), overridden by
+      a verified "Week 1 starts …" quote; reading weeks from config.
+- [ ] **3.3 Quote verification and AI extraction** (`src/quotes.ts`,
+      `src/ai-extract.ts`): whitespace/quote-mark-normalised quote search; the
+      date must parse from the quote itself; JSON-schema prompt with fenced
+      material; queue of at most 2 through `AiRunner`; only changed documents
+      that rules flagged; run count and duration reported; confirm before more
+      than 20 documents on a term's first sync.
+- [ ] **3.4 Schedule, change detection, notification events**
+      (`src/schedule.ts`, `src/notifications.ts`): next-sync-due and catch-up
+      rule (1/3/7 days), local "due in 48h" reminders from `Deadlines.json`,
+      notification events from the diff of two deadline lists (date changed,
+      new deadline, new conflict; new files as one summary line).
+- [ ] **3.5 Pipeline integration** (`src/sync.ts`, `src/deadlines.ts`,
+      `src/cli.ts`): extract, candidates, AI, verify, merge into
+      `Deadlines.json` with the status rules; per-module staging in
+      `.crawler/staging/`, committed when the module finishes; `lastSyncAt` in
+      state; `crawler sync --ai` and a `crawler schedule` command. Done by the
+      lead after 3.1-3.4 land.
+- [ ] **3.6 Study Hub side** (`m2-library`): native notifications from the
+      shell, timer for 48h reminders, start-at-login option, tray "Sync now",
+      badge on the calendar; conflict and TBC lists already exist (resolve
+      writes `user-verified`).
+
+*Usable:* deadlines hidden in documents and announcements show up with their
+quote, conflicts are shown not chosen, and the app syncs every 3 days.
 
 ## M4 — Calendar sync
 
-- Google Calendar: own secondary calendar, create/update/delete by id, manual
-  edit detection.
-- Friends added as OAuth test users.
+Contracts: `src/calendar-types.ts`; no new dependencies (`fetch`, `node:crypto`).
+
+- [ ] **4.1 OAuth and API client** (`src/gcal/oauth.ts`, `src/gcal/client.ts`):
+      installed-app flow, loopback `127.0.0.1` redirect, PKCE, system browser,
+      `calendar.app.created` scope first; refresh-token store behind
+      `CalendarTokenStore`; `CalendarClient` over the REST API with etags.
+- [ ] **4.2 Event mapping and sync** (`src/gcal/events.ts`, `src/gcal/sync.ts`):
+      one event per deadline keyed by `crawlerId`; content hash; create /
+      update / delete from `Deadlines.json`; `conflict` prefixed with ⚠ and
+      listing every source; `needs-check` and `tbc` without a window never
+      placed; etag mismatch means the student edited it, so report it and do
+      not overwrite. Tested with a fake `CalendarClient`.
+- [ ] **4.3 Wiring** (lead): `crawler calendar connect | sync | disconnect`,
+      run after each sync, token in the OS credential store via the Electron
+      env, `.ics` stays as the Apple/other path.
+- [ ] **4.4 Study Hub side**: "Connect Google Calendar" in settings, status
+      line, list of events edited by the student.
+- [ ] **4.5 Friends**: Google Cloud project in testing mode; add each friend as
+      a test user (up to 100). Needs the user to create the OAuth client ID.
+
+*Usable:* a "University deadlines" calendar in Google Calendar that follows
+`Deadlines.json`.
 
 ## M5 — Transcripts and subject-neutral Study Hub
 
-- Transcript download for QM (per the M0 spike).
-- Subject profiles in Study Hub (law, STEM, humanities, general).
+- [ ] **5.1 Transcript spike** (research first, then live check): how QM's
+      Echo360 ("EchoVideo (Q-Review)") exposes captions to a signed-in session
+      (LTI launch, then Echo360 session cookies, then caption/VTT endpoints);
+      what the Moodle side gives (`external-tool` items); legal/acceptable-use
+      note. Output: a section in design 02 and a runnable
+      `spikes/echo360` script to try with the real session.
+- [ ] **5.2 Transcript download** (after 5.1): adapter support, saved as plain
+      text in `Transcripts/` beside the lecture, manifest entries, sorter
+      category already exists.
+- [ ] **5.3 Subject profiles in Study Hub** (planned by a read-only helper
+      against the Study Hub repo): law, STEM, humanities and general profiles
+      that change the prompts, card styles and revision structure; chosen per
+      module, default general.
 
 ## M6 — Public release
 
