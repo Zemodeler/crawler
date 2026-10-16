@@ -11,7 +11,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { extractWithAi, planAiRuns, sourceHash } from "./ai-extract.ts";
-import { findCandidates, looksLikeAssessmentText } from "./candidates.ts";
+import { START_BEFORE_RE, findCandidates, looksLikeAssessmentText } from "./candidates.ts";
 import { detectConflict, statusFor } from "./deadlines.ts";
 import { renameWithRetry } from "./fs-retry.ts";
 import { cachedExtract } from "./extract/cache.ts";
@@ -28,6 +28,7 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024;
 export const AI_CONFIRM_ABOVE = 20;
 const OVERLAP = 0.6;
 const TZ = "Europe/London";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type TextCounts = {
   sources: number;
@@ -64,6 +65,8 @@ export type TextDeadlinesResult = {
   counts: TextCounts;
   /** Successful reads, including reads which found no deadlines. */
   refreshed: { ruleUrls: string[]; aiUrls: string[] };
+  /** The teaching-week calendar used for "week N", or null when the term is unknown. */
+  weekMap: TermWeekMap | null;
 };
 
 /* ------------------------------------------------------------- week map */
@@ -72,7 +75,7 @@ export type TextDeadlinesResult = {
  * The teaching-week calendar for a course: Semester A for a course that
  * starts Sep-Dec and ends before February, Semester B for one starting
  * Jan-May and ending by July of that year. Year-long or unknown courses get none,
- * so week-only dates stay tbc.
+ * so week-only dates stay tbc with no teaching-week window.
  */
 export function weekMapForCourse(universityId: string, course: Course, placement: ModulePlacement): TermWeekMap | null {
   if (course.startdate === null || course.enddate === null) return null;
@@ -86,6 +89,44 @@ export function weekMapForCourse(universityId: string, course: Course, placement
     return weekMapFor(universityId, `${placement.year} Semester B`);
   }
   return null;
+}
+
+const SEMESTER_A_RE = /\b(?:january\s+(?:exam(?:ination)?s?|assessment)|semester\s+(?:a|1|one)|term\s+(?:1|one))\b/gi;
+const SEMESTER_B_RE = /\b(?:(?:april|may)\s+(?:exam(?:ination)?s?|assessment)|semester\s+(?:b|2|two)|term\s+(?:2|two))\b/gi;
+
+/**
+ * The term a module teaches in, from what its own text says, for a course
+ * whose VLE dates cover the whole year (QMplus gives every module 1 Sep to
+ * 31 Aug). "January exam" and "Semester A" count for A, "May exam" and
+ * "Semester B" for B; a tie or no mention is no answer.
+ */
+export function termFromText(sources: TextSource[]): "A" | "B" | null {
+  let a = 0;
+  let b = 0;
+  for (const source of sources) {
+    for (const page of source.pages) {
+      a += page.text.match(SEMESTER_A_RE)?.length ?? 0;
+      b += page.text.match(SEMESTER_B_RE)?.length ?? 0;
+    }
+  }
+  return a > b ? "A" : b > a ? "B" : null;
+}
+
+/**
+ * The term a module's announcements were posted in, when its text names
+ * none: all posts inside one term's teaching weeks (a fortnight's lead-in
+ * allowed) give that term; posts in both terms, or none, give no answer.
+ */
+export function termFromPosts(universityId: string, year: string, items: VleItem[]): "A" | "B" | null {
+  const posts = items.flatMap((i) => (i.kind === "announcement" ? [i.posted * 1000] : []));
+  if (posts.length === 0) return null;
+  const inTerm = (term: "A" | "B") => {
+    const map = weekMapFor(universityId, `${year} Semester ${term}`);
+    if (!map) return false;
+    const start = Date.parse(`${map.termStart}T00:00:00Z`);
+    return posts.every((t) => t >= start - 14 * DAY_MS && t < start + 15 * 7 * DAY_MS);
+  };
+  return inTerm("A") ? "A" : inTerm("B") ? "B" : null;
 }
 
 /* ------------------------------------------------------------- sources */
@@ -160,6 +201,76 @@ function resolveWeekOnly(candidate: DateCandidate, map: TermWeekMap | null): Dat
   } catch {
     return candidate;
   }
+}
+
+/**
+ * The teaching week (Monday to Friday, all-day) a dateless candidate is due
+ * in, when its quote names that week as a deadline rather than a release.
+ */
+export function weekWindow(candidate: DateCandidate, map: TermWeekMap | null): Deadline["window"] | undefined {
+  if (!map || candidate.date !== null || candidate.weekNumber === undefined) return undefined;
+  const ref = parseDatesInText(candidate.quote).find((r) => r.kind === "week" && r.week === candidate.weekNumber);
+  if (!ref || START_BEFORE_RE.test(candidate.quote.slice(Math.max(0, ref.index - 30), ref.index))) return undefined;
+  try {
+    return { from: resolveWeek(map, candidate.weekNumber, 1), to: resolveWeek(map, candidate.weekNumber, 5) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A dateless deadline kept from an earlier sync gets the teaching week its
+ * quotes agree on: one week number, named as a deadline and not a release.
+ */
+export function placeInWeek(deadline: Deadline, map: TermWeekMap | null): Deadline {
+  if (!map || deadline.due !== null || deadline.window || deadline.status !== "tbc") return deadline;
+  const weeks = new Set<number>();
+  for (const s of deadline.sources) {
+    for (const ref of parseDatesInText(s.quote)) {
+      if (ref.kind !== "week" || START_BEFORE_RE.test(s.quote.slice(Math.max(0, ref.index - 30), ref.index))) continue;
+      weeks.add(ref.week);
+    }
+  }
+  if (weeks.size !== 1) return deadline;
+  const [week] = [...weeks];
+  try {
+    return { ...deadline, window: { from: resolveWeek(map, week!, 1), to: resolveWeek(map, week!, 5) } };
+  } catch {
+    return deadline;
+  }
+}
+
+/**
+ * Text-found deadlines of the same module and kind, due in the same teaching
+ * week with no day, are one assessment quoted in several places: the first
+ * keeps its id and gathers the others' sources. Checked ones are left alone.
+ */
+export function mergeSameWeek(deadlines: Deadline[]): Deadline[] {
+  const out: Deadline[] = [];
+  for (const d of deadlines) {
+    const mergeable = (x: Deadline) => x.id.includes(":text:") && x.status === "tbc" && x.due === null && x.window !== undefined;
+    const into = mergeable(d)
+      ? out.findIndex(
+          (o) =>
+            mergeable(o) &&
+            o.year === d.year &&
+            o.module === d.module &&
+            o.window!.from.iso === d.window!.from.iso &&
+            (o.kind === d.kind || o.kind === "other" || d.kind === "other"),
+        )
+      : -1;
+    if (into < 0) {
+      out.push(d);
+      continue;
+    }
+    const o = out[into]!;
+    const next: Deadline = { ...o, sources: d.sources.reduce(addSource, o.sources) };
+    if (o.kind === "other" && d.kind !== "other") Object.assign(next, { kind: d.kind, title: d.title });
+    if (next.weight === undefined && d.weight !== undefined) next.weight = d.weight;
+    if (next.formative === undefined && d.formative) next.formative = true;
+    out[into] = next;
+  }
+  return out;
 }
 
 function weekResolver(map: TermWeekMap | null): WeekDateResolver | undefined {
@@ -279,7 +390,10 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
   const sources = [...(await documentSources(root, input.manifest)), ...itemSources(input.items, input.manifest)];
   counts.sources = sources.filter((s) => s.pages.some((p) => isPage(p.text))).length;
   const refreshed = { ruleUrls: sources.map((s) => s.url), aiUrls: [] as string[] };
-  const map = weekMapForCourse(universityId, course, placement);
+  const term = weekMapForCourse(universityId, course, placement)
+    ? null
+    : (termFromText(sources) ?? termFromPosts(universityId, placement.year, input.items));
+  const map = weekMapForCourse(universityId, course, placement) ?? (term ? weekMapFor(universityId, `${placement.year} Semester ${term}`) : null);
 
   const candidates: DateCandidate[] = sources.flatMap((s) => findCandidates(s, { year: placement.year, ...(map ? { weekMap: map } : {}), now }));
   let updatedHashes: { path: string; hashes: Record<string, string> } | undefined;
@@ -386,7 +500,12 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
     const sameDay = candidate.date
       ? [...fresh.values()].find((d) => sameKind(d) && d.due !== null && londonDay(d.due.iso) === londonDay(candidate.date!.iso))
       : undefined;
-    const id = sameDay?.id ?? textDeadlineId(universityId, module, candidate.title, candidate.kind);
+    // "Week 6: practice quiz" quoted in three places is one quiz: same kind, same teaching week.
+    const window = weekWindow(candidate, map);
+    const sameWeek = window
+      ? [...fresh.values()].find((d) => sameKind(d) && d.due === null && d.window?.from.iso === window.from.iso)
+      : undefined;
+    const id = sameDay?.id ?? sameWeek?.id ?? textDeadlineId(universityId, module, candidate.title, candidate.kind);
     const existing = fresh.get(id);
     if (existing) {
       const sources = addSource(existing.sources, source);
@@ -399,6 +518,8 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
       // The named assessment gives the title; a timed date beats an all-day one on the same day.
       if (existing.kind === "other" && candidate.kind !== "other") Object.assign(next, { title: candidate.title, kind: candidate.kind });
       if (next.due?.allDay && candidate.date && !candidate.date.allDay) next.due = candidate.date;
+      if (next.due === null && !next.window && window) next.window = window;
+      if (next.due !== null) delete next.window;
       if (next.weight === undefined && candidate.weight !== undefined) next.weight = candidate.weight;
       if (next.formative === undefined && candidate.formative) next.formative = true;
       fresh.set(id, next);
@@ -415,12 +536,13 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
       sources: [source],
       history: [],
     };
+    if (!candidate.date && window) deadline.window = window;
     if (candidate.weight !== undefined) deadline.weight = candidate.weight;
     if (candidate.formative) deadline.formative = true;
     fresh.set(id, deadline);
   }
 
-  const out = [...vle.map((d, i) => (touched.has(i) ? detectConflict(d) : d)), ...[...fresh.values()].map(detectConflict)];
+  const out = [...vle.map((d, i) => (touched.has(i) ? placeInWeek(detectConflict(d), map) : d)), ...[...fresh.values()].map(detectConflict)];
   if (updatedHashes) await writeJson(updatedHashes.path, updatedHashes.hashes);
-  return { deadlines: out, counts, refreshed };
+  return { deadlines: out, counts, refreshed, weekMap: map };
 }

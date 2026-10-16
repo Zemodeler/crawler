@@ -85,7 +85,13 @@ Engine on Crawler `master`; the desktop side on Study Hub branch `sh/m3-m5`
       QM 2026-27: teaching week 1 is Mon 21 Sep 2026 (Semester A) and Mon 25 Jan
       2027 (Semester B); QM numbers its reading week as week 7 (checked against
       ECS519U's "Assessment 1 - Week 11: Monday 30/11/2026"). Year-long modules
-      get no week map, so "week N" stays TBC.
+      get no week map, so "week N" stays TBC. QMplus dates every module
+      1 Sep to 31 Aug, so the term then comes from the module's text
+      ("January exam", "Semester A") or, failing that, from when its
+      announcements were posted (2026-10-17). A "week N" deadline with no day
+      keeps its date TBC but gets that teaching week (Mon-Fri) as `window`,
+      shown in Study Hub as "w/c 30 Nov"; quotes of one assessment in the same
+      week merge into one deadline.
 - [x] **3.3 Quote verification and AI extraction** (`src/quotes.ts`,
       `src/ai-extract.ts`): a date must parse from its own quote; "week N" only
       through the week map; a weekday alone never dates anything; a time must

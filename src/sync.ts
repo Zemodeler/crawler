@@ -26,8 +26,9 @@ import { toIcs } from "./ics.ts";
 import { placeCourse } from "./naming.ts";
 import { eventsFromDiff, filesSummary } from "./notifications.ts";
 import type { NotificationEvent } from "./notifications.ts";
-import { textDeadlines } from "./pipeline.ts";
+import { mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
 import type { TextCounts } from "./pipeline.ts";
+import type { TermWeekMap } from "./extraction-types.ts";
 import { planFiles } from "./sorter.ts";
 import type { FileJob } from "./sorter.ts";
 import { renameWithRetry } from "./fs-retry.ts";
@@ -159,6 +160,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const freshDeadlines: Deadline[] = [];
   const syncedKeys = new Set<string>();
   const textRefresh = new Map<string, { rule: Set<string>; ai: Set<string>; current: Set<string> }>();
+  const weekMaps = new Map<string, TermWeekMap | null>();
   const fileChanges: string[] = [];
   const newFiles: { module: string; added: number }[] = [];
   const readText = options.textDeadlines !== false;
@@ -232,6 +234,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
             ...(options.confirmAi ? { confirmAi: options.confirmAi } : {}),
           });
           deadlines = found.deadlines;
+          weekMaps.set(`${placement.year}|${label}`, found.weekMap);
           report.text = found.counts;
           const current = new Set(plan.jobs.map((job) => job.file.url));
           for (const item of items) {
@@ -270,8 +273,9 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
     if (!refreshed.current.has(source.url)) return true; // Removed from the VLE.
     return (source.origin === "ai" ? refreshed.ai : refreshed.rule).has(source.url);
   });
-  const deadlines = sortAll([...untouched, ...merged]);
-  const deadlineLines = changeLines(previousSynced, merged);
+  const placed = mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null)));
+  const deadlines = sortAll([...untouched, ...placed]);
+  const deadlineLines = changeLines(previousSynced, placed);
 
   await writeJson(join(root, "Deadlines.json"), deadlines);
   await writeText(join(root, "Deadlines.ics"), toIcs(deadlines, now));
@@ -284,7 +288,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   await clearTmp(root);
 
   const summary = filesSummary(newFiles);
-  const notifications = [...eventsFromDiff(previousSynced, merged), ...(summary ? [summary] : [])];
+  const notifications = [...eventsFromDiff(previousSynced, placed), ...(summary ? [summary] : [])];
 
   return { startedAt, finishedAt: new Date().toISOString(), courses: reports, deadlines, changes, notifications };
 }

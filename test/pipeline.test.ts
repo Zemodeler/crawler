@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines, placeCourse, textDeadlines, titleOverlap, weekMapForCourse } from "../src/index.ts";
+import { termFromText } from "../src/pipeline.ts";
 import type { AiRunner, Course, Deadline, ManifestEntry, TextDeadlinesInput, VleItem } from "../src/index.ts";
 
 const NOW = new Date("2026-10-16T09:00:00Z");
@@ -212,15 +213,40 @@ test("a week-and-day quote is resolved with the term's week map; a week alone or
     const weekOnly = await t.run([announcement(1, WEEK_TEST)]);
     assert.equal(weekOnly.deadlines[0]!.status, "tbc", "a week without a day is not a date");
     assert.equal(weekOnly.deadlines[0]!.due, null);
+    assert.deepEqual(
+      [weekOnly.deadlines[0]!.window?.from.iso, weekOnly.deadlines[0]!.window?.to.iso],
+      ["2026-11-16T00:00:00.000Z", "2026-11-20T00:00:00.000Z"],
+      "placed in teaching week 9, Monday to Friday",
+    );
 
     const unknownUniversity = await t.run([announcement(1, WEEK_TEST)], { universityId: "tst" });
     assert.equal(unknownUniversity.deadlines[0]!.status, "tbc");
     assert.equal(unknownUniversity.deadlines[0]!.due, null);
     assert.equal(unknownUniversity.deadlines[0]!.sources[0]!.date, null);
     assert.equal(unknownUniversity.counts.verified, 1);
+    assert.equal(unknownUniversity.deadlines[0]!.window, undefined, "no teaching-week calendar, no week");
 
     const yearLong = await t.run([announcement(1, WEEK_TEST)], { course: { ...COURSE, enddate: unix("2027-06-30T00:00:00Z") } });
     assert.equal(yearLong.deadlines[0]!.status, "tbc");
+    assert.equal(yearLong.deadlines[0]!.window?.from.iso, "2026-11-16T00:00:00.000Z", "its announcements were all posted in Semester A");
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("one assessment quoted in several places for the same week is one deadline; a release week places nothing", async () => {
+  const t = await setup();
+  try {
+    const { deadlines } = await t.run([
+      announcement(1, "Week 6: Practice quiz on SQL and DB design for all students."),
+      announcement(2, "The SQL and DB design practice quiz runs in week 6 in the lab."),
+      announcement(3, "The coursework is released on week 7 through QMplus for all students."),
+    ]);
+    const quizzes = deadlines.filter((d) => d.kind === "quiz");
+    assert.equal(quizzes.length, 1, deadlines.map((d) => d.title).join(", "));
+    assert.equal(quizzes[0]!.sources.length, 2);
+    assert.equal(quizzes[0]!.window?.from.iso, "2026-10-26T00:00:00.000Z");
+    for (const d of deadlines.filter((d) => d.kind !== "quiz")) assert.equal(d.window, undefined, d.title);
   } finally {
     await t.cleanup();
   }
@@ -584,6 +610,28 @@ test("a bare 'the deadline is …' on the same day as a named coursework is one 
     assert.equal(onDay[0]!.kind, "coursework");
     assert.equal(onDay[0]!.due?.iso, "2027-01-14T15:00:00.000Z");
     assert.equal(onDay[0]!.sources.length, 2);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("a module dated for the whole year takes its semester from what its text says", async () => {
+  const page = (text: string) => ({ type: "page" as const, title: "p", url: "https://x.test/p", pages: [{ page: 1, text }] });
+  assert.equal(termFromText([page("The final exam is in the January exam period.")]), "A");
+  assert.equal(termFromText([page("Semester B module; May exam.")]), "B");
+  assert.equal(termFromText([page("Semester A and Semester B")]), null);
+  assert.equal(termFromText([page("No term here, and semesters ahead.")]), null);
+
+  const t = await setup();
+  try {
+    const yearLong = { ...COURSE, startdate: unix("2026-09-01T00:00:00Z"), enddate: unix("2027-08-31T00:00:00Z") };
+    const { deadlines, weekMap } = await t.run(
+      [announcement(1, WEEK_TEST), announcement(2, "The exam is in the January exam period, online.")],
+      { course: yearLong },
+    );
+    assert.equal(weekMap?.termStart, "2026-09-21");
+    const test9 = deadlines.find((d) => /week 9/.test(d.sources[0]!.quote))!;
+    assert.equal(test9.window?.from.iso, "2026-11-16T00:00:00.000Z");
   } finally {
     await t.cleanup();
   }

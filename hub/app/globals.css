@@ -72,6 +72,7 @@
 .status-pill{font-size:10px;font-weight:800;letter-spacing:.04em;padding:3px 8px;border-radius:999px;white-space:nowrap;background:#e2f2ed;color:var(--teal-dark)}
 .status-needs-check,.status-tbc{background:#fbefd4;color:#835200}
 .status-conflict{background:#f8e0dc;color:#9d3021}
+.status-week{background:#e3ecf7;color:#2c5282}
 .status-cancelled{background:#eceeea;color:var(--muted);text-decoration:line-through}
 .calendar-page{min-height:100vh}
 .calendar-page .topbar{gap:20px}
@@ -181,6 +182,7 @@ a.sync-button{display:block;color:inherit;text-decoration:none;border-radius:9px
 .chip{display:grid;gap:1px;padding:4px 6px;border-left:3px solid var(--teal);background:#eef4f1;border-radius:6px;white-space:normal}
 .chip:hover,.chip.selected{background:#dfeee8}
 .chip-needs-check,.chip-tbc{border-left-color:#c98a00;background:#fbf3df}
+.chip-week{border-left-color:#4a78b0;background:#eaf1f9}
 .chip-conflict{border-left-color:#b3392b;background:#f9e6e2}
 .chip-cancelled{opacity:.55;text-decoration:line-through}
 .chip-top{display:flex;align-items:center;gap:4px;font-size:10px}

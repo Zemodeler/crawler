@@ -34,10 +34,23 @@ export const KIND_LABEL: Record<Deadline["kind"], string> = {
 
 /** Statuses the student should look at: the date may be wrong or missing. */
 export const needsAttention = (d: Deadline) =>
-  d.status === "conflict" || d.status === "needs-check" || d.status === "tbc";
+  d.status === "conflict" || d.status === "needs-check" || (d.status === "tbc" && !weekOnly(d));
 
 export function dueDate(d: Deadline): Date | null {
   return d.due ? new Date(d.due.iso) : null;
+}
+
+/** Due some day in a known week ("week 11"), the day not stated. */
+export const weekOnly = (d: Deadline) => d.due === null && d.window !== undefined;
+
+/** Where it sits in time: the due date, else the first day of its week. */
+export function placeDate(d: Deadline): Date | null {
+  return dueDate(d) ?? (d.window ? new Date(d.window.from.iso) : null);
+}
+
+/** The last moment it can be due: the due date, else the end of its week. */
+export function latestDate(d: Deadline): Date | null {
+  return dueDate(d) ?? (d.window ? new Date(new Date(d.window.to.iso).getTime() + 24 * 60 * 60 * 1000 - 1) : null);
 }
 
 /** `2026-10-20` in London, for grouping by calendar day. */
@@ -46,6 +59,12 @@ export function dayKey(date: Date): string {
 }
 
 export function formatDue(d: Deadline, style: "short" | "long" = "long"): string {
+  if (weekOnly(d)) {
+    const fmt = (iso: string, opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-GB", { timeZone: TZ, ...opts }).format(new Date(iso));
+    const from = fmt(d.window!.from.iso, { day: "numeric", month: "short" });
+    if (style === "short") return `w/c ${from}`;
+    return `Week of ${fmt(d.window!.from.iso, { weekday: "short", day: "numeric", month: "short" })} – ${fmt(d.window!.to.iso, { weekday: "short", day: "numeric", month: "short", year: "numeric" })} (day not stated)`;
+  }
   const date = dueDate(d);
   if (!date) return "Date to be confirmed";
   const day = new Intl.DateTimeFormat("en-GB", {
@@ -60,7 +79,8 @@ export function formatDue(d: Deadline, style: "short" | "long" = "long"): string
   return `${day}, ${time}`;
 }
 
-export function StatusPill({ status }: { status: DeadlineStatus }) {
+export function StatusPill({ status, deadline }: { status: DeadlineStatus; deadline?: Deadline }) {
+  if (deadline && weekOnly(deadline)) return <span className="status-pill status-week">Day not stated</span>;
   return <span className={`status-pill status-${status}`}>{STATUS_LABEL[status]}</span>;
 }
 
@@ -88,10 +108,11 @@ export function NextSevenDays({
   const soon = deadlines
     .filter((d) => codes.has(d.module) && d.status !== "cancelled")
     .filter((d) => {
-      const t = dueDate(d)?.getTime();
-      return t !== undefined && t >= now && t <= week;
+      const start = placeDate(d)?.getTime();
+      const end = latestDate(d)?.getTime();
+      return start !== undefined && end !== undefined && end >= now && start <= week;
     })
-    .sort((a, b) => dueDate(a)!.getTime() - dueDate(b)!.getTime());
+    .sort((a, b) => placeDate(a)!.getTime() - placeDate(b)!.getTime());
   const unsure = deadlines.filter((d) => codes.has(d.module) && needsAttention(d)).length;
 
   return (
@@ -113,7 +134,7 @@ export function NextSevenDays({
                 <span className="deadline-title">
                   {d.title} <small>{d.module}</small>
                 </span>
-                {d.status !== "confirmed" && <StatusPill status={d.status} />}
+                {d.status !== "confirmed" && <StatusPill status={d.status} deadline={d} />}
               </a>
             </li>
           ))}
@@ -199,7 +220,7 @@ export function DeadlinePanel({
         <div>
           <dt>Status</dt>
           <dd>
-            <StatusPill status={deadline.status} />
+            <StatusPill status={deadline.status} deadline={deadline} />
           </dd>
         </div>
         <div>

@@ -39,13 +39,13 @@ const ASSESS_RE =
 
 /** Assessment words that don't announce an assessment: "exam revision", "unit test". */
 const NOT_ASSESS_RE =
-  /\b(?:past\s+exam(?:ination)?\s+papers?|(?:exam(?:ination)?s?|tests?)\s+(?:revision|preparation|tips|technique|practice|papers?|cases?|data|suites?|plans?|period|season|timetable|board)s?|unit\s+tests?|mock\s+(?:exam|test)s?)\b/gi;
+  /\b(?:past\s+exam(?:ination)?\s+papers?|(?:exam(?:ination)?s?|tests?)\s+(?:revision|preparation|tips|technique|practice|papers?|cases?|data|suites?|plans?|period|season|timetable|board)s?|unit\s+tests?|mock\s+(?:exam|test)s?|safe\s+exam\s+browser)\b/gi;
 
 /**
  * Words just before a date that make it the start of something, not a
  * deadline: "w/c 26 October", "released on 5 November", "opens Monday 2 Nov".
  */
-const START_BEFORE_RE =
+export const START_BEFORE_RE =
   /(?:\bw\/c|\bw\.c\.|\bweek\s+(?:commencing|beginning|starting|of)|\bfrom|\bstarting|\bstarts?|\bbegins?|\breleased?(?:\s+on)?|\bopens?(?:\s+on)?|\bavailable(?:\s+from)?|\bafter)\s*[:(]?\s*(?:on\s+)?$/i;
 
 /** Words that make a teaching-session sentence a real deadline. */

@@ -35,6 +35,8 @@ export type Deadline = {
   kind: "coursework" | "exam" | "quiz" | "presentation" | "lab" | "other";
   status: DeadlineStatus;
   due: Instant | null;
+  /** The teaching week it is due in, when the course names the week but not the day. */
+  window?: { from: Instant; to: Instant };
   weight?: number;
   formative?: boolean;
   checkReason?: string;

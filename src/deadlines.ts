@@ -230,6 +230,8 @@ function sourceKey(s: Source): string {
   return [s.type, s.url, s.localPath ?? "", s.page ?? "", s.line ?? ""].join("|");
 }
 
+const quoteKey = (s: Source) => [s.type, s.url, s.page ?? "", s.quote].join("|");
+
 /** Fresh sources replace previous ones from the same place; others are kept. Structured first. */
 function mergeSources(previous: Source[], fresh: Source[]): Source[] {
   // At most one vle-field source, even if a fresh deadline arrives with several.
@@ -240,12 +242,18 @@ function mergeSources(previous: Source[], fresh: Source[]): Source[] {
   return merged.sort((a, b) => (a.strength === b.strength ? 0 : a.strength === "structured" ? -1 : 1));
 }
 
+/** The due date, else the start of the week it is due in, as ms. */
+function sortTime(d: Deadline): number | null {
+  if (d.due) return Date.parse(d.due.iso);
+  return d.window ? Date.parse(d.window.from.iso) : null;
+}
+
 function compareDeadlines(a: Deadline, b: Deadline): number {
-  if (a.due && b.due) {
-    const diff = Date.parse(a.due.iso) - Date.parse(b.due.iso);
-    if (diff !== 0) return diff;
-  } else if (a.due || b.due) {
-    return a.due ? -1 : 1;
+  const [ta, tb] = [sortTime(a), sortTime(b)];
+  if (ta !== null && tb !== null) {
+    if (ta !== tb) return ta - tb;
+  } else if (ta !== null || tb !== null) {
+    return ta !== null ? -1 : 1;
   }
   return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
 }
@@ -273,6 +281,7 @@ function mergeOne(p: Deadline, fresh: Deadline, at: string, wasRead: SourceWasRe
     const quoted = sources.find((s) => s.type !== "vle-field" && s.date !== null && sameDate(s.date, p.due));
     if (quoted) {
       f = { ...f, due: p.due, status: p.status === "conflict" ? "confirmed" : p.status };
+      delete f.window;
       if (p.checkReason !== undefined) f.checkReason = p.checkReason;
       else delete f.checkReason;
     }
@@ -368,8 +377,15 @@ export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Dat
     }
   }
 
+  // A text deadline whose every quote now backs another deadline was merged
+  // into it (same assessment, same teaching week): it goes without a removal.
+  const freshQuotes = new Set(fresh.flatMap((d) => d.sources.map(quoteKey)));
+  const mergedAway = (p: Deadline) =>
+    p.id.includes(":text:") && p.status !== "user-verified" && p.sources.length > 0 && p.sources.every((s) => freshQuotes.has(quoteKey(s)));
+
   for (const p of previous) {
-    if (!freshIds.has(p.id)) out.push(missingFromVle(p, at, wasRead));
+    if (freshIds.has(p.id) || mergedAway(p)) continue;
+    out.push(missingFromVle(p, at, wasRead));
   }
 
   return sortDeadlines(out);

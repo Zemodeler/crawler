@@ -11,6 +11,9 @@ import {
   StatusPill,
   dayKey,
   dueDate,
+  latestDate,
+  placeDate,
+  weekOnly,
   formatDue,
 } from "./deadline-ui.tsx";
 import SyncSettings from "./sync-settings.tsx";
@@ -81,13 +84,12 @@ export default function CalendarPage() {
       ),
     [deadlines, moduleFilter, kindFilter],
   );
-  const dated = filtered
-    .filter((d) => d.due && d.status !== "tbc")
-    .sort((a, b) => dueDate(a)!.getTime() - dueDate(b)!.getTime());
+  const placed = (d: Deadline) => weekOnly(d) || (d.due !== null && d.status !== "tbc");
+  const dated = filtered.filter(placed).sort((a, b) => placeDate(a)!.getTime() - placeDate(b)!.getTime());
   const startOfToday = now ? new Date(now).setHours(0, 0, 0, 0) : 0;
-  const upcoming = dated.filter((d) => dueDate(d)!.getTime() >= startOfToday);
-  const past = dated.filter((d) => dueDate(d)!.getTime() < startOfToday);
-  const tbc = filtered.filter((d) => !d.due || d.status === "tbc");
+  const upcoming = dated.filter((d) => latestDate(d)!.getTime() >= startOfToday);
+  const past = dated.filter((d) => latestDate(d)!.getTime() < startOfToday);
+  const tbc = filtered.filter((d) => !placed(d));
   const codes = Array.from(new Set(deadlines.map((d) => d.module))).sort();
   const kinds = Array.from(new Set(deadlines.map((d) => d.kind)));
   const open = deadlines.find((d) => d.id === openId);
@@ -100,13 +102,13 @@ export default function CalendarPage() {
   const row = (d: Deadline) => (
     <li key={d.id}>
       <button className={`deadline-row${d.id === openId ? " selected" : ""}`} onClick={() => select(d.id)}>
-        <span className="deadline-when">{d.due ? formatDue(d, "short") : "TBC"}</span>
+        <span className="deadline-when">{d.due || weekOnly(d) ? formatDue(d, "short") : "TBC"}</span>
         <ModuleDot modules={modules} code={d.module} />
         <span className="deadline-title">
           {d.title} <small>{d.module} · {KIND_LABEL[d.kind]}</small>
         </span>
         {d.weight !== undefined && <span className="weight">{d.weight}%</span>}
-        {d.status !== "confirmed" && <StatusPill status={d.status} />}
+        {d.status !== "confirmed" && <StatusPill status={d.status} deadline={d} />}
       </button>
     </li>
   );
@@ -114,7 +116,7 @@ export default function CalendarPage() {
   /* Month grid: Monday-first weeks covering the month. */
   const byDay = new Map<string, Deadline[]>();
   for (const d of dated) {
-    const key = dayKey(dueDate(d)!);
+    const key = dayKey(placeDate(d)!);
     byDay.set(key, [...(byDay.get(key) || []), d]);
   }
   const firstCell = new Date(month);
@@ -230,14 +232,15 @@ export default function CalendarPage() {
                         {items.map((d) => (
                           <button
                             key={d.id}
-                            className={`chip chip-${d.status}${d.id === openId ? " selected" : ""}`}
+                            className={`chip chip-${weekOnly(d) ? "week" : d.status}${d.id === openId ? " selected" : ""}`}
                             onClick={() => select(d.id)}
                             title={`${d.title} · ${d.module}`}
                           >
                             <span className="chip-top">
                               <ModuleDot modules={modules} code={d.module} />
                               <b>{d.module}</b>
-                              {!d.due!.allDay && (
+                              {weekOnly(d) && <span className="chip-time">this week</span>}
+                              {d.due && !d.due.allDay && (
                                 <span className="chip-time">
                                   {dueDate(d)!.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" })}
                                 </span>

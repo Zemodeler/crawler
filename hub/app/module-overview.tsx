@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 import { SUPPORTED_EXTS } from "../lib/course-format.ts";
 import { moduleCode, moduleColor, type Deadline, type LibraryTree } from "../lib/library.ts";
-import { dueDate, formatDue } from "./calendar/deadline-ui.tsx";
+import { formatDue, latestDate, placeDate } from "./calendar/deadline-ui.tsx";
 
 type ModuleStats = { files: number; opened: number; reviewed: number };
 
@@ -63,8 +63,11 @@ export default function ModuleOverview({
           const stats = statsFor(tree, key, active ? activeOpened : undefined);
           const percent = stats.files ? Math.round((stats.opened / stats.files) * 100) : 0;
           const next = deadlines
-            .filter((d) => d.module === moduleCode(m) && d.status !== "cancelled" && (dueDate(d)?.getTime() ?? 0) >= now)
-            .sort((a, b) => dueDate(a)!.getTime() - dueDate(b)!.getTime())[0];
+            .filter((d) => {
+              const t = latestDate(d)?.getTime();
+              return d.module === moduleCode(m) && d.status !== "cancelled" && t !== undefined && t >= now;
+            })
+            .sort((a, b) => placeDate(a)!.getTime() - placeDate(b)!.getTime())[0];
           const [code, ...rest] = m.split(" - ");
           return (
             <button
