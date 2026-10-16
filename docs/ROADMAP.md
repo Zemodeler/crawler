@@ -65,9 +65,10 @@ Checked on a sample library in Electron, plus 6 new host tests. First launch
 (`/welcome`: university sign-in, then choosing the assistant, then the first sync) and a sidebar
 "Sync now" run Crawler inside the shell; the overview shows every module of the year side by side (files opened, cards reviewed, next deadline) (Study Hub depends on `crawler` via
 `link:../Crawler`; the sign-in window and token store come from
-`crawler/electron`). Still to do: a real QMplus sign-in through the shell,
-removing `bridge/` and `launcher/`,
-and macOS.
+`crawler/electron`). The bridge and the Windows launcher are removed:
+subscription mode runs only through the desktop app (its self-test connects
+with both `claude` and `codex`). Still to do: a real QMplus sign-in through
+the shell, installers, and macOS.
 
 ## M3 — Deadlines you can trust
 
