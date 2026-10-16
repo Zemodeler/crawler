@@ -245,6 +245,7 @@ test("sources that disagree on the date make a conflict", () => {
     quote: "CW2 is now due on 10 March at noon",
     date: { iso: "2027-03-10T12:00:00.000Z", allDay: false, tz: "Europe/London" },
     seenAt: now.toISOString(),
+    origin: "ai", // the AI does not re-read an unchanged announcement, so its source stands
   };
   const previous: Deadline = { ...base!, sources: [...base!.sources, announcement] };
   assert.equal(detectConflict(previous).status, "conflict");
@@ -254,6 +255,30 @@ test("sources that disagree on the date make a conflict", () => {
   assert.equal(merged?.status, "conflict");
   assert.equal(merged?.sources.length, 2);
   assert.deepEqual(changeLines([previous], [merged!]), ["ECS505U · Coursework 2 — conflict: sources disagree (3 Mar 12:00 vs 10 Mar 12:00)"]);
+
+  // A rule source is found again on every sync; one that is not found again no longer stands.
+  const ruleFound: Deadline = { ...base!, sources: [...base!.sources, { ...announcement, origin: "rule" }] };
+  const [cleared] = mergeDeadlines([ruleFound], deadlinesFromItems([assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))], course, placement, later), later);
+  assert.equal(cleared?.status, "confirmed");
+  assert.equal(cleared?.sources.length, 1);
+});
+
+test("a text-found deadline that is not found again is cancelled unless the AI still stands for it", () => {
+  const quoted = (origin: "rule" | "ai"): Deadline => ({
+    id: "qmul:ECS505U:text:abc",
+    module: "ECS505U",
+    year: "2026-27",
+    title: "Exam",
+    kind: "exam",
+    status: "confirmed",
+    due: { iso: "2026-12-08T00:00:00.000Z", allDay: true, tz: "Europe/London" },
+    sources: [{ type: "page", strength: "quoted", url: "https://vle.example/p", quote: "the exam is on 8 December 2026", date: { iso: "2026-12-08T00:00:00.000Z", allDay: true, tz: "Europe/London" }, seenAt: now.toISOString(), origin }],
+    history: [],
+  });
+  const [gone] = mergeDeadlines([quoted("rule")], [], later);
+  assert.equal(gone?.status, "cancelled");
+  const [kept] = mergeDeadlines([quoted("ai")], [], later);
+  assert.equal(kept?.status, "confirmed");
 });
 
 test("changeLines reports new and needs-check deadlines", () => {

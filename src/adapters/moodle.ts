@@ -494,14 +494,15 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
     async ltiLaunch(credentials, instance) {
       const what = "mod_lti_get_tool_launch_data";
       try {
-        const data = await ws<{ endpoint: string; parameters: { name: string; value: string }[] }>(
+        const data = await ws<{ endpoint: string; parameters: { name: string; value: string | number | null }[] }>(
           credentials, what, { toolid: instance },
         );
         if (typeof data.endpoint !== "string" || !Array.isArray(data.parameters)) throw new Error();
         const fields = new URLSearchParams();
         for (const parameter of data.parameters) {
-          if (typeof parameter.name !== "string" || typeof parameter.value !== "string") throw new Error();
-          fields.append(parameter.name, parameter.value);
+          if (typeof parameter.name !== "string") throw new Error();
+          // QMplus sends some launch parameters with a null value; a form posts them empty.
+          fields.append(parameter.name, parameter.value === null || parameter.value === undefined ? "" : String(parameter.value));
         }
         return { endpoint: data.endpoint, fields };
       } catch (error) {

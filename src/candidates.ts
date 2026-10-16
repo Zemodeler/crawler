@@ -39,7 +39,14 @@ const ASSESS_RE =
 
 /** Assessment words that don't announce an assessment: "exam revision", "unit test". */
 const NOT_ASSESS_RE =
-  /\b(?:past\s+exam(?:ination)?\s+papers?|(?:exam(?:ination)?s?|tests?)\s+(?:revision|preparation|tips|technique|practice|papers?|cases?|data|suites?|plans?)|unit\s+tests?|mock\s+(?:exam|test)s?)\b/gi;
+  /\b(?:past\s+exam(?:ination)?\s+papers?|(?:exam(?:ination)?s?|tests?)\s+(?:revision|preparation|tips|technique|practice|papers?|cases?|data|suites?|plans?|period|season|timetable|board)s?|unit\s+tests?|mock\s+(?:exam|test)s?)\b/gi;
+
+/**
+ * Words just before a date that make it the start of something, not a
+ * deadline: "w/c 26 October", "released on 5 November", "opens Monday 2 Nov".
+ */
+const START_BEFORE_RE =
+  /(?:\bw\/c|\bw\.c\.|\bweek\s+(?:commencing|beginning|starting|of)|\bfrom|\bstarting|\bstarts?|\bbegins?|\breleased?(?:\s+on)?|\bopens?(?:\s+on)?|\bavailable(?:\s+from)?|\bafter)\s*[:(]?\s*(?:on\s+)?$/i;
 
 /** Words that make a teaching-session sentence a real deadline. */
 const DUE_RE = /\b(?:due|deadlines?|submit|submission|hand(?:ed)?[- ]in|takes?\s+place|will\s+be\s+held|sit)\b/i;
@@ -196,6 +203,13 @@ function findDates(seg: Segment, ctx: { year: string; weekMap?: TermWeekMap }): 
     if (month === undefined || month < 1 || month > 12 || day < 1 || day > 31) continue;
     const weekday = weekdayNumber(m[1]);
     const found: Found = { index: m.index, length: m[0].length, date: null };
+    const startsHere = START_BEFORE_RE.test(text.slice(Math.max(0, m.index - 30), m.index));
+    if (startsHere) {
+      // Kept as a dated-less candidate: the item exists, its deadline isn't stated.
+      found.tbcReason = "The quote gives when this starts or opens, not its deadline.";
+      out.push(found);
+      continue;
+    }
     if (year === undefined) {
       const inferred = inferYear(ctx.year, month, day, weekday);
       if ("reason" in inferred) found.tbcReason = inferred.reason;
@@ -215,11 +229,22 @@ function findDates(seg: Segment, ctx: { year: string; weekMap?: TermWeekMap }): 
     if (weekNumber < 1 || weekNumber > 15) continue;
     if (out.some((f) => m.index < f.index + f.length && f.index < m.index + m[0].length)) continue;
     const found: Found = { index: m.index, length: m[0].length, date: null, weekNumber };
-    if (ctx.weekMap) {
-      const day = weekdayNumber(m[1] ?? m[3]);
+    if (START_BEFORE_RE.test(text.slice(Math.max(0, m.index - 30), m.index))) {
+      found.tbcReason = `The quote says week ${weekNumber} is when this starts or opens, not its deadline.`;
+      delete found.weekNumber;
+      out.push(found);
+      continue;
+    }
+    const day = weekdayNumber(m[1] ?? m[3]);
+    if (ctx.weekMap && day === undefined) {
+      // "In week 6" names a week, not a day: picking its Monday would be a guess.
+      const monday = resolveWeek(ctx.weekMap, weekNumber, 1);
+      const label = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", day: "numeric", month: "short" }).format(new Date(monday.iso));
+      found.tbcReason = `The text says week ${weekNumber} (the week of ${label}) but not which day.`;
+    } else if (ctx.weekMap) {
       const time = nearestTime(text, m.index + m[0].length);
       const hhmm = time && `${String(time.hour).padStart(2, "0")}:${String(time.minute).padStart(2, "0")}`;
-      found.date = resolveWeek(ctx.weekMap, weekNumber, day ?? 1, hhmm);
+      found.date = resolveWeek(ctx.weekMap, weekNumber, day!, hhmm);
       found.weekMapSource = ctx.weekMap.source;
     } else {
       found.tbcReason = `The text says week ${weekNumber}, but the teaching-week calendar for this term isn't known.`;
@@ -242,10 +267,27 @@ function capitalise(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+const KIND_TITLE: Record<Deadline["kind"], string> = {
+  coursework: "Coursework",
+  exam: "Exam",
+  quiz: "Quiz",
+  presentation: "Presentation",
+  lab: "Lab assessment",
+  other: "Deadline",
+};
+
+/** A heading or source title is a title only when it names an assessment and reads like one. */
+function usableTitle(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  if (trimmed.length > 80 || /[.!?]\s+\S/.test(trimmed) || /\b(?:the|a|an|and|of|to)$/i.test(trimmed)) return undefined;
+  return titlePhrases(trimmed).length > 0 ? trimmed : undefined;
+}
+
 function chooseTitle(seg: Segment, at: number, fallback: string): string {
   const phrases = titlePhrases(seg.text);
   const distinct = new Set(phrases.map((p) => p.phrase.toLowerCase()));
-  const heading = seg.heading && titlePhrases(seg.heading).length > 0 ? seg.heading : undefined;
+  const heading = usableTitle(seg.heading);
   if (heading && distinct.size < 2) return heading;
   if (phrases.length > 0) {
     // The phrase before the date, else the first after it.
@@ -253,7 +295,8 @@ function chooseTitle(seg: Segment, at: number, fallback: string): string {
     const pick = before.length > 0 ? before[before.length - 1]! : phrases[0]!;
     return capitalise(pick.phrase.replace(/\s+/g, " "));
   }
-  return seg.heading ?? fallback;
+  // Never a sentence fragment: a named heading or source title, else the kind.
+  return heading ?? usableTitle(fallback) ?? KIND_TITLE[inferKind(seg.text)];
 }
 
 export function inferKind(text: string): Deadline["kind"] {

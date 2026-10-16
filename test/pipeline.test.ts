@@ -151,14 +151,18 @@ test("a text date outside the academic year needs checking", async () => {
   }
 });
 
-test("a week-only quote is resolved with the term's week map and stays tbc without one", async () => {
+test("a week-and-day quote is resolved with the term's week map; a week alone or no map stays tbc", async () => {
   const t = await setup();
   try {
-    const mapped = await t.run([announcement(1, WEEK_TEST)]);
+    const mapped = await t.run([announcement(1, WEEK_TEST.replace("in week 9", "on Friday of week 9"))]);
     const d = mapped.deadlines[0]!;
     assert.equal(d.status, "confirmed");
-    assert.equal(d.due?.iso, "2026-11-16T00:00:00.000Z", "Monday of teaching week 9, London midnight");
+    assert.equal(d.due?.iso, "2026-11-20T00:00:00.000Z", "Friday of teaching week 9, London midnight");
     assert.equal(d.due?.allDay, true);
+
+    const weekOnly = await t.run([announcement(1, WEEK_TEST)]);
+    assert.equal(weekOnly.deadlines[0]!.status, "tbc", "a week without a day is not a date");
+    assert.equal(weekOnly.deadlines[0]!.due, null);
 
     const unknownUniversity = await t.run([announcement(1, WEEK_TEST)], { universityId: "tst" });
     assert.equal(unknownUniversity.deadlines[0]!.status, "tbc");

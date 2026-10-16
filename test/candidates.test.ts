@@ -108,8 +108,10 @@ test("week references resolve through the week map", () => {
   assert.deepEqual(c.weekMapSource, { kind: "config" });
   assert.equal(c.date?.iso, "2026-11-20T10:00:00.000Z");
   assert.equal(c.kind, "exam");
-  const monday = only("Coursework 2 is due in week 11.", { ...ctx, weekMap: semA });
-  assert.deepEqual(monday.date, { iso: "2026-11-30T00:00:00.000Z", allDay: true, tz: "Europe/London" });
+  const noDay = only("Coursework 2 is due in week 11.", { ...ctx, weekMap: semA });
+  assert.equal(noDay.date, null, "a week without a day is not a date");
+  assert.equal(noDay.weekNumber, 11);
+  assert.match(noDay.tbcReason ?? "", /week 11 \(the week of 30 Nov\) but not which day/);
 });
 
 test("week references without a week map stay TBC with the week kept", () => {
@@ -208,4 +210,34 @@ test("looksLikeAssessmentText", () => {
     false,
   );
   assert.equal(looksLikeAssessmentText([]), false);
+});
+
+/* Cases seen on real QMplus modules (2026-10-16). */
+
+test("a 'week commencing' date is when something starts, not its deadline", () => {
+  const found = findCandidates(source("Practice quiz in week 6 (w/c 26 October): the week-11 test is based on it."), { ...ctx, weekMap: semA });
+  assert.ok(found.length > 0);
+  for (const c of found.filter((x) => x.quote.includes("26 October"))) {
+    if (c.date) assert.notEqual(c.date.iso.slice(0, 10), "2026-10-26", "w/c 26 October must not become a due date");
+  }
+  const released = only("CW part 1: Released on 5 November, QMplus submission, duration 6 days.");
+  assert.equal(released.date, null);
+  assert.match(released.tbcReason ?? "", /starts or opens/);
+});
+
+test("'exam period' in a schedule row is not an exam", () => {
+  assert.deepEqual(findCandidates(source("Week 12 Tuesday, 8 December 2026 Revision and Preparation for CW in Jan Exam period"), ctx), []);
+});
+
+test("a deadline sentence without a named assessment is titled by its kind, never by a fragment", () => {
+  const found = findCandidates(source("You can submit from week 12. The deadline is Thursday 14 January."), ctx);
+  const dated = found.find((c) => c.date)!;
+  assert.ok(dated, JSON.stringify(found));
+  assert.ok(!/You can submit/.test(dated.title), dated.title);
+  assert.ok(dated.title.length <= 40, dated.title);
+});
+
+test("the real in-term test announcement keeps its date and time", () => {
+  const c = only("Please note that the in-term test has now been scheduled for Tuesday, 3 November, from 11:00 to 13:00.", ctx);
+  assert.equal(c.date?.iso, "2026-11-03T11:00:00.000Z");
 });

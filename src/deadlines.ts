@@ -248,9 +248,17 @@ function sourceForDate(sources: Source[], due: Instant | null): Source | undefin
   return sources.find((s) => s.date !== null && sameDate(s.date, due)) ?? sources[0];
 }
 
+/**
+ * Previous sources that still count without being found again: the VLE field
+ * and what the AI quoted (it only re-reads changed documents). A rule source
+ * that was not found again no longer stands; neither does one from before
+ * sources recorded who found them.
+ */
+const lasting = (s: Source) => s.type === "vle-field" || s.origin === "ai";
+
 function mergeOne(p: Deadline, fresh: Deadline, at: string): Deadline {
   const history = [...p.history];
-  const sources = mergeSources(p.sources, fresh.sources);
+  const sources = mergeSources(p.sources.filter(lasting), fresh.sources);
   let f = fresh;
 
   // A date quoted from a document is not found again while the document is
@@ -309,7 +317,14 @@ function mergeOne(p: Deadline, fresh: Deadline, at: string): Deadline {
  * page also speaks for, or that did not come from the VLE, is kept unchanged.
  */
 function missingFromVle(p: Deadline, at: string): Deadline {
-  if (p.status === "cancelled" || !p.id.startsWith("moodle:")) return p;
+  if (p.status === "cancelled") return p;
+  // Found in text and not found again: it stands only on what the AI quoted.
+  if (p.id.includes(":text:")) {
+    const kept = p.sources.filter(lasting);
+    if (kept.length > 0 || p.status === "user-verified") return kept.length === p.sources.length ? p : { ...p, sources: kept.length ? kept : p.sources };
+    return { ...p, status: "cancelled", history: [...p.history, { at, field: "removed", from: p.status, to: "cancelled" }] };
+  }
+  if (!p.id.startsWith("moodle:")) return p;
   if (p.sources.some((s) => s.type !== "vle-field")) return p;
   if (p.status === "user-verified") {
     if (p.history.at(-1)?.field === "removed") return p;

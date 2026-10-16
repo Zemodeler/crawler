@@ -64,13 +64,16 @@ const ofKind = <K extends VleItem["kind"]>(items: VleItem[], kind: K) =>
 test("LTI items expose module instance and launch uses toolid with signed fields", async () => {
   const { adapter, calls } = adapterWith({
     core_course_get_contents: () => json([{ name: "Recordings", modules: [{ id: 7, instance: 42, name: "Echo360", modname: "lti" }] }]),
-    mod_lti_get_tool_launch_data: () => json({ endpoint: "https://echo.example/lti", parameters: [{ name: "oauth_signature", value: "synthetic-signature" }] }),
+    mod_lti_get_tool_launch_data: () => json({ endpoint: "https://echo.example/lti", parameters: [{ name: "oauth_signature", value: "synthetic-signature" }, { name: "lis_person_name_full", value: null }, { name: "resource_link_id", value: 7 }] }),
   });
   const items = await adapter.listItems(CREDENTIALS, COURSE);
   assert.equal(ofKind(items, "external-tool")[0]?.instance, 42);
   const launch = await adapter.ltiLaunch!(CREDENTIALS, 42);
   assert.equal(launch.endpoint, "https://echo.example/lti");
   assert.equal(launch.fields.get("oauth_signature"), "synthetic-signature");
+  // QMplus sends some parameters as null; they post as empty fields, numbers as text.
+  assert.equal(launch.fields.get("lis_person_name_full"), "");
+  assert.equal(launch.fields.get("resource_link_id"), "7");
   assert.equal(calls.find((c) => c.params.get("wsfunction") === "mod_lti_get_tool_launch_data")?.params.get("toolid"), "42");
 });
 

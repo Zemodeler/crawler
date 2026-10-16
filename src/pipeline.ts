@@ -145,7 +145,9 @@ function resolveWeekOnly(candidate: DateCandidate, map: TermWeekMap | null): Dat
   if (refs.some((r) => r.kind === "date")) return candidate;
   if (!refs.some((r) => r.kind === "week" && r.week === candidate.weekNumber)) return candidate;
   const weekday = refs.find((r) => r.kind === "weekday");
-  const dayOfWeek = weekday && weekday.kind === "weekday" ? (weekday.weekday === 0 ? 7 : weekday.weekday) : 1;
+  // "In week 9" without a day stays TBC: its Monday would be a guess.
+  if (!weekday || weekday.kind !== "weekday") return candidate;
+  const dayOfWeek = weekday.weekday === 0 ? 7 : weekday.weekday;
   const times = parseTimesInText(candidate.quote);
   const time = times.length === 1 ? `${String(times[0]!.hour).padStart(2, "0")}:${String(times[0]!.minute).padStart(2, "0")}` : undefined;
   try {
@@ -159,7 +161,8 @@ function weekResolver(map: TermWeekMap | null): WeekDateResolver | undefined {
   if (!map) return undefined;
   return (week, weekday) => {
     try {
-      return resolveWeek(map, week, weekday === undefined ? 1 : weekday === 0 ? 7 : weekday);
+      if (weekday === undefined) return null; // a week without a day is not a date
+      return resolveWeek(map, week, weekday === 0 ? 7 : weekday);
     } catch {
       return null;
     }
@@ -220,7 +223,7 @@ export function textDeadlineId(universityId: string, module: string, title: stri
 }
 
 function sourceFrom(candidate: DateCandidate, seenAt: string): Source {
-  const source: Source = { type: candidate.sourceType, strength: "quoted", url: candidate.url, quote: candidate.quote, date: candidate.date, seenAt };
+  const source: Source = { type: candidate.sourceType, strength: "quoted", url: candidate.url, quote: candidate.quote, date: candidate.date, seenAt, origin: candidate.origin };
   if (candidate.localPath !== undefined) source.localPath = candidate.localPath;
   if (candidate.page !== undefined) source.page = candidate.page;
   return source;
@@ -358,7 +361,11 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
       touched.add(hit);
       continue;
     }
-    const id = textDeadlineId(universityId, module, candidate.title, candidate.kind);
+    // The same assessment quoted twice under different titles: same kind, same London day.
+    const sameDay = candidate.date
+      ? [...fresh.values()].find((d) => d.kind === candidate.kind && d.due !== null && londonDay(d.due.iso) === londonDay(candidate.date!.iso))
+      : undefined;
+    const id = sameDay?.id ?? textDeadlineId(universityId, module, candidate.title, candidate.kind);
     const existing = fresh.get(id);
     if (existing) {
       const sources = addSource(existing.sources, source);
