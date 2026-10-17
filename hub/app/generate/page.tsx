@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SubjectControl, useModuleSubject } from "../subject-control.tsx";
 
-import { fetchTree, hostModuleHandle, loadModule, pickModule } from "../../lib/library.ts";
+import { fetchPacksStatus, fetchTree, hostModuleHandle, loadModule, pickModule } from "../../lib/library.ts";
 
 import { Markdown } from "../markdown.tsx";
 import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
@@ -65,6 +65,9 @@ export default function Generate() {
   const [resumable, setResumable] = useState<RunSnapshot | null>(null);
   const [syllabus, setSyllabus] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Set when the desktop app is already building this module's packs in the background. */
+  const [autoBuilding, setAutoBuilding] = useState(false);
+  const [moduleKey, setModuleKey] = useState("");
 
   const subject = useModuleSubject(handle, files);
   const profile = subject.profile;
@@ -99,6 +102,7 @@ export default function Generate() {
             return;
           }
           const key = `${picked.year}/${picked.module}`;
+          setModuleKey(key);
           const moduleHandle = hostModuleHandle(key);
           const imported = await loadModule(tree, picked.year, picked.module);
           const loadedManifest = await readManifest(moduleHandle);
@@ -128,6 +132,17 @@ export default function Generate() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!moduleKey) return;
+    const check = () =>
+      fetchPacksStatus()
+        .then((status) => setAutoBuilding(status.state === "running" && status.module === moduleKey))
+        .catch(() => setAutoBuilding(false));
+    check();
+    const timer = setInterval(check, 15_000);
+    return () => clearInterval(timer);
+  }, [moduleKey]);
 
   const fail = useCallback((error: unknown) => {
     const aiError = error as AiError;
@@ -286,6 +301,15 @@ export default function Generate() {
           <div className={phase === "error" ? "callout callout-warn" : "callout"}>
             <b>{phase === "error" ? "Something went wrong" : phase === "written" ? "Done" : "Conversion stopped"}</b>
             {message}
+          </div>
+        )}
+
+        {autoBuilding && ["intro", "error"].includes(phase) && (
+          <div className="callout">
+            <b>Study Hub is already building this module&apos;s packs</b>
+            It started on its own after the last sync and works in the background. Its packs and flashcards
+            appear here when it finishes, so there is no need to build them again. Starting your own run now
+            works too, but spends twice the usage.
           </div>
         )}
 

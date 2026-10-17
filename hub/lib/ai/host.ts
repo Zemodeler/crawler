@@ -132,7 +132,8 @@ async function call(body: unknown, signal: AbortSignal | undefined, timeoutMs: n
   return (await response.json()) as Record<string, unknown>;
 }
 
-export function createHostClient(provider: ProviderId, modelOverride: string): AiClient {
+/** `background` marks automatic runs, which the host keeps out of the student's way. */
+export function createHostClient(provider: ProviderId, modelOverride: string, options: { background?: boolean } = {}): AiClient {
   const cli = CLI_FOR[provider];
   const target: AiTarget = { provider, transport: "subscription", model: modelOverride || `${cli} (subscription)` };
 
@@ -179,7 +180,7 @@ export function createHostClient(provider: ProviderId, modelOverride: string): A
           ),
         ].join("\n\n");
 
-        const response = await call({ provider, prompt, model: modelOverride || undefined },
+        const response = await call({ provider, prompt, model: modelOverride || undefined, background: options.background || undefined },
           generateRequest.signal,
           GENERATE_TIMEOUT_MS,
         );

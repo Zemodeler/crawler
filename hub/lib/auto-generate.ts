@@ -109,7 +109,7 @@ export async function autoGenerate(options: {
     const profile = getProfile(profileId);
     const report = validateCourse(files, { courseName: handle.name, manifestPresent: Boolean(manifest) }, profile);
     const provider: ProviderId = assistant === "claude" ? "anthropic" : "openai";
-    const client = createHostClient(provider, options.model ?? AUTO_MODELS[assistant]);
+    const client = createHostClient(provider, options.model ?? AUTO_MODELS[assistant], { background: true });
     let lastLine: unknown = null;
     const run = ConversionRun.create(handle.name, "generate", {
       onChange: (s) => {

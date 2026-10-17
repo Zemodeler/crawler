@@ -195,7 +195,11 @@ function currentCli(kind) {
   return cli;
 }
 
-let running = 0;
+/**
+ * One CLI run at a time per lane. Automatic study packs run in the background
+ * lane, so a request the student starts never waits behind them or is refused.
+ */
+const running = { foreground: 0, background: 0 };
 
 async function handleAi(request, response, url) {
   if (url.pathname === "/api/ai/healthz" && request.method === "GET") {
@@ -245,12 +249,13 @@ async function handleAi(request, response, url) {
     sendJson(response, 400, { code: "bad_request", message: "No prompt supplied." });
     return;
   }
-  if (running > 0) {
+  const lane = body.background === true ? "background" : "foreground";
+  if (running[lane] > 0) {
     sendJson(response, 429, { code: "rate_limited", message: "Already running a request." });
     return;
   }
 
-  running++;
+  running[lane]++;
   const label = new Date().toTimeString().slice(0, 8);
   console.log(`[${label}] ${kind}: ${body.prompt.length} chars in…`);
   const run = (found) =>
@@ -275,7 +280,7 @@ async function handleAi(request, response, url) {
     console.log(`[${label}] ${kind} failed: ${failure.message}`);
     sendJson(response, 500, failure);
   } finally {
-    running--;
+    running[lane]--;
   }
 }
 
@@ -366,6 +371,10 @@ async function handleSetup(setup, request, response, url) {
   }
   if (url.pathname === "/api/setup/status" && request.method === "GET") {
     sendJson(response, 200, await setup.status());
+    return;
+  }
+  if (url.pathname === "/api/setup/packs" && request.method === "GET") {
+    sendJson(response, 200, setup.packsStatus?.() ?? { state: "idle", module: null });
     return;
   }
   const action = {

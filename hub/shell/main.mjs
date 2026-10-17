@@ -179,6 +179,7 @@ app.whenReady().then(async () => {
       } catch { /* The log is a convenience. */ }
     },
   });
+  setup.packsStatus = () => ({ state: packs.status().state, module: packs.status().module });
   setup.onSynced = (result) => {
     background.onSynced(result);
     void packs.afterSync(result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
