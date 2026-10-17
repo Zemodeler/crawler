@@ -140,20 +140,63 @@ A new Moodle site is a config entry, not code:
 service is on and which login type the site uses — the same check we ran on
 QMplus. That output goes in the pull request that adds the university.
 
-## Brightspace (SurreyLearn) — later, unverified
+## Brightspace (SurreyLearn)
 
-Confirmed: `surreylearn.surrey.ac.uk` is D2L Brightspace (redirects to
-`/d2l/login`).
+### Checked on the live site (2026-10-17, no account)
 
-- The official Valence API needs an app ID/key registered by the institution.
-  We should not depend on Surrey doing that.
-- Proposed route: sign in through the login window, then call the JSON
-  endpoints Brightspace's own web UI uses from that session (enrolments,
-  content table of contents, dropbox folders with due dates, calendar
-  events, news). **Spike before committing**: confirm which routes accept
-  session-cookie auth and what CSRF header they need.
-- Session lifetime is shorter than a mobile token: plan for "sign in again"
-  more often than at QM.
+| Check | Result | Meaning |
+| --- | --- | --- |
+| `GET /d2l/login` | 302 → `/d2l/lp/auth/saml/login` → Microsoft Entra (tenant `6b902693-…`) | SAML sign-in through Surrey's Microsoft account, like QM; MFA happens on Microsoft's page |
+| `GET /d2l/api/versions/` | 200 JSON, public | Valence REST API is live; `lp` and `le` (up to `1.99`) are supported |
+| `GET /d2l/api/lp/1.0/users/whoami` | 403 without a session | API routes exist and need auth |
+
+There is no mobile-token handoff like Moodle's `moodlemobile://`, and the
+official Valence app ID/key needs Surrey to register an app. We don't depend
+on that.
+
+### Route: sign in in a window, then call Valence with the session
+
+1. **Login.** Open `/d2l/login` in an isolated Electron session. The student
+   signs in (Microsoft + MFA). Sign-in is done when the window reaches
+   `/d2l/home`. Read the session cookies (`d2lSessionVal`,
+   `d2lSecureSessionVal`) from that session; they are the credential, kept
+   encrypted like the Moodle token. `LoginBrowser` needs a second method for
+   this (capture cookies once a URL prefix loads), and `Credentials` needs a
+   cookie form.
+2. **Calls.** The same `/d2l/api/...` routes Brightspace's own pages use,
+   sent with those cookies from Node `fetch`. **To confirm in the spike**
+   (`spikes/surreylearn-login/`): that GETs with session cookies work, and
+   whether any needs the XSRF token (from `/d2l/lp/auth/xsrf-tokens`) or a
+   browser OAuth token (`/d2l/lp/auth/oauth2/token`) instead.
+3. **Session lifetime** is shorter than a Moodle token; a 401/403 maps to
+   `invalid_token` ("sign in again"). The spike records how long it lasts.
+
+### Calls (Valence, `lp` / `le` versions from `/d2l/api/versions/`)
+
+| Need | Route |
+| --- | --- |
+| Identity | `GET /d2l/api/lp/{v}/users/whoami` |
+| Modules | `GET /d2l/api/lp/{v}/enrollments/myenrollments/?orgUnitTypeId=3` (paged with `bookmark`) |
+| Files, pages, links | `GET /d2l/api/le/{v}/{orgUnitId}/content/toc` |
+| File download | `GET /d2l/api/le/{v}/{orgUnitId}/content/topics/{topicId}/file` |
+| Assignments + due dates | `GET /d2l/api/le/{v}/{orgUnitId}/dropbox/folders/` |
+| Quizzes | `GET /d2l/api/le/{v}/{orgUnitId}/quizzes/` |
+| Calendar | `GET /d2l/api/le/{v}/{orgUnitId}/calendar/events/` |
+| Announcements | `GET /d2l/api/le/{v}/{orgUnitId}/news/` |
+| Forums | `GET /d2l/api/le/{v}/{orgUnitId}/discussions/forums/` → topics → posts |
+
+Brightspace dates are ISO strings in UTC; the adapter converts them to the
+unix seconds the rest of Crawler uses.
+
+### Not yet known
+
+- Course naming and start/end dates at Surrey (needed for year placement and
+  the week map in `src/weeks.ts`, where `surrey` has no semester yet).
+- Surrey's lecture capture (likely Panopto, not Echo360), so transcripts need
+  their own spike.
+- Item ids are still `moodle:`-prefixed in `src/sorter.ts`, `src/pipeline.ts`
+  and `src/deadlines.ts`; they should become platform-neutral before Surrey
+  ships.
 
 ## Transcripts
 
