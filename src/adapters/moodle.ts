@@ -10,6 +10,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 
+import { decodeEntities } from "../extract/xml.ts";
 import { VleError } from "../types.ts";
 import type { Course, Credentials, LoginBrowser, Placement, UniversityAdapter, VleFile, VleItem } from "../types.ts";
 
@@ -169,10 +170,11 @@ type MoodleModule = {
   instance?: number;
   name: string;
   modname: string;
+  description?: string;
   url?: string;
   contents?: MoodleFile[];
 };
-type MoodleSection = { id: number; name: string; section?: number; modules?: MoodleModule[] };
+type MoodleSection = { id: number; name: string; section?: number; summary?: string; modules?: MoodleModule[] };
 type MoodleCourse = { id: number; shortname: string; fullname: string; startdate?: number; enddate?: number };
 type MoodleAssignment = {
   id: number;
@@ -360,6 +362,21 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
     const items: VleItem[] = [];
     const pages: Promise<void>[] = [];
     sections.forEach((section, position) => {
+      const index = section.section ?? position;
+      const html = [section.summary ?? "", ...(section.modules ?? []).filter((mod) => mod.modname === "label").map((mod) => mod.description ?? "")].filter(Boolean).join("\n");
+      if (decodeEntities(html.replace(/<[^>]*>/g, " ")).replace(/[​-‍﻿]/g, "").trim()) {
+        items.push({
+          kind: "page",
+          html,
+          files: [],
+          section: section.name,
+          sectionIndex: index,
+          activity: `${section.name || "Section " + index} (section text)`,
+          activityType: "section",
+          activityId: -section.id,
+          activityUrl: `${site}/course/section.php?id=${section.id}`,
+        });
+      }
       for (const mod of section.modules ?? []) {
         const placement: Placement = {
           section: section.name,
@@ -401,7 +418,8 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
             items.push({ kind: "external-tool", toolName: mod.name, ...(mod.instance === undefined ? {} : { instance: mod.instance }), ...placement });
             break;
           default:
-            // label, subsection, forum, questionnaire: nothing to keep here.
+            // Labels are included in the section text above.
+            // subsection, forum, questionnaire: nothing to keep here.
             // assign and quiz come from their own calls below.
             break;
         }
