@@ -585,9 +585,86 @@ test("maps resources and folder files to file items with their placement", async
   ]);
 });
 
+test("keeps a section summary and labels in order as one page", async () => {
+  const summary = "<p>Lab marking schedule</p>";
+  const first = "<table><tr><th>Seq</th><th>Type</th><th>Description</th><th>Weight</th></tr><tr><td>1</td><td>Lab</td><td>Assessment Overview</td><td>20%</td></tr></table>";
+  const last = "<p>Submit by Friday.</p>";
+  const { adapter } = adapterWith({
+    core_course_get_contents: () => json([{
+      id: 42, name: "General", section: 3, summary,
+      modules: [
+        { id: 7, name: "Overview", modname: "label", description: first },
+        { id: 8, name: "Ignored", modname: "questionnaire", description: "Not section text" },
+        { id: 9, name: "Deadline", modname: "label", description: last },
+      ],
+    }]),
+  });
+  assert.deepEqual(ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page"), [{
+    kind: "page", html: [summary, first, last].join("\n"), files: [],
+    section: "General", sectionIndex: 3, activity: "General (section text)",
+    activityType: "section", activityId: -42, activityUrl: `${SITE}/course/section.php?id=42`,
+  }]);
+});
+
+test("keeps summary-only and label-only sections with fallback section names and indices", async () => {
+  const { adapter } = adapterWith({
+    core_course_get_contents: () => json([
+      { id: 43, name: "", section: 5, summary: "<p>Summary only</p>" },
+      { id: 44, name: "", modules: [{ id: 10, name: "Label", modname: "label", description: "<p>Label only</p>" }] },
+    ]),
+  });
+  const pages = ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page");
+  assert.deepEqual(pages.map((p) => [p.activity, p.sectionIndex, p.html]), [
+    ["Section 5 (section text)", 5, "<p>Summary only</p>"],
+    ["Section 1 (section text)", 1, "<p>Label only</p>"],
+  ]);
+});
+
+test("skips sections whose summaries and labels have no text after stripping tags", async () => {
+  const { adapter } = adapterWith({
+    core_course_get_contents: () => json([
+      { id: 45, name: "Empty" },
+      { id: 46, name: "Blank", summary: "<p> \n </p><br>", modules: [
+        { id: 11, name: "Label title is not content", modname: "label", description: "<div>\t </div>" },
+        { id: 12, name: "Missing description", modname: "label" },
+      ] },
+    ]),
+  });
+  assert.deepEqual(ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page"), []);
+});
+
+test("skips section summaries and labels containing only encoded whitespace", async () => {
+  const { adapter } = adapterWith({
+    core_course_get_contents: () => json([
+      { id: 47, name: "Blank summary", summary: "<p>&nbsp;</p>" },
+      { id: 48, name: "Blank label", modules: [
+        { id: 13, name: "Label", modname: "label", description: "&nbsp;<br>" },
+      ] },
+      { id: 49, name: "Numeric whitespace", summary: "<p>&#160;&#xA0;&#32;&#9;&#10;</p>" },
+      { id: 50, name: "Line break", summary: "<br>" },
+      { id: 51, name: "Encoded text", summary: "<p>&#65;&nbsp;&lt;br&gt;</p>" },
+    ]),
+  });
+  const pages = ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page");
+  assert.deepEqual(pages.map((p) => [p.activityId, p.html]), [
+    [-51, "<p>&#65;&nbsp;&lt;br&gt;</p>"],
+  ]);
+});
+
+test("skips sections whose text is only zero-width characters", async () => {
+  const { adapter } = adapterWith({
+    core_course_get_contents: () => json([
+      { id: 52, name: "Zero width", summary: "<p>​‌</p>", modules: [
+        { id: 14, name: "Label", modname: "label", description: "‍&#xFEFF;﻿" },
+      ] },
+    ]),
+  });
+  assert.deepEqual(ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page"), []);
+});
+
 test("maps a page to one item with its downloaded html and other files", async () => {
   const { adapter, calls } = adapterWith();
-  const pages = ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page");
+  const pages = ofKind(await adapter.listItems(CREDENTIALS, COURSE), "page").filter((item) => item.activityType === "page");
   assert.deepEqual(pages, [
     {
       kind: "page",
