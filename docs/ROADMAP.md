@@ -82,8 +82,10 @@ Engine on Crawler `master`; the desktop side on Study Hub branch `sh/m3-m5`
       PPTX/DOCX/XLSX per slide/paragraph/sheet, HTML to text with links;
       cached in `.crawler/text/<sha256>.<format>.json`.
 - [x] **3.2 Rule candidates and week map** (`src/candidates.ts`, `src/weeks.ts`).
-      QM 2026-27: teaching week 1 is Mon 21 Sep 2026 (Semester A) and Mon 25 Jan
-      2027 (Semester B); QM numbers its reading week as week 7 (checked against
+      QM 2026-27: teaching week 1 is Mon 21 Sep 2026 (Semester A; teaching
+      began Tue 22 Sep, confirmed) and Mon 25 Jan 2027 (Semester B,
+      provisional); each term has 12 numbered weeks, and Study Hub shows the
+      current one (`teachingWeekAt`) on the overview and calendar. QM numbers its reading week as week 7 (checked against
       ECS519U's "Assessment 1 - Week 11: Monday 30/11/2026"). Year-long modules
       get no week map, so "week N" stays TBC. QMplus dates every module
       1 Sep to 31 Aug, so the term then comes from the module's text
