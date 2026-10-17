@@ -52,6 +52,32 @@ function one(items: VleItem[], at = now): Deadline {
   return d;
 }
 
+test("student completion survives normal and user-verified merges", () => {
+  const base = one([assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))]);
+  const fresh = one([assignment(1, "Coursework 2", unix("2027-03-10T12:00:00Z"))], later);
+  for (const status of ["confirmed", "user-verified"] as const) {
+    for (const done of [true, false]) {
+      const previous: Deadline = { ...base, status, done };
+      const [merged] = mergeDeadlines([previous], [{ ...fresh, done: !done }], later);
+      assert.equal(merged?.done, done, `${status} keeps the student's ${done} flag`);
+    }
+  }
+});
+
+test("a user deadline without sources stays unchanged when absent from a sync", () => {
+  const manual: Deadline = {
+    ...one([assignment(1, "Personal revision", unix("2027-03-03T12:00:00Z"))]),
+    id: "user:ECS505U:abcdef",
+    status: "user-verified",
+    sources: [],
+    done: true,
+    userNote: "My own deadline",
+  };
+  const merged = mergeDeadlines([manual], [], later, () => true);
+  assert.deepEqual(merged, [manual]);
+  assert.deepEqual(changeLines([manual], merged), []);
+});
+
 test("weight is read from a percentage in the title", () => {
   assert.equal(parseWeight("mySkills Task 3 - Submission Link (3%)"), 3);
   assert.equal(parseWeight("Coursework 2 (12.5 %)"), 12.5);
