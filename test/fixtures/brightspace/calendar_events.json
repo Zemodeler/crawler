@@ -1,0 +1,4 @@
+[
+  { "CalendarEventId": 801, "Title": "Coursework 1 - Due", "StartDateTime": "2026-11-13T12:00:00.000Z", "EndDateTime": "2026-11-13T12:00:00.000Z", "IsAllDayEvent": false, "AssociatedEntity": { "AssociatedEntityType": "D2L.LE.Dropbox.Dropbox", "AssociatedEntityId": 501 } },
+  { "CalendarEventId": 802, "Title": "Guest lecture", "StartDateTime": "2026-10-21T14:00:00.000Z", "EndDateTime": "2026-10-21T15:00:00.000Z", "IsAllDayEvent": false, "AssociatedEntity": null }
+]

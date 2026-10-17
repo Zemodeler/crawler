@@ -106,6 +106,53 @@ export function createLoginBrowser({ BrowserWindow, session, parent }) {
         win.loadURL(url).catch(() => {});
       });
     },
+
+    /** Same window as capture; resolves with the session's Cookie header once `donePrefix` loads. */
+    captureCookies(url, donePrefix, cookieUrl) {
+      return new Promise((resolve, reject) => {
+        // No "persist:" prefix: the partition lives in memory and goes with the window.
+        const loginSession = session.fromPartition(`crawler-login-${Date.now()}`);
+        loginSession.setUserAgent(loginSession.getUserAgent().replace(/\s?Electron\/\S+/, ""));
+
+        let settled = false;
+        const win = new BrowserWindow({
+          width: 520,
+          height: 760,
+          title: "Sign in",
+          ...(parent ? { parent: typeof parent === "function" ? parent() : parent } : {}),
+          autoHideMenuBar: true,
+          webPreferences: { session: loginSession, contextIsolation: true, sandbox: true, nodeIntegration: false },
+        });
+        const settle = (fn) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          win.destroy();
+          fn();
+        };
+        const timer = setTimeout(() => settle(() => reject(new Error("No sign-in within 10 minutes."))), 10 * 60 * 1000);
+
+        // did-navigate fires after the response, so the session cookies it set are in the jar.
+        win.webContents.on("did-navigate", (_event, target) => {
+          if (settled || !target?.startsWith(donePrefix)) return;
+          loginSession.cookies
+            .get({ url: cookieUrl })
+            .then((cookies) => {
+              const header = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+              if (header) settle(() => resolve(header));
+              else settle(() => reject(new Error("Signed in, but the site set no session cookies.")));
+            })
+            .catch(() => settle(() => reject(new Error("Could not read the sign-in cookies."))));
+        });
+        win.on("closed", () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error("The sign-in window was closed before signing in finished."));
+        });
+        win.loadURL(url).catch(() => {});
+      });
+    },
   };
 }
 

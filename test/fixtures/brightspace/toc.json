@@ -1,0 +1,29 @@
+{
+  "Modules": [
+    {
+      "ModuleId": 900, "Title": "Week 1", "SortOrder": 1, "Description": { "Text": "", "Html": "" },
+      "Topics": [
+        { "TopicId": 9001, "Identifier": "9001", "TypeIdentifier": "File", "Title": "Lecture 1 slides", "Url": "/content/enforced/6101-TST1001-2026-27/Lecture%201.pdf", "LastModifiedDate": "2026-09-29T09:30:00.000Z", "IsBroken": false },
+        { "TopicId": 9002, "Identifier": "9002", "TypeIdentifier": "File", "Title": "Welcome page", "Url": "/content/enforced/6101-TST1001-2026-27/welcome.html", "LastModifiedDate": null, "IsBroken": false },
+        { "TopicId": 9003, "Identifier": "9003", "TypeIdentifier": "Link", "Title": "Reading list", "Url": "https://reading.example.org/list/42", "LastModifiedDate": null, "IsBroken": false },
+        { "TopicId": 9004, "Identifier": "9004", "TypeIdentifier": "Link", "Title": "Lecture recordings", "Url": "/d2l/le/lti/6101/toolLaunch/77/1234?launchFramed=1", "LastModifiedDate": null, "IsBroken": false }
+      ],
+      "Modules": [
+        {
+          "ModuleId": 901, "Title": "Lab", "SortOrder": 1,
+          "Topics": [
+            { "TopicId": 9011, "Identifier": "9011", "TypeIdentifier": "File", "Title": "Lab sheet", "Url": "/content/enforced/6101-TST1001-2026-27/lab-1.docx", "LastModifiedDate": "2026-09-30T12:00:00.000Z", "IsBroken": false }
+          ],
+          "Modules": []
+        }
+      ]
+    },
+    {
+      "ModuleId": 910, "Title": "Assessment", "SortOrder": 2,
+      "Topics": [
+        { "TopicId": 9101, "Identifier": "9101", "TypeIdentifier": "File", "Title": "Broken", "Url": "/content/enforced/6101-TST1001-2026-27/gone.pdf", "LastModifiedDate": null, "IsBroken": true }
+      ],
+      "Modules": []
+    }
+  ]
+}

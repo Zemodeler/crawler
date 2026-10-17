@@ -11,8 +11,10 @@
 /** What an adapter returns from login, kept by the caller in a TokenStore. */
 export type Credentials = {
   site: string; // "https://qmplus.qmul.ac.uk"
-  token: string;
+  token: string; // empty for Brightspace, which signs in with session cookies
   privateToken: string | null;
+  /** Cookie header value for session-cookie platforms (Brightspace); never logged or put in a URL. */
+  cookies?: string;
 };
 
 /** Persists credentials encrypted (Electron safeStorage in the app). */
@@ -132,6 +134,11 @@ export interface UniversityAdapter {
  */
 export interface LoginBrowser {
   capture(url: string, captureScheme: string): Promise<string>;
+  /**
+   * Opens `url` in an isolated window and, once a navigation starts with
+   * `donePrefix`, resolves with the Cookie header the session holds for `cookieUrl`.
+   */
+  captureCookies?(url: string, donePrefix: string, cookieUrl: string): Promise<string>;
 }
 
 /** Thrown by adapters; `code` drives what the UI tells the student. */
