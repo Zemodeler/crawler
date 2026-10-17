@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { currentAcademicYear, safeJoin, sync, VleError } from "../src/index.ts";
-import type { AiRunner, Course, Credentials, Deadline, UniversityAdapter, VleFile, VleItem } from "../src/index.ts";
+import type { AssessmentComponent, AiRunner, Course, Credentials, Deadline, UniversityAdapter, VleFile, VleItem } from "../src/index.ts";
 
 const CREDENTIALS: Credentials = { site: "https://moodle.example.ac.uk", token: "x", privateToken: null };
 const NOW = new Date("2026-10-16T09:00:00Z");
@@ -113,6 +113,113 @@ async function setup() {
 
 const exists = (p: string) => stat(p).then(() => true, () => false);
 const read = (p: string) => readFile(p, "utf8");
+
+test("writes assessments from pages and assignment intros, replacing synced modules even without components", async () => {
+  const t = await setup();
+  try {
+    const previous: AssessmentComponent = { module: "OLD101U", year: "2025-26", seq: "001", type: null, description: "Previous exam", weight: 100, submission: null, resit: false, source: { url: "https://example.org/old", title: "Old overview" } };
+    const noComponents = { ...previous, module: "TST202U", year: "2026-27" };
+    await writeFile(t.path("Assessments.json"), JSON.stringify([previous, noComponents, { ...noComponents, module: "TST101U" }]));
+    const table = (seq: string, description: string) => `<table><tr><td>Seq</td><td>Description</td><td>Weight</td></tr><tr><td>${seq}</td><td>${description}</td><td>60%</td></tr></table>`;
+    const listItems = t.vle.listItems.bind(t.vle);
+    t.vle.listItems = async (credentials, c) => {
+      const items = await listItems(credentials, c);
+      if (c.id !== 1) return items;
+      for (const item of items) if (item.kind === "assignment") item.introHtml = table("001", "Exam") + table("002", "Project");
+      return [{ kind: "page", html: table("001", "Exam"), files: [], section: "Assessment", sectionIndex: 0, activity: "Overview", activityType: "page", activityId: 90, activityUrl: "https://example.org/overview" }, ...items];
+    };
+    await t.run(NOW, { textDeadlines: false });
+    const saved = JSON.parse(await read(t.path("Assessments.json"))) as AssessmentComponent[];
+    assert.equal(saved.length, 3);
+    assert.deepEqual(saved.slice(0, 1), [previous]);
+    assert.deepEqual(saved.slice(1, 3).map((row) => [row.module, row.seq, row.description]), [["TST101U", "001", "Exam"], ["TST101U", "002", "Project"]]);
+    assert.equal(saved[1]!.source.url, "https://example.org/overview");
+    assert.equal(saved[1]!.source.title, "Overview");
+    assert.ok(saved[1]!.source.localPath?.endsWith("Overview.html"));
+    assert.equal(saved[2]!.source.title, "Coursework 1 (20%)");
+    assert.equal(saved[2]!.source.url, `${CREDENTIALS.site}/mod/assign/view.php?id=5`);
+    await t.run(LATER, { textDeadlines: false });
+    assert.deepEqual(JSON.parse(await read(t.path("Assessments.json"))), saved);
+  } finally { await t.cleanup(); }
+});
+
+test("an assessments write failure still saves deadlines, calendar and sync state", async () => {
+  const t = await setup();
+  try {
+    await mkdir(t.path("Assessments.json"));
+    const result = await t.run(NOW, { textDeadlines: false });
+    assert.ok(result.assessmentsError, "the non-fatal assessments error is reported");
+    assert.deepEqual(result.courses.map((c) => c.status), ["synced", "synced"]);
+    assert.equal(result.deadlines.length, 1);
+    assert.equal(JSON.parse(await read(t.path("Deadlines.json"))).length, 1);
+    assert.match(await read(t.path("Deadlines.ics")), /BEGIN:VEVENT/);
+    assert.equal(JSON.parse(await read(t.path(".crawler", "state.json"))).lastSync, NOW.toISOString());
+  } finally { await t.cleanup(); }
+});
+
+test("invalid previous assessments JSON is treated as an empty list", async () => {
+  const t = await setup();
+  try {
+    await writeFile(t.path("Assessments.json"), "{invalid JSON");
+    const listItems = t.vle.listItems.bind(t.vle);
+    t.vle.listItems = async (credentials, c) => {
+      const items = await listItems(credentials, c);
+      for (const item of items) if (item.kind === "assignment") {
+        item.introHtml = "<table><tr><th>Description</th><th>Weight</th></tr><tr><td>Exam</td><td>100%</td></tr></table>";
+      }
+      return items;
+    };
+    const result = await t.run(NOW, { textDeadlines: false });
+    assert.equal(result.assessmentsError, undefined);
+    const saved = JSON.parse(await read(t.path("Assessments.json"))) as AssessmentComponent[];
+    assert.deepEqual(saved.map((entry) => [entry.module, entry.description]), [["TST101U", "Exam"]]);
+    assert.match(await read(t.path("Deadlines.ics")), /BEGIN:VEVENT/);
+    assert.equal(JSON.parse(await read(t.path(".crawler", "state.json"))).lastSync, NOW.toISOString());
+  } finally { await t.cleanup(); }
+});
+
+test("an assessments parser failure does not fail the course or prevent calendar and state writes", async () => {
+  const t = await setup();
+  try {
+    const listItems = t.vle.listItems.bind(t.vle);
+    t.vle.listItems = async (credentials, c) => {
+      const items = await listItems(credentials, c);
+      for (const item of items) if (item.kind === "assignment") {
+        Object.defineProperty(item, "introHtml", { get() { throw new Error("assessment HTML unavailable"); } });
+      }
+      return items;
+    };
+    const result = await t.run(NOW, { textDeadlines: false });
+    assert.deepEqual(result.courses.map((c) => c.status), ["synced", "synced"]);
+    assert.equal(result.courses[0]!.assessmentsError, "assessment HTML unavailable");
+    assert.equal(result.courses[1]!.assessmentsError, undefined);
+    assert.equal(result.deadlines.length, 1);
+    assert.match(await read(t.path("Deadlines.ics")), /BEGIN:VEVENT/);
+    assert.equal(JSON.parse(await read(t.path(".crawler", "state.json"))).lastSync, NOW.toISOString());
+  } finally { await t.cleanup(); }
+});
+
+test("an assessments parser failure keeps previous entries and discards partial components", async () => {
+  const t = await setup();
+  try {
+    const previous: AssessmentComponent = { module: "TST101U", year: "2026-27", seq: "001", type: null, description: "Previous exam", weight: 100, submission: null, resit: false, source: { url: "https://example.org/old", title: "Old overview" } };
+    await writeFile(t.path("Assessments.json"), JSON.stringify([previous, { ...previous, module: "TST202U" }]));
+    const listItems = t.vle.listItems.bind(t.vle);
+    t.vle.listItems = async (credentials, c) => {
+      const items = await listItems(credentials, c);
+      if (c.id !== 1) return items;
+      for (const item of items) if (item.kind === "assignment") {
+        Object.defineProperty(item, "introHtml", { value: null });
+      }
+      return [{ kind: "page", html: "<table><tr><th>Description</th><th>Weight</th></tr><tr><td>New project</td><td>50%</td></tr></table>", files: [], section: "Assessment", sectionIndex: 0, activity: "Overview", activityType: "page", activityId: 90, activityUrl: "https://example.org/overview" }, ...items];
+    };
+    const result = await t.run(NOW, { textDeadlines: false });
+    assert.deepEqual(result.courses.map((c) => c.status), ["synced", "synced"]);
+    assert.match(result.courses[0]!.assessmentsError ?? "", /matchAll/);
+    assert.equal(result.courses[1]!.assessmentsError, undefined);
+    assert.deepEqual(JSON.parse(await read(t.path("Assessments.json"))), [previous]);
+  } finally { await t.cleanup(); }
+});
 
 test("text disabled or failed retains text deadlines and document-filled VLE dates", async () => {
   const t = await setup();

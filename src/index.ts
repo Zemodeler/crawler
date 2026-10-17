@@ -1,4 +1,5 @@
 export * from "./types.ts";
+export * from "./assessments.ts";
 export * from "./adapters/moodle.ts";
 export * from "./adapters/universities.ts";
 export * from "./naming.ts";
