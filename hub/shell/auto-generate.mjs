@@ -19,8 +19,8 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
   let queue = Promise.resolve();
   let status = { state: "idle", module: null, results: [] };
 
-  async function runOne(moduleKey, assistant, model) {
-    const params = new URLSearchParams({ module: moduleKey, assistant, ...(model ? { model } : {}) });
+  async function runOne(moduleKey, assistant, model, force = false) {
+    const params = new URLSearchParams({ module: moduleKey, assistant, ...(model ? { model } : {}), ...(force ? { force: "1" } : {}) });
     const window = new BrowserWindow({ show: false, webPreferences: { backgroundThrottling: false } });
     const started = Date.now();
     let seen = 0;
@@ -43,7 +43,7 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
     }
   }
 
-  async function runAll(folders) {
+  async function runAll(folders, force = false) {
     const settings = prefs();
     const assistant = settings.assistant;
     if (settings.autoGenerate === false || (assistant !== "claude" && assistant !== "codex")) return [];
@@ -52,7 +52,7 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
     status = { state: "running", module: null, results };
     for (const moduleKey of folders) {
       status.module = moduleKey;
-      const result = await runOne(moduleKey, assistant, model).catch((error) => ({ status: "failed", module: moduleKey, reason: error.message }));
+      const result = await runOne(moduleKey, assistant, model, force).catch((error) => ({ status: "failed", module: moduleKey, reason: error.message }));
       if (result.status === "done") {
         for (const path of result.stale ?? []) await removeModuleFile(libraryRoot(), moduleKey, path);
       }
@@ -77,6 +77,11 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
     /** Queues a run over these "year/module" folders after any run already going. */
     afterSync(folders) {
       queue = queue.then(() => runAll(folders)).catch((error) => log(`Study packs: ${error.message}`));
+      return queue;
+    },
+    /** Queues a forced rebuild of one "year/module": the assistant redoes its packs even when they are up to date. */
+    rebuild(moduleKey) {
+      queue = queue.then(() => runAll([moduleKey], true)).catch((error) => log(`Study packs: ${error.message}`));
       return queue;
     },
     status: () => status,

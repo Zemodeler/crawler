@@ -57,6 +57,9 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const fetchTree = () => call<LibraryTree>("/api/library/tree");
 /** What the desktop app's automatic study-pack builder is doing; module is "year/module". */
 export const fetchPacksStatus = () => call<{ state: "idle" | "running"; module: string | null }>("/api/setup/packs");
+/** Asks the desktop app's assistant to redo a module's study packs from scratch, in the background. */
+export const rebuildPacks = (module: string) =>
+  call<{ ok: true }>("/api/setup/packs/rebuild", { method: "POST", body: JSON.stringify({ module }) });
 export const fetchDeadlines = () => call<{ deadlines: Deadline[] }>("/api/library/deadlines").then((r) => r.deadlines);
 export const resolveDeadline = (id: string, choice: { sourceIndex: number } | { date: string }) =>
   call<{ deadline: Deadline }>("/api/library/deadlines/resolve", {

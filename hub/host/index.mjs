@@ -381,6 +381,7 @@ async function handleSetup(setup, request, response, url) {
     "/api/setup/sign-in": setup.signIn,
     "/api/setup/sync": setup.startSync,
     "/api/setup/schedule": setup.setSchedule,
+    "/api/setup/packs/rebuild": setup.packsRebuild,
     "/api/setup/calendar/connect": setup.calendarConnect,
     "/api/setup/calendar/sync": setup.calendarSync,
     "/api/setup/calendar/disconnect": setup.calendarDisconnect,

@@ -180,6 +180,13 @@ app.whenReady().then(async () => {
     },
   });
   setup.packsStatus = () => ({ state: packs.status().state, module: packs.status().module });
+  setup.packsRebuild = ({ module }) => {
+    if (typeof module !== "string" || !module.includes("/")) return { error: "No module given." };
+    if (setup.prefs().autoGenerate === false || !["claude", "codex"].includes(setup.prefs().assistant))
+      return { error: "Choose “My subscription” in AI settings first, so Study Hub can use your assistant." };
+    void packs.rebuild(module);
+    return { ok: true };
+  };
   setup.onSynced = (result) => {
     background.onSynced(result);
     void packs.afterSync(result.courses.filter((c) => c.status === "synced").map((c) => c.folder));

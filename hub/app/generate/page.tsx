@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SubjectControl, useModuleSubject } from "../subject-control.tsx";
 
-import { fetchPacksStatus, fetchTree, hostModuleHandle, loadModule, pickModule } from "../../lib/library.ts";
+import { fetchPacksStatus, fetchTree, rebuildPacks, hostModuleHandle, loadModule, pickModule } from "../../lib/library.ts";
 
 import { Markdown } from "../markdown.tsx";
 import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
@@ -143,6 +143,8 @@ export default function Generate() {
     const timer = setInterval(check, 15_000);
     return () => clearInterval(timer);
   }, [moduleKey]);
+
+  const [rebuilding, setRebuilding] = useState(false);
 
   const fail = useCallback((error: unknown) => {
     const aiError = error as AiError;
@@ -310,6 +312,27 @@ export default function Generate() {
             It started on its own after the last sync and works in the background. Its packs and flashcards
             appear here when it finishes, so there is no need to build them again. Starting your own run now
             works too, but spends twice the usage.
+          </div>
+        )}
+
+        {["intro", "error"].includes(phase) && moduleKey && (
+          <div className="callout">
+            <b>Let the assistant redo the packs</b>
+            Rebuilds this module&apos;s study packs and flashcards in the background with your assistant, with no
+            review step. Files you edited are kept as they are.{" "}
+            <button
+              disabled={autoBuilding || rebuilding}
+              onClick={() => {
+                setRebuilding(true);
+                setMessage("");
+                rebuildPacks(moduleKey)
+                  .then(() => setAutoBuilding(true))
+                  .catch((error) => setMessage((error as Error).message))
+                  .finally(() => setRebuilding(false));
+              }}
+            >
+              {autoBuilding ? "Rebuilding…" : "Redo study packs"}
+            </button>
           </div>
         )}
 
