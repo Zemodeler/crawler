@@ -1,0 +1,9 @@
+[
+  {
+    "Id": 501, "CategoryId": null, "Name": "Coursework 1", "DueDate": "2026-11-13T12:00:00.000Z",
+    "Availability": { "StartDate": "2026-10-01T00:00:00.000Z", "EndDate": "2026-11-20T12:00:00.000Z" },
+    "CustomInstructions": { "Text": "Submit a report.", "Html": "<p>Submit a report.</p>" },
+    "Attachments": [ { "FileId": 71, "FileName": "brief.pdf", "Size": 2048 } ]
+  },
+  { "Id": 502, "CategoryId": null, "Name": "Reflection", "DueDate": null, "Availability": null, "CustomInstructions": null, "Attachments": [] }
+]

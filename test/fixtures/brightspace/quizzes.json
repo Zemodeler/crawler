@@ -1,0 +1,7 @@
+{
+  "Objects": [
+    { "QuizId": 301, "Name": "Week 3 quiz", "StartDate": "2026-10-12T09:00:00.000Z", "EndDate": "2026-10-19T09:00:00.000Z", "DueDate": "2026-10-16T17:00:00.000Z" },
+    { "QuizId": 302, "Name": "Practice quiz", "StartDate": null, "EndDate": "2026-12-01T00:00:00.000Z", "DueDate": null }
+  ],
+  "Next": null
+}

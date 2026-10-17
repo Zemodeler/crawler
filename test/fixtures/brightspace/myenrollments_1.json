@@ -1,0 +1,9 @@
+{
+  "PagingInfo": { "Bookmark": "page2-bookmark", "HasMoreItems": true },
+  "Items": [
+    {
+      "OrgUnit": { "Id": 6101, "Type": { "Id": 3, "Code": "Course Offering", "Name": "Course Offering" }, "Name": "TST1001 Testing Basics", "Code": "TST1001-2026-27", "HomeUrl": null, "ImageUrl": null },
+      "Access": { "IsActive": true, "StartDate": "2026-09-28T00:00:00.000Z", "EndDate": "2027-06-11T23:00:00.000Z", "CanAccess": true, "ClasslistRoleName": "Student", "LISRoles": [], "LastAccessed": null }
+    }
+  ]
+}
