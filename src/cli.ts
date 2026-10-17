@@ -16,7 +16,7 @@ import { join, resolve } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { createMoodleAdapter } from "./adapters/moodle.ts";
-import { UNIVERSITIES } from "./adapters/universities.ts";
+import { ALL_UNIVERSITIES, getUniversity } from "./adapters/universities.ts";
 import { doctor } from "./doctor.ts";
 import { placeCourse } from "./naming.ts";
 import { defaultSelection, readState, STATE_DIR, sync } from "./sync.ts";
@@ -74,7 +74,7 @@ const HELP = `Crawler — sync your university's course site into a folder of fi
   crawler doctor <url>   Check whether a Moodle site works with Crawler
 
 Options:
-  --university <id>   ${UNIVERSITIES.map((u) => u.id).join(", ")} (default ${UNIVERSITIES[0]?.id})
+  --university <id>   ${ALL_UNIVERSITIES.map((u) => u.id).join(", ")} (default ${ALL_UNIVERSITIES[0]?.id})
   --site <url>        Any Moodle site, instead of --university
   --root <folder>     Where files go (default: Documents/My Studies)
   --include-past      sync: also sync last year's modules
@@ -89,9 +89,9 @@ function adapterFor(parsed: Parsed, env: CliEnv): UniversityAdapter | string {
     return createMoodleAdapter({ id: url.hostname, displayName: url.hostname, site: url.origin }, env.fetch ? { fetch: env.fetch } : {});
   }
   const id = parsed.flags.get("university");
-  const config = UNIVERSITIES.find((u) => u.id === (typeof id === "string" ? id : UNIVERSITIES[0]?.id));
-  if (!config) return `Unknown university "${String(id)}". Known: ${UNIVERSITIES.map((u) => u.id).join(", ")}. For any other Moodle site use --site <url>.`;
-  return createMoodleAdapter(config, env.fetch ? { fetch: env.fetch } : {});
+  const adapter = getUniversity(typeof id === "string" ? id : (ALL_UNIVERSITIES[0]?.id ?? ""), env.fetch ? { fetch: env.fetch } : {});
+  if (!adapter) return `Unknown university "${String(id)}". Known: ${ALL_UNIVERSITIES.map((u) => u.id).join(", ")}. For any other Moodle site use --site <url>.`;
+  return adapter;
 }
 
 export async function runCli(argv: string[], env: CliEnv): Promise<number> {
