@@ -22,6 +22,8 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { once } from "node:events";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines } from "./deadlines.ts";
+import { parseAssessmentOverview } from "./assessments.ts";
+import type { AssessmentComponent } from "./assessments.ts";
 import { toIcs } from "./ics.ts";
 import { selectForumPosts } from "./forum.ts";
 import type { ForumHighlight } from "./forum.ts";
@@ -96,6 +98,8 @@ export type CourseReport = {
   text?: TextCounts;
   /** Set when the text step failed; the VLE deadlines were kept. */
   textError?: string;
+  /** Set when assessment overview parsing failed; the rest of the course synced. */
+  assessmentsError?: string;
   /** Lecture transcripts saved this run; absent when the step did not run. */
   transcripts?: { added: number; skippedNoCaptions: number; failed: number; error?: string };
 };
@@ -109,6 +113,8 @@ export type SyncResult = {
   changes: string[];
   /** What is worth a native notification: date changes, new deadlines and conflicts, new files. */
   notifications: NotificationEvent[];
+  /** Set when the assessments file could not be updated; deadlines and state were saved. */
+  assessmentsError?: string;
 };
 
 /** Per-course switches the student can set in .crawler/state.json. */
@@ -158,6 +164,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const state = await readState(root);
   const manifest = new Map((await readJson<ManifestEntry[]>(join(root, STATE_DIR, "manifest.json"), [])).map((e) => [e.vleId, e]));
   const previousDeadlines = await readJson<Deadline[]>(join(root, "Deadlines.json"), []);
+  const freshAssessments = new Map<string, AssessmentComponent[]>();
 
   const courses = await adapter.listCourses(credentials);
   const reports: CourseReport[] = [];
@@ -260,6 +267,23 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
       report.deadlines = deadlines.length;
       await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
       emit({ type: "course-done", course: course.shortname });
+      try {
+        const components = new Map<string, AssessmentComponent>();
+        for (const item of items) {
+          if (item.kind !== "page" && item.kind !== "assignment") continue;
+          const localPath = item.kind === "page" ? manifest.get(`moodle:page:${item.activityId}`)?.localPath : undefined;
+          const source = item.kind === "page"
+            ? { url: item.activityUrl, title: item.activity, ...(localPath ? { localPath } : {}) }
+            : { url: item.url, title: item.title };
+          for (const row of parseAssessmentOverview(item.kind === "page" ? item.html : item.introHtml)) {
+            const key = JSON.stringify([row.seq, row.description]);
+            if (!components.has(key)) components.set(key, { ...row, module: label, year: placement.year, source });
+          }
+        }
+        freshAssessments.set(`${placement.year}|${label}`, [...components.values()]);
+      } catch (error) {
+        report.assessmentsError = error instanceof Error ? error.message : String(error);
+      }
     } catch (error) {
       if (error instanceof VleError && error.code === "invalid_token") {
         await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
@@ -287,6 +311,18 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const deadlineLines = changeLines(previousSynced, placed);
 
   await writeJson(join(root, "Deadlines.json"), deadlines);
+  let assessmentsError: string | undefined;
+  try {
+    const previous = await readJson<AssessmentComponent[]>(join(root, "Assessments.json"), []);
+    const previousAssessments = Array.isArray(previous) ? previous : [];
+    const assessments = [
+      ...previousAssessments.filter((entry) => !freshAssessments.has(`${entry.year}|${entry.module}`)),
+      ...[...freshAssessments.values()].flat(),
+    ].sort((a, b) => a.year.localeCompare(b.year) || a.module.localeCompare(b.module) || (a.seq ?? "").localeCompare(b.seq ?? ""));
+    await writeJson(join(root, "Assessments.json"), assessments);
+  } catch (error) {
+    assessmentsError = error instanceof Error ? error.message : String(error);
+  }
   await writeText(join(root, "Deadlines.ics"), toIcs(deadlines, now));
 
   const changes = [...fileChanges.sort(), ...deadlineLines];
@@ -299,7 +335,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   const summary = filesSummary(newFiles);
   const notifications = [...eventsFromDiff(previousSynced, placed), ...(summary ? [summary] : [])];
 
-  return { startedAt, finishedAt: new Date().toISOString(), courses: reports, deadlines, changes, notifications };
+  return { startedAt, finishedAt: new Date().toISOString(), courses: reports, deadlines, changes, notifications, ...(assessmentsError ? { assessmentsError } : {}) };
 }
 
 /* ------------------------------------------------------------- one file */
