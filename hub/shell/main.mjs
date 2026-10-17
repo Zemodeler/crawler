@@ -8,6 +8,7 @@
  *   electron shell/main.mjs --selftest   drive the AI settings page headlessly:
  *                                        choose "My subscription", press
  *                                        "Test connection", report and quit
+ *   electron shell/main.mjs --sync       open Study Hub and sync every module now
  */
 
 import { app, BrowserWindow, Menu, Notification, Tray, dialog, nativeImage, safeStorage, session, shell } from "electron";
@@ -29,6 +30,7 @@ const providerArg = process.argv.find((arg) => arg.startsWith("--provider="));
 const PROVIDER = providerArg ? providerArg.slice(11) : "anthropic";
 // Started at login: stay in the tray until the student opens the window.
 const BACKGROUND_FLAG = process.argv.includes("--background");
+const SYNC_FLAG = process.argv.includes("--sync");
 
 // Names the userData folder, where the encrypted university sign-in is kept.
 app.setName("Study Hub");
@@ -192,6 +194,7 @@ app.whenReady().then(async () => {
     void packs.afterSync(result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
   };
   background.start();
+  if (SYNC_FLAG) void setup.startBackgroundSync("tray");
   // Modules synced before automatic packs existed get theirs now; up-to-date ones are skipped.
   listLibrary(libraryRoot())
     .then((tree) => {
