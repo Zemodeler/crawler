@@ -225,6 +225,7 @@ export type Deadline = {
   sources: Source[];
   history: Change[];
   userNote?: string;
+  done?: boolean; // Student completion flag, preserved across syncs.
 };
 
 /* ------------------------------------------------------------- AI (host-provided) */

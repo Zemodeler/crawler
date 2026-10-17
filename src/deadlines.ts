@@ -304,6 +304,7 @@ function mergeOne(p: Deadline, fresh: Deadline, at: string, wasRead: SourceWasRe
     if (p.checkReason !== undefined) kept.checkReason = p.checkReason;
     else delete kept.checkReason;
     if (p.userNote !== undefined) kept.userNote = p.userNote;
+    if (p.done !== undefined) kept.done = p.done;
     return kept;
   }
 
@@ -320,6 +321,7 @@ function mergeOne(p: Deadline, fresh: Deadline, at: string, wasRead: SourceWasRe
   const merged = detectConflict({ ...f, sources, history });
   if (merged.status !== p.status) history.push({ at, field: "status", from: p.status, to: merged.status });
   if (p.userNote !== undefined) merged.userNote = p.userNote;
+  if (p.done !== undefined) merged.done = p.done;
   return merged;
 }
 

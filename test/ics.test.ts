@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { escapeText, foldLine, toIcs } from "../src/ics.ts";
+import { deadlineToEvent } from "../src/gcal/events.ts";
 import type { Deadline, DeadlineStatus } from "../src/types.ts";
 
 const now = new Date("2026-10-15T17:00:00Z");
@@ -65,6 +66,21 @@ test("calendar header, CRLF endings and a confirmed event", () => {
       "DESCRIPTION:Status: confirmed\\nWeight: 20%\\nDue: Mon 14 Dec 2026\\, 10:00 (https://vle.example/mod/assign/view.php?id=23)",
     ),
   );
+});
+
+test("user deadlines without sources export to ICS and Google Calendar", () => {
+  const manual = deadline("user:ECS401U:abcdef", "user-verified", { sources: [] });
+  const lines = unfold(toIcs([manual], now));
+  assert.ok(lines.includes(`UID:${manual.id}@crawler`));
+  assert.ok(lines.includes("DTSTART:20261214T100000Z"));
+  assert.ok(lines.includes("DESCRIPTION:Status: user-verified"));
+  assert.ok(!lines.some((line) => line.startsWith("URL:")));
+
+  const event = deadlineToEvent(manual);
+  assert.ok(!("skip" in event));
+  assert.equal(event.description, "Status: user-verified");
+  assert.equal(event.end?.dateTime, "2026-12-14T10:00:00Z");
+  assert.equal(event.extendedProperties?.private?.crawlerId, manual.id);
 });
 
 test("tbc, needs-check, cancelled and undated deadlines are skipped", () => {
