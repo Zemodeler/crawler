@@ -29,7 +29,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { CLI_SETTINGS, findCli, runCli } from "./cli.mjs";
-import { libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, resolveDeadline, writeModuleFile } from "./library.mjs";
+import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, resolveDeadline, writeModuleFile } from "./library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, "..", "dist");
@@ -299,6 +299,21 @@ async function handleLibrary(request, response, url) {
   }
   if (url.pathname === "/api/library/deadlines" && request.method === "GET") {
     sendJson(response, 200, { deadlines: await readDeadlines(root) });
+    return;
+  }
+  if (url.pathname === "/api/library/assessments" && request.method === "GET") {
+    sendJson(response, 200, { assessments: await readAssessments(root) });
+    return;
+  }
+  const deadlineMutation = new Map([
+    ["/api/library/deadlines/add", addDeadline],
+    ["/api/library/deadlines/remove", removeDeadline],
+    ["/api/library/deadlines/done", setDeadlineDone],
+  ]).get(url.pathname);
+  if (deadlineMutation && request.method === "POST") {
+    const body = await readBody(request).catch(() => ({}));
+    const result = await deadlineMutation(root, body);
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: "bad_request", message: result.error } : result);
     return;
   }
   if (url.pathname === "/api/library/deadlines/resolve" && request.method === "POST") {

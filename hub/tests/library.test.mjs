@@ -78,7 +78,7 @@ test("resolving a deadline with a source's date marks it user-verified and keeps
 test("resolving with a typed date, and refusing bad input", async () => {
   const root = fixture();
   const { deadline } = await resolveDeadline(root, { id: "d1", date: "2026-11-20" });
-  assert.deepEqual(deadline.due, { iso: "2026-11-20", allDay: true, tz: "Europe/London" });
+  assert.deepEqual(deadline.due, { iso: "2026-11-20T00:00:00.000Z", allDay: true, tz: "Europe/London" });
   assert.ok((await resolveDeadline(root, { id: "d1", date: "next week" })).error);
   assert.ok((await resolveDeadline(root, { id: "nope", sourceIndex: 0 })).error);
 });

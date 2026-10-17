@@ -6,11 +6,12 @@
  *     2026-27/
  *       ECS505U - Software Engineering/   ← one module (a Study Hub course)
  *
- * Read-only except for one narrow write: resolving a deadline the student has
+ * Students can add deadlines, mark them done, and resolve dates they have
  * checked (status `user-verified`). Every path from the page is checked to stay
  * inside the root, so a crafted `../` can never reach the rest of the disk.
  */
 
+import { randomBytes } from "node:crypto";
 import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -132,6 +133,96 @@ export async function readDeadlines(root = libraryRoot()) {
   }
 }
 
+export async function readAssessments(root = libraryRoot()) {
+  try {
+    const parsed = JSON.parse(await readFile(join(root, "Assessments.json"), "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function writeDeadlines(root, deadlines) {
+  const target = join(root, "Deadlines.json");
+  const temp = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  await writeFile(temp, `${JSON.stringify(deadlines, null, 2)}\n`, "utf8");
+  await rename(temp, target);
+}
+
+/** Match Crawler's Instants: London wall time, with all-day dates at London midnight. */
+function londonInstant(date) {
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(date)) return null;
+  const allDay = date.length === 10;
+  const wall = Date.parse(`${date.slice(0, 10)}T${allDay ? "00:00" : date.slice(11)}:00Z`);
+  if (!Number.isFinite(wall) || new Date(wall).toISOString().slice(0, 16) !== `${date.slice(0, 10)}T${allDay ? "00:00" : date.slice(11)}`) return null;
+  const offset = (utc) => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(utc));
+    const get = (type) => Number(parts.find((part) => part.type === type)?.value);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - utc;
+  };
+  // Try the offsets on either side of a clock change and round-trip each
+  // candidate through London wall time. The earlier match is the BST occurrence
+  // of October's repeated hour; March's skipped hour has no match.
+  const day = 24 * 60 * 60 * 1000;
+  const candidates = [wall - offset(wall - day), wall - offset(wall + day)].sort((a, b) => a - b);
+  const utc = candidates.find((candidate) => candidate + offset(candidate) === wall);
+  if (utc === undefined) return { error: "That time does not exist in the UK: clocks go forward at 01:00 on that day." };
+  return { iso: new Date(utc).toISOString(), allDay, tz: "Europe/London" };
+}
+
+export async function addDeadline(root, body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "Enter a deadline." };
+  const { module, year, title, kind, date, weight, formative, note } = body;
+  const text = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+  if (!text(module, 100) || !/^[A-Za-z0-9_-]+$/.test(module)) return { error: "Choose a module." };
+  if (typeof year !== "string" || !YEAR.test(year) || Number(year.slice(5)) !== (Number(year.slice(0, 4)) + 1) % 100) return { error: "Choose an academic year." };
+  const tree = await listLibrary(root);
+  if (!tree.years.some((y) => y.year === year && y.modules.some((f) => f.split(" - ")[0].trim() === module))) return { error: "Choose a module in your library." };
+  if (!text(title, 500)) return { error: "Enter a title (up to 500 characters)." };
+  if (!["coursework", "exam", "quiz", "presentation", "lab", "other"].includes(kind)) return { error: "Choose a deadline type." };
+  if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(date)) return { error: "Enter a date and optional time." };
+  const due = londonInstant(date);
+  if (!due) return { error: "Enter a valid date and time." };
+  if (due.error) return due;
+  if (weight !== undefined && (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 100)) return { error: "Weight must be between 0 and 100." };
+  if (formative !== undefined && typeof formative !== "boolean") return { error: "Formative must be true or false." };
+  if (note !== undefined && (typeof note !== "string" || note.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(note))) return { error: "Enter a note of up to 4000 characters." };
+  const deadline = {
+    id: `user:${module}:${randomBytes(12).toString("hex")}`, module, year, title: title.trim(), kind,
+    status: "user-verified", due, sources: [],
+    history: [{ at: new Date().toISOString(), field: "added", from: null, to: due.iso }],
+    ...(weight !== undefined ? { weight } : {}), ...(formative !== undefined ? { formative } : {}),
+    ...(note !== undefined ? { userNote: note } : {}),
+  };
+  const deadlines = await readDeadlines(root);
+  deadlines.push(deadline);
+  await writeDeadlines(root, deadlines);
+  return { deadline };
+}
+
+export async function removeDeadline(root, body) {
+  if (typeof body?.id !== "string" || !body.id.startsWith("user:")) return { error: "Only deadlines you added can be removed." };
+  const deadlines = await readDeadlines(root);
+  if (!deadlines.some((d) => d.id === body.id)) return { error: "No deadline with that id." };
+  await writeDeadlines(root, deadlines.filter((d) => d.id !== body.id));
+  return { ok: true };
+}
+
+export async function setDeadlineDone(root, body) {
+  if (typeof body?.id !== "string" || typeof body?.done !== "boolean") return { error: "Choose a deadline and whether it is done." };
+  const deadlines = await readDeadlines(root);
+  const deadline = deadlines.find((d) => d.id === body.id);
+  if (!deadline) return { error: "No deadline with that id." };
+  if (body.done) deadline.done = true;
+  else delete deadline.done;
+  await writeDeadlines(root, deadlines);
+  return { deadline };
+}
+
 /**
  * The student settles a deadline: either one of its sources' dates, or a date
  * they type. Written back as `user-verified`, which Crawler never overwrites.
@@ -146,8 +237,9 @@ export async function resolveDeadline(root, body) {
     due = item.sources?.[body.sourceIndex]?.date;
     if (!due) return { error: "That source has no date." };
   } else if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(body.date)) {
-    const allDay = body.date.length === 10;
-    due = { iso: allDay ? body.date : `${body.date}:00`, allDay, tz: "Europe/London" };
+    due = londonInstant(body.date);
+    if (!due) return { error: "Enter a valid date and time." };
+    if (due.error) return due;
   } else return { error: "Choose a source or enter a date." };
 
   const at = new Date().toISOString();
@@ -161,10 +253,7 @@ export async function resolveDeadline(root, body) {
   delete item.checkReason;
 
   // Write beside, then swap, so a crash never leaves half a file.
-  const target = join(root, "Deadlines.json");
-  const temp = `${target}.${process.pid}.tmp`;
-  await writeFile(temp, `${JSON.stringify(deadlines, null, 2)}\n`, "utf8");
-  await rename(temp, target);
+  await writeDeadlines(root, deadlines);
   return { deadline: item };
 }
 
