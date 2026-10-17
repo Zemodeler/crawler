@@ -8,7 +8,7 @@
  * never a loop, and never a silent coercion.
  */
 
-import { extractJsonObject, stripForProvider, validate, type Violation } from "./schema.ts";
+import { extractJsonObject, schemaLimitLines, stripForProvider, validate, type Violation } from "./schema.ts";
 import { AiError, type GenerateRequest, type JsonSchema } from "./types.ts";
 
 export const MAX_REPAIRS = 1;
@@ -21,6 +21,7 @@ export function schemaPromptHint(schema: JsonSchema, schemaName: string): string
     "No prose before or after it. No markdown code fence.",
     "",
     JSON.stringify(stripForProvider(schema)),
+    ...(schemaLimitLines(schema).length ? ["", ...schemaLimitLines(schema)] : []),
   ].join("\n");
 }
 

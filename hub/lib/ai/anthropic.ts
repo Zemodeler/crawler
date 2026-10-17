@@ -17,7 +17,7 @@
  */
 
 import { ANTHROPIC_MODELS, approxTokens, estimateCost, resolveModel } from "./models.ts";
-import { stripForProvider } from "./schema.ts";
+import { stripForProvider, withSchemaLimits } from "./schema.ts";
 import { fenceUntrusted, withRepair } from "./structured.ts";
 import {
   AiError,
@@ -229,7 +229,7 @@ export function createAnthropicClient(key: string, modelOverride: string): AiCli
       model,
       max_tokens: request_.maxOutputTokens || DEFAULT_MAX_TOKENS,
       stream: true,
-      system: request_.system,
+      system: withSchemaLimits(request_.system, request_.schema),
       messages: messages.map((message) => ({ role: message.role, content: message.content })),
       output_config: {
         effort: request_.effort || "high",

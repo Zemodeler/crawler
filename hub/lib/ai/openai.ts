@@ -12,7 +12,7 @@
  */
 
 import { resolveModel } from "./models.ts";
-import { stripForProvider } from "./schema.ts";
+import { stripForProvider, withSchemaLimits } from "./schema.ts";
 import { withRepair } from "./structured.ts";
 import {
   AiError,
@@ -247,7 +247,7 @@ export function createOpenAiClient(key: string, modelOverride: string): AiClient
             model: chosen,
             stream: true,
             max_output_tokens: generateRequest.maxOutputTokens || DEFAULT_MAX_TOKENS,
-            instructions: generateRequest.system,
+            instructions: withSchemaLimits(generateRequest.system, generateRequest.schema),
             input: messages.map((message) => ({
               role: message.role,
               content: [

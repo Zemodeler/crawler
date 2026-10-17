@@ -66,6 +66,56 @@ export function stripForProvider(schema: Json): Json {
   return out;
 }
 
+/**
+ * The limits `stripForProvider` removes, as plain lines for the prompt, e.g.
+ * "examTarget[]: at most 240 characters". Without them the model cannot know
+ * a limit exists, and an answer that breaks one is thrown away.
+ */
+export function schemaLimits(schema: JsonSchema): string[] {
+  const defs = isPlainObject(schema.$defs) ? schema.$defs : {};
+  const lines = new Set<string>();
+  const walk = (node: Json, path: string, seen: string[]) => {
+    if (!isPlainObject(node)) return;
+    if (typeof node.$ref === "string") {
+      const name = node.$ref.replace("#/$defs/", "");
+      if (!seen.includes(name)) walk(defs[name], path, [...seen, name]);
+      return;
+    }
+    const rules: string[] = [];
+    if (typeof node.minLength === "number" && node.minLength > 1) rules.push(`at least ${node.minLength} characters`);
+    if (typeof node.maxLength === "number") rules.push(`at most ${node.maxLength} characters`);
+    if (typeof node.minItems === "number" && node.minItems > 0) rules.push(`at least ${node.minItems} item${node.minItems === 1 ? "" : "s"}`);
+    if (typeof node.maxItems === "number") rules.push(`at most ${node.maxItems} items`);
+    if (typeof node.minimum === "number") rules.push(`at least ${node.minimum}`);
+    if (typeof node.maximum === "number") rules.push(`at most ${node.maximum}`);
+    if (rules.length && path) lines.add(`${path}: ${rules.join(", ")}`);
+    if (isPlainObject(node.properties))
+      for (const [key, child] of Object.entries(node.properties)) walk(child, path ? `${path}.${key}` : key, seen);
+    if (node.items) walk(node.items, `${path}[]`, seen);
+    for (const option of [...(Array.isArray(node.anyOf) ? node.anyOf : []), ...(Array.isArray(node.oneOf) ? node.oneOf : [])])
+      walk(option, path, seen);
+  };
+  walk(schema, "", []);
+  return [...lines];
+}
+
+/** The system prompt plus the schema's limits, for paths whose schema mode drops them. */
+export function withSchemaLimits(system: string, schema: JsonSchema): string {
+  const limits = schemaLimits(schema);
+  if (!limits.length) return system;
+  return [system, "", ...limitLines(limits)].join("\n");
+}
+
+function limitLines(limits: string[]): string[] {
+  return ["Hard limits on the answer (an answer that breaks one is rejected):", ...limits.map((limit) => `- ${limit}`)];
+}
+
+/** The limits as prompt lines, or none when the schema has no limits. */
+export function schemaLimitLines(schema: JsonSchema): string[] {
+  const limits = schemaLimits(schema);
+  return limits.length ? limitLines(limits) : [];
+}
+
 /** Throws in development if a schema would misbehave on one of the providers. */
 export function assertProviderPortable(schema: JsonSchema, name: string): void {
   const problems: string[] = [];
