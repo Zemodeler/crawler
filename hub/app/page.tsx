@@ -591,6 +591,7 @@ export default function Home() {
           ))}
           <a className="flashcards-link" href="/flashcards?mode=smart">Flashcards</a>
           {library && <a className="flashcards-link" href="/calendar">Calendar</a>}
+          {library && <a className="flashcards-link" href="/assessments">Assessments</a>}
         </nav>
         {library && (
           <div className="side-section module-list">

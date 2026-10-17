@@ -149,6 +149,7 @@ export default function CalendarPage() {
           <p className="eyebrow">This year{thisWeek ? ` · ${weekLabel(thisWeek)}` : ""}</p>
           <h2>Calendar</h2>
         </div>
+        <a className="text-link" href="/assessments">Assessments</a>
         {state === "ready" && (
           <div className="calendar-tools">
             <div className="segmented" role="group" aria-label="View">

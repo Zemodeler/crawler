@@ -41,6 +41,8 @@ export type Deadline = {
   formative?: boolean;
   checkReason?: string;
   submitUrl?: string;
+  done?: boolean;
+  userNote?: string;
   sources: DeadlineSource[];
 };
 
@@ -66,6 +68,23 @@ export const resolveDeadline = (id: string, choice: { sourceIndex: number } | { 
     method: "POST",
     body: JSON.stringify({ id, ...choice }),
   }).then((r) => r.deadline);
+
+export type Assessment = {
+  module: string; year: string; seq: string | null; type: string | null;
+  description: string; weight: number | null; submission: string | null; resit: boolean;
+  source: { url: string; localPath?: string; title: string };
+};
+export type NewDeadline = {
+  module: string; year: string; title: string; kind: Deadline["kind"]; date: string;
+  weight?: number; formative?: boolean; note?: string;
+};
+export const fetchAssessments = () => call<{ assessments: Assessment[] }>("/api/library/assessments").then((r) => r.assessments);
+export const addDeadline = (input: NewDeadline) =>
+  call<{ deadline: Deadline }>("/api/library/deadlines/add", { method: "POST", body: JSON.stringify(input) }).then((r) => r.deadline);
+export const removeDeadline = (id: string) =>
+  call<{ ok: true }>("/api/library/deadlines/remove", { method: "POST", body: JSON.stringify({ id }) });
+export const setDeadlineDone = (id: string, done: boolean) =>
+  call<{ deadline: Deadline }>("/api/library/deadlines/done", { method: "POST", body: JSON.stringify({ id, done }) }).then((r) => r.deadline);
 
 /** URL of a library file, e.g. for opening a PDF at a page. */
 export const libraryUrl = (path: string) => `/library/${path.split("/").map(encodeURIComponent).join("/")}`;
