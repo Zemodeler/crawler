@@ -21,7 +21,8 @@
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { cpSync, createReadStream, existsSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
@@ -32,7 +33,8 @@ import { libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, rea
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, "..", "dist");
-const CLIENT = join(DIST, "client");
+/** The client half of the snapshot the server bundle came from; set by loadSite. */
+let CLIENT = join(DIST, "client");
 const VERSION = "0.1.0-spike";
 const PORTS = [3000, 3001, 3002, 3003, 3004, 3005];
 const GUARD_HEADER = "x-study-hub-host";
@@ -385,10 +387,44 @@ async function handleSetup(setup, request, response, url) {
 
 /* ------------------------------------------------------------- server */
 
+const SNAPSHOT_PREFIX = "studyhub-build-";
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Serves a private copy of the build rather than dist/ itself. The server bundle
+ * stays in memory for the life of the app, so if `pnpm build` runs meanwhile its
+ * pages would ask for client chunks the rebuild has just deleted, and every page
+ * not yet visited would fail with "This page couldn't load". A copy keyed by
+ * BUILD_ID keeps the server and client halves from the same build.
+ */
+function snapshotBuild() {
+  const buildId = readFileSync(join(DIST, "server", "BUILD_ID"), "utf8").trim();
+  const root = join(tmpdir(), `${SNAPSHOT_PREFIX}${buildId.replace(/[^\w-]/g, "")}`);
+  if (!existsSync(join(root, "complete"))) {
+    rmSync(root, { recursive: true, force: true });
+    cpSync(DIST, root, { recursive: true });
+    cpSync(join(DIST, "server", "BUILD_ID"), join(root, "complete"));
+  }
+  // Marks the copy as in use, so the pruning below in another app leaves it alone.
+  utimesSync(root, new Date(), new Date());
+  for (const name of readdirSync(tmpdir())) {
+    const old = join(tmpdir(), name);
+    if (!name.startsWith(SNAPSHOT_PREFIX) || old === root) continue;
+    try {
+      if (Date.now() - statSync(old).mtimeMs > WEEK_MS) rmSync(old, { recursive: true, force: true });
+    } catch {
+      /* another app may still be using it */
+    }
+  }
+  return root;
+}
+
 async function loadSite() {
   const entry = join(DIST, "server", "index.js");
   if (!existsSync(entry)) throw new Error(`No build found at ${entry}. Run \`pnpm build\` first.`);
-  return (await import(pathToFileURL(entry).href)).default;
+  const root = snapshotBuild();
+  CLIENT = join(root, "client");
+  return (await import(pathToFileURL(join(root, "server", "index.js")).href)).default;
 }
 
 function toWebRequest(request, port) {
