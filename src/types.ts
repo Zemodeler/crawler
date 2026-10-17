@@ -94,6 +94,22 @@ export type VleItem =
       bodyHtml: string;
       posted: number;
       url: string;
+    }
+  | {
+      /** A post or reply in a non-announcement forum; the sync keeps only the relevant ones. */
+      kind: "forum-post";
+      id: number; // the post id
+      discussion: number;
+      forum: string;
+      subject: string;
+      bodyHtml: string;
+      posted: number;
+      author: string;
+      /** True for teaching staff, false for a known student, null when the site does not say. */
+      staff: boolean | null;
+      /** Short text of the post this one answers, for context; empty on a discussion's first post. */
+      replyTo: string;
+      url: string;
     };
 
 export interface UniversityAdapter {

@@ -1,0 +1,4 @@
+[
+  { "id": 11, "fullname": "Teaching Team", "roles": [{ "roleid": 3, "name": "Teacher", "shortname": "editingteacher" }] },
+  { "id": 12, "fullname": "Sam Student", "roles": [{ "roleid": 5, "name": "Student", "shortname": "student" }] }
+]

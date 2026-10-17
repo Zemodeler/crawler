@@ -81,6 +81,7 @@ confirming the REST endpoint is live.
 | Quizzes | `mod_quiz_get_quizzes_by_courses` |
 | Calendar events | `core_calendar_get_action_events_by_timesort` |
 | Announcements | `mod_forum_get_forum_discussions` (news forum per course) |
+| Other forums | the same call for every forum (4 pages of 50), `mod_forum_get_discussion_posts` for replies (100 threads), `core_enrol_get_enrolled_users` for who is staff. Posts become `forum-post` items; `src/forum.ts` keeps staff explanations, exam/deadline posts and date posts from anyone (students' are unverified, never deadline sources), trimmed, in `.crawler/forum/<year>__<module>.json`; the rest is discarded in the sync. |
 | Files | `/webservice/pluginfile.php/...?token=` |
 
 Exact availability is per site; on first sync the adapter calls

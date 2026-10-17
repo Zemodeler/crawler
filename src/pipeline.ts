@@ -172,6 +172,9 @@ function itemSources(items: VleItem[], manifest: ManifestEntry[]): TextSource[] 
   for (const item of items) {
     if (item.kind === "announcement") {
       add({ type: "announcement", title: item.subject, url: item.url, html: item.bodyHtml });
+    } else if (item.kind === "forum-post") {
+      // Only staff posts speak for the module; a student's post is a pointer, not a source.
+      if (item.staff === true) add({ type: "announcement", title: item.subject, url: item.url, html: item.bodyHtml });
     } else if (item.kind === "page") {
       const localPath = pagePath.get(`moodle:page:${item.activityId}`);
       add({ type: "page", title: item.activity, url: item.activityUrl, ...(localPath ? { localPath } : {}), html: item.html });

@@ -186,7 +186,7 @@ type MoodleAssignment = {
 };
 type MoodleQuiz = { id: number; coursemodule: number; name: string; timeopen?: number; timeclose?: number };
 type MoodleEvent = { id: number; name: string; timestart: number; modulename?: string | null };
-type MoodleForum = { id: number; type: string };
+type MoodleForum = { id: number; type: string; name?: string };
 type MoodleDiscussion = {
   id: number;
   discussion: number;
@@ -195,7 +195,24 @@ type MoodleDiscussion = {
   message?: string;
   created?: number;
   timemodified?: number;
+  userid?: number;
+  userfullname?: string;
+  numreplies?: number;
 };
+type MoodleForumPost = {
+  id: number;
+  parentid?: number;
+  subject?: string;
+  message?: string;
+  timecreated?: number;
+  author?: { id?: number; fullname?: string };
+};
+type MoodleEnrolledUser = { id: number; roles?: { shortname?: string }[] };
+
+const STAFF_ROLES = new Set(["editingteacher", "teacher", "manager", "coursecreator"]);
+const DISCUSSION_PAGE = 50;
+const DISCUSSION_PAGES = 4; // the 200 most recent discussions of a forum
+const REPLY_THREADS = 100; // threads per course whose replies are read
 
 /* ------------------------------------------------------------- adapter */
 
@@ -451,27 +468,112 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
     }));
   }
 
-  async function announcementItems(credentials: Credentials, course: Course): Promise<VleItem[]> {
-    const forums = await ws<MoodleForum[]>(credentials, "mod_forum_get_forums_by_courses", { courseids: [course.id] });
-    const news = (Array.isArray(forums) ? forums : []).filter((f) => f.type === "news");
-    const lists = await Promise.all(
-      news.map((forum) =>
-        ws<{ discussions?: MoodleDiscussion[] }>(credentials, "mod_forum_get_forum_discussions", {
-          forumid: forum.id,
-          perpage: 50,
-        }),
-      ),
+  const snippet = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+
+  async function discussionsOf(credentials: Credentials, forumid: number): Promise<MoodleDiscussion[]> {
+    const all: MoodleDiscussion[] = [];
+    for (let page = 0; page < DISCUSSION_PAGES; page++) {
+      const list = await ws<{ discussions?: MoodleDiscussion[] }>(credentials, "mod_forum_get_forum_discussions", {
+        forumid,
+        perpage: DISCUSSION_PAGE,
+        ...(page > 0 ? { page } : {}),
+      });
+      const found = list.discussions ?? [];
+      all.push(...found);
+      if (found.length < DISCUSSION_PAGE) break;
+    }
+    return all;
+  }
+
+  /** Everyone enrolled as teaching staff; null when the token may not list the course's people. */
+  async function staffIdsOf(credentials: Credentials, course: Course): Promise<Set<number> | null> {
+    const people = await optional(
+      () => ws<MoodleEnrolledUser[]>(credentials, "core_enrol_get_enrolled_users", { courseid: course.id }),
+      null,
     );
-    return lists.flatMap((list) =>
-      (list.discussions ?? []).map((d) => ({
-        kind: "announcement" as const,
-        id: d.discussion,
+    if (!Array.isArray(people)) return null;
+    return new Set(people.filter((p) => (p.roles ?? []).some((r) => STAFF_ROLES.has(r.shortname ?? ""))).map((p) => p.id));
+  }
+
+  /**
+   * Every forum of the course: announcements as announcements, everything else
+   * (discussions and their replies) as forum posts. The sync decides what to keep.
+   */
+  async function forumItems(credentials: Credentials, course: Course): Promise<VleItem[]> {
+    const forums = await ws<MoodleForum[]>(credentials, "mod_forum_get_forums_by_courses", { courseids: [course.id] });
+    const all = Array.isArray(forums) ? forums : [];
+    const lists = await Promise.all(all.map(async (forum) => ({ forum, discussions: await discussionsOf(credentials, forum.id) })));
+
+    const items: VleItem[] = [];
+    // Whoever posts announcements is teaching staff, even when the site hides roles.
+    const staffIds = (await staffIdsOf(credentials, course)) ?? null;
+    const known = staffIds !== null;
+    const staff = new Set(staffIds ?? []);
+    for (const { forum, discussions } of lists) {
+      if (forum.type !== "news") continue;
+      for (const d of discussions) {
+        if (d.userid) staff.add(d.userid);
+        items.push({
+          kind: "announcement",
+          id: d.discussion,
+          subject: d.subject ?? d.name ?? "",
+          bodyHtml: d.message ?? "",
+          posted: d.created ?? d.timemodified ?? 0,
+          url: stripToken(`${site}/mod/forum/discuss.php?d=${d.discussion}`),
+        });
+      }
+    }
+    const isStaff = (id: number | undefined): boolean | null => (id && staff.has(id) ? true : known ? false : null);
+
+    const threads = lists.flatMap(({ forum, discussions }) =>
+      forum.type === "news" ? [] : discussions.map((d) => ({ forum, d })),
+    );
+    for (const { forum, d } of threads) {
+      items.push({
+        kind: "forum-post",
+        id: d.id,
+        discussion: d.discussion,
+        forum: forum.name ?? "",
         subject: d.subject ?? d.name ?? "",
         bodyHtml: d.message ?? "",
         posted: d.created ?? d.timemodified ?? 0,
+        author: d.userfullname ?? "",
+        staff: isStaff(d.userid),
+        replyTo: "",
         url: stripToken(`${site}/mod/forum/discuss.php?d=${d.discussion}`),
-      })),
+      });
+    }
+    // Replies, for the threads that have any, most recently active first.
+    const withReplies = threads.filter(({ d }) => (d.numreplies ?? 0) > 0).slice(0, REPLY_THREADS);
+    const replies = await Promise.all(
+      withReplies.map(async ({ forum, d }) => {
+        const got = await optional(
+          () => ws<{ posts?: MoodleForumPost[] }>(credentials, "mod_forum_get_discussion_posts", { discussionid: d.discussion }),
+          { posts: [] },
+        );
+        return { forum, d, posts: got.posts ?? [] };
+      }),
     );
+    for (const { forum, d, posts } of replies) {
+      const byId = new Map(posts.map((p) => [p.id, p]));
+      for (const p of posts) {
+        if (!p.parentid) continue; // the discussion's own first post is already listed
+        items.push({
+          kind: "forum-post",
+          id: p.id,
+          discussion: d.discussion,
+          forum: forum.name ?? "",
+          subject: p.subject ?? d.subject ?? d.name ?? "",
+          bodyHtml: p.message ?? "",
+          posted: p.timecreated ?? 0,
+          author: p.author?.fullname ?? "",
+          staff: isStaff(p.author?.id),
+          replyTo: snippet(byId.get(p.parentid)?.message ?? ""),
+          url: stripToken(`${site}/mod/forum/discuss.php?d=${d.discussion}&parent=${p.id}`),
+        });
+      }
+    }
+    return items;
   }
 
   return {
@@ -530,7 +632,7 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
         optional(() => assignmentItems(credentials, course), []),
         optional(() => quizItems(credentials, course), []),
         optional(() => eventItems(credentials, course), []),
-        optional(() => announcementItems(credentials, course), []),
+        optional(() => forumItems(credentials, course), []),
       ]);
       return groups.flat();
     },

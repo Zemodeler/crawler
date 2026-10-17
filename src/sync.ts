@@ -23,7 +23,9 @@ import { once } from "node:events";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines } from "./deadlines.ts";
 import { toIcs } from "./ics.ts";
-import { placeCourse } from "./naming.ts";
+import { selectForumPosts } from "./forum.ts";
+import type { ForumHighlight } from "./forum.ts";
+import { placeCourse, sanitizeSegment } from "./naming.ts";
 import { eventsFromDiff, filesSummary } from "./notifications.ts";
 import type { NotificationEvent } from "./notifications.ts";
 import { mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
@@ -88,6 +90,8 @@ export type CourseReport = {
   error?: string;
   files: Record<FileResult, number> & { videosSkipped: number };
   deadlines: number;
+  /** Forum posts kept after the relevance filter (see forum.ts). */
+  forumPosts?: number;
   /** Counts from the text step; absent when it did not run. */
   text?: TextCounts;
   /** Set when the text step failed; the VLE deadlines were kept. */
@@ -181,11 +185,16 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
 
     emit({ type: "course-start", course: course.shortname, folder: report.folder });
     try {
-      const items = await adapter.listItems(credentials, course);
+      const listed = await adapter.listItems(credentials, course);
+      const label = placement.code ?? course.shortname;
+      // Every forum was read; only the relevant posts go on, the rest is thrown away here.
+      const forum = selectForumPosts(listed);
+      const items = forum.items;
+      await writeForumHighlights(root, placement, forum.highlights);
       const plan = planFiles(items, placement);
       report.files.videosSkipped = plan.skipped.length;
+      report.forumPosts = forum.highlights.length;
 
-      const label = placement.code ?? course.shortname;
       const added: { name: string; category: string }[] = [];
       await runPool(plan.jobs, concurrency, async (job) => {
         const result = await syncFile({ adapter, credentials, root, course, job, manifest, now });
@@ -238,7 +247,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
           report.text = found.counts;
           const current = new Set(plan.jobs.map((job) => job.file.url));
           for (const item of items) {
-            if (item.kind === "announcement" || item.kind === "assignment") current.add(item.url);
+            if (item.kind === "announcement" || item.kind === "assignment" || item.kind === "forum-post") current.add(item.url);
             else if (item.kind === "page") current.add(item.activityUrl);
           }
           textRefresh.set(`${placement.year}|${label}`, { rule: new Set(found.refreshed.ruleUrls), ai: new Set(found.refreshed.aiUrls), current });
@@ -535,6 +544,13 @@ async function writeText(path: string, text: string): Promise<void> {
 }
 
 const writeJson = (path: string, value: unknown) => writeText(path, `${JSON.stringify(value, null, 2)}\n`);
+
+/** The kept forum posts of one module, replacing last sync's; none kept removes the file. */
+async function writeForumHighlights(root: string, placement: ModulePlacement, highlights: ForumHighlight[]): Promise<void> {
+  const path = join(root, STATE_DIR, "forum", `${sanitizeSegment(placement.year)}__${sanitizeSegment(placement.folder)}.json`);
+  if (highlights.length === 0) await rm(path, { force: true });
+  else await writeJson(path, highlights);
+}
 
 async function clearTmp(root: string): Promise<void> {
   await rm(join(root, STATE_DIR, "tmp"), { recursive: true, force: true });

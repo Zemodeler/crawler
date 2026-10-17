@@ -26,4 +26,5 @@ export * from "./gcal/sync.ts";
 export * from "./calendar-run.ts";
 export * from "./pipeline.ts";
 export * from "./transcripts.ts";
+export * from "./forum.ts";
 export * from "./adapters/echo360.ts";
