@@ -12,7 +12,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /* ------------------------------------------------------------- config */
 
-type TermConfig = { termStart: string; readingWeeks: number[] };
+type TermConfig = { termStart: string; readingWeeks: number[]; weeks: number };
 
 /**
  * Term starts per university and term label ("2026-27 Semester A").
@@ -24,14 +24,17 @@ type TermConfig = { termStart: string; readingWeeks: number[] };
  * of its week numbering; QM numbers its reading week (week 7 is reading week,
  * teaching resumes in week 8), so nothing is skipped there.
  *
- * QM 2026-27 rows are provisional: QM had not published 2026-27 dates when
- * they were written. Semester A matches QMplus course start dates
- * (21 Sep 2026); Semester B follows the usual late-January start.
+ * `weeks` is how many numbered weeks the term has (reading week included).
+ *
+ * QM 2026-27 Semester A is confirmed: teaching began on Tuesday 22 Sep 2026,
+ * so week 1 is the week of Monday 21 Sep, which QMplus section names agree
+ * with ("Assessment 1 - Week 11: Monday 30/11/2026"). Semester B is still
+ * provisional and follows the usual late-January start.
  */
 export const TERM_WEEKS: Record<string, Record<string, TermConfig>> = {
   qmul: {
-    "2026-27 Semester A": { termStart: "2026-09-21", readingWeeks: [] },
-    "2026-27 Semester B": { termStart: "2027-01-25", readingWeeks: [] },
+    "2026-27 Semester A": { termStart: "2026-09-21", readingWeeks: [], weeks: 12 },
+    "2026-27 Semester B": { termStart: "2027-01-25", readingWeeks: [], weeks: 12 },
   },
 };
 
@@ -40,6 +43,32 @@ export function weekMapFor(universityId: string, termLabel: string): TermWeekMap
   const term = TERM_WEEKS[universityId]?.[termLabel];
   if (!term) return null;
   return { termStart: term.termStart, readingWeeks: [...term.readingWeeks], source: { kind: "config" } };
+}
+
+/** The teaching week a moment falls in, e.g. { term: "2026-27 Semester A", week: 4 }. */
+export type TeachingWeek = { term: string; week: number; monday: string };
+
+/**
+ * Which teaching week `at` falls in, read in London time. Null outside every
+ * configured term, during a reading week the university leaves unnumbered, or
+ * for a university with no calendar.
+ */
+export function teachingWeekAt(universityId: string, at: Date | number): TeachingWeek | null {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(at))
+    .split("-")
+    .map(Number);
+  const day = Date.UTC(parts[0]!, parts[1]! - 1, parts[2]!);
+  for (const [term, config] of Object.entries(TERM_WEEKS[universityId] ?? {})) {
+    const start = Date.parse(`${config.termStart}T00:00:00Z`);
+    const calendarWeek = Math.floor((day - start) / (7 * DAY_MS)) + 1;
+    if (calendarWeek < 1 || config.readingWeeks.includes(calendarWeek)) continue;
+    const week = calendarWeek - config.readingWeeks.filter((w) => w < calendarWeek).length;
+    if (week > config.weeks) continue;
+    const monday = new Date(start + (calendarWeek - 1) * 7 * DAY_MS).toISOString().slice(0, 10);
+    return { term, week, monday };
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------- London time */

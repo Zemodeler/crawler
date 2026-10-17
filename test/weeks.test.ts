@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { TermWeekMap } from "../src/extraction-types.ts";
-import { resolveWeek, weekMapFor, weekMapFromQuote } from "../src/weeks.ts";
+import { resolveWeek, teachingWeekAt, weekMapFor, weekMapFromQuote } from "../src/weeks.ts";
 
 const semA = weekMapFor("qmul", "2026-27 Semester A")!;
 const semB = weekMapFor("qmul", "2026-27 Semester B")!;
@@ -81,4 +81,18 @@ test("weekMapFromQuote needs a year and a week-1 statement", () => {
   assert.equal(weekMapFromQuote("Week 1 lecture: 21 September 2026", "u"), null);
   assert.equal(weekMapFromQuote("Week 3 begins 5 October 2026", "u"), null);
   assert.equal(weekMapFromQuote("Week 1 starts 31 September 2026", "u"), null);
+});
+
+test("teachingWeekAt: teaching began Tue 22 Sep 2026, so that week is week 1", () => {
+  const week = (iso: string) => teachingWeekAt("qmul", new Date(iso));
+  assert.deepEqual(week("2026-09-22T09:00:00Z"), { term: "2026-27 Semester A", week: 1, monday: "2026-09-21" });
+  assert.equal(week("2026-09-21T00:30:00+01:00")?.week, 1); // Monday just after London midnight
+  assert.equal(week("2026-09-20T22:59:00Z"), null); // Sunday 23:59 in London, before term
+  assert.equal(week("2026-09-27T22:30:00Z")?.week, 1); // Sunday 23:30 in London
+  assert.equal(week("2026-10-17T12:00:00Z")?.week, 4);
+  assert.equal(week("2026-11-02T12:00:00Z")?.week, 7); // QM numbers its reading week
+  assert.deepEqual(week("2026-12-07T12:00:00Z"), { term: "2026-27 Semester A", week: 12, monday: "2026-12-07" });
+  assert.equal(week("2026-12-14T12:00:00Z"), null); // after the last teaching week
+  assert.deepEqual(week("2027-01-26T12:00:00Z"), { term: "2026-27 Semester B", week: 1, monday: "2027-01-25" });
+  assert.equal(teachingWeekAt("surrey", new Date("2026-10-17T12:00:00Z")), null);
 });

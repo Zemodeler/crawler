@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { teachingWeekAt, type TeachingWeek } from "crawler/weeks";
+
 import {
   libraryUrl,
   moduleCode,
@@ -89,6 +91,21 @@ export function ModuleDot({ modules, code }: { modules: string[]; code: string }
   return <span className="module-dot" style={{ background: moduleColor(modules, folder) }} aria-hidden="true" />;
 }
 
+/**
+ * The teaching week `at` falls in. Deadline ids start with the university they
+ * came from ("qmul:…"), which picks the term calendar.
+ */
+export function teachingWeek(deadlines: Deadline[], at: Date | number): TeachingWeek | null {
+  for (const university of new Set(deadlines.map((d) => d.id.split(":")[0]))) {
+    const week = teachingWeekAt(university, at);
+    if (week) return week;
+  }
+  return null;
+}
+
+/** "Teaching week 4 · Semester A". */
+export const weekLabel = (week: TeachingWeek) => `Teaching week ${week.week} · ${week.term.replace(/^\S+\s+/, "")}`;
+
 /** Overview tile: what is due in the next week across this year's modules. */
 export function NextSevenDays({
   deadlines,
@@ -114,12 +131,13 @@ export function NextSevenDays({
     })
     .sort((a, b) => placeDate(a)!.getTime() - placeDate(b)!.getTime());
   const unsure = deadlines.filter((d) => codes.has(d.module) && needsAttention(d)).length;
+  const thisWeek = now ? teachingWeek(deadlines, now) : null;
 
   return (
     <section className="panel next-week">
       <div className="section-title">
         <div>
-          <p className="eyebrow">Deadlines</p>
+          <p className="eyebrow">Deadlines{thisWeek ? ` · ${weekLabel(thisWeek)}` : ""}</p>
           <h3>Next 7 days</h3>
         </div>
         <a className="text-link" href="/calendar">Open calendar →</a>

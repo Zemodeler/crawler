@@ -13,6 +13,8 @@ import {
   dueDate,
   latestDate,
   placeDate,
+  teachingWeek,
+  weekLabel,
   weekOnly,
   formatDue,
 } from "./deadline-ui.tsx";
@@ -133,6 +135,10 @@ export default function CalendarPage() {
     const today = new Date();
     setMonth(new Date(today.getFullYear(), today.getMonth(), 1));
   };
+  const thisWeek = now ? teachingWeek(deadlines, now) : null;
+  /** "Wk 4" on the Monday of each teaching week. */
+  const weekTag = (day: Date) =>
+    day.getDay() === 1 ? teachingWeek(deadlines, new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12)) : null;
   const shiftMonth = (by: number) => setMonth((m) => new Date(m.getFullYear(), m.getMonth() + by, 1));
 
   return (
@@ -140,7 +146,7 @@ export default function CalendarPage() {
       <header className="topbar">
         <button className="back-link" onClick={() => window.location.assign("/")}>← Study Hub</button>
         <div>
-          <p className="eyebrow">This year</p>
+          <p className="eyebrow">This year{thisWeek ? ` · ${weekLabel(thisWeek)}` : ""}</p>
           <h2>Calendar</h2>
         </div>
         {state === "ready" && (
@@ -228,7 +234,12 @@ export default function CalendarPage() {
                         role="gridcell"
                         className={`day${day.getMonth() === month.getMonth() ? "" : " other"}${key === todayKey ? " today" : ""}${day.getDay() === 0 || day.getDay() === 6 ? " weekend" : ""}`}
                       >
-                        <span className="day-number">{day.getDate()}</span>
+                        <span className="day-head">
+                          <span className="day-number">{day.getDate()}</span>
+                          {weekTag(day) && (
+                            <span className="week-tag" title={weekLabel(weekTag(day)!)}>Wk {weekTag(day)!.week}</span>
+                          )}
+                        </span>
                         {items.map((d) => (
                           <button
                             key={d.id}

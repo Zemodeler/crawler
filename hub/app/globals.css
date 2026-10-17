@@ -179,6 +179,8 @@ a.sync-button{display:block;color:inherit;text-decoration:none;border-radius:9px
 .day.today{box-shadow:none;border:0}
 .day-number{font-size:12px;font-weight:700;align-self:flex-start;min-width:24px;height:24px;display:grid;place-items:center;border-radius:50%}
 .day.today .day-number{background:var(--teal);color:white}
+.day-head{display:flex;align-items:center;justify-content:space-between;gap:4px;align-self:stretch}
+.week-tag{font-size:10.5px;font-weight:700;letter-spacing:.02em;color:var(--teal);background:#e4f0ec;border-radius:999px;padding:2px 7px;white-space:nowrap}
 .chip{display:grid;gap:1px;padding:4px 6px;border-left:3px solid var(--teal);background:#eef4f1;border-radius:6px;white-space:normal}
 .chip:hover,.chip.selected{background:#dfeee8}
 .chip-needs-check,.chip-tbc{border-left-color:#c98a00;background:#fbf3df}
