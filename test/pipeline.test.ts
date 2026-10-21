@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines, placeCourse, textDeadlines, titleOverlap, weekMapForCourse } from "../src/index.ts";
-import { mergeSameWeek, placeInWeek, termFromText, weekRefs } from "../src/pipeline.ts";
+import { foldIntoDated, mergeSameWeek, placeInWeek, termFromText, weekRefs } from "../src/pipeline.ts";
 import { weekMapFor } from "../src/weeks.ts";
 import type { AiRunner, Course, Deadline, ManifestEntry, TextDeadlinesInput, VleItem } from "../src/index.ts";
 
@@ -179,6 +179,46 @@ test("same-week merging requires identity and preserves student choices and conf
   }
   assert.equal(mergeSameWeek([{ ...base, title: "Coursework 1" }, other({ title: "Coursework 2" })]).length, 2);
   assert.equal(mergeSameWeek([{ ...base, title: "Coursework 1 part 2" }, other({ title: "Coursework 1 part 3" })]).length, 2);
+});
+
+test("undated text folds into a uniquely named dated assessment without losing its source", () => {
+  const dated = deadlinesFromItems([assignment("Database design quiz 1 (20%)")], COURSE, PLACEMENT, NOW)[0]!;
+  const quote = { type: "announcement" as const, strength: "quoted" as const, url: `${SITE}/notice`, quote: "Database design quiz 1 is in person.", date: null, seenAt: NOW.toISOString() };
+  const undated: Deadline = {
+    id: "qmul:TST101U:text:quiz", module: dated.module, year: dated.year, title: "Database design quiz 1", kind: "quiz",
+    status: "tbc", due: null, weight: 20, sources: [quote], history: [],
+  };
+  for (const input of [[dated, undated], [undated, dated]]) {
+    const original = structuredClone(input);
+    const result = foldIntoDated(input);
+    assert.equal(result.length, 1);
+    assert.equal(result[0]!.id, dated.id);
+    assert.deepEqual(result[0]!.sources, [...dated.sources, quote]);
+    assert.deepEqual(input, original, "folding is pure");
+    assert.deepEqual(foldIntoDated(result), result, "repeating the fold changes nothing");
+  }
+});
+
+test("undated text remains separate when identity is generic, ambiguous or conflicts", () => {
+  const first = deadlinesFromItems([assignment("Database design quiz 1 (20%)")], COURSE, PLACEMENT, NOW)[0]!;
+  const second: Deadline = { ...first, id: "another:dated", title: "Database design quiz 1 resit" };
+  const text: Deadline = {
+    id: "qmul:TST101U:text:quiz", module: first.module, year: first.year, title: "Database design quiz 1", kind: "quiz",
+    status: "tbc", due: null, weight: 20, sources: [], history: [],
+  };
+  const separate = (candidate: Deadline, dated = [first]) => {
+    const input = [...dated, candidate];
+    assert.deepEqual(foldIntoDated(input), input);
+  };
+  separate(text, [first, second]);
+  separate({ ...text, title: "Quiz" });
+  separate({ ...text, weight: 30 });
+  separate({ ...text, title: "Database design quiz 2" });
+  separate({ ...text, formative: true });
+  separate({ ...text, module: "OTHER101" });
+  for (const extra of [{ status: "user-verified" as const }, { userNote: "" }, { done: false }, { done: true }]) {
+    separate({ ...text, ...extra });
+  }
 });
 
 test("a named assessment cannot attach to a different numbered VLE assessment on the same day", async () => {
