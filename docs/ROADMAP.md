@@ -32,6 +32,13 @@ files leaking into lint; dedicated follow-ups fixed these without weakening
 production validation. Independent review is still outstanding. Harbor has no
 configured checks; the full checks above were run directly by the lead.
 
+Live QMUL validation also passed on Windows using the existing saved sign-in
+and a new ignored test library: 21 deadlines and 18 lecture transcripts were
+saved. A second sync exited successfully with the same 18 transcripts and zero
+changed transcript hashes. Four deadlines remained `needs-check`. No AI was
+requested and the student's normal library was not used. Private output stays
+under ignored `out/live-qmul-f8c2b14*` paths.
+
 Work in the order below. Each stage needs its acceptance checks and review
 before it is considered complete. A blocked live integration does not block
 independent local fixes. Do not merge, publish, or choose a license merely to
@@ -106,10 +113,11 @@ calendar-day arithmetic handles clock changes. Tests cover these cases and
 conflicting evidence. Existing dated records are not a wholesale migration:
 previously accepted AI dates may require a source refresh or student review.
 
-All 400 crawler tests and the root typecheck pass. The remaining broad
-dateless-to-dated folding heuristics from `8e5e417` have not been applied;
-they need separate negative tests and review. Independent review of the
-implemented changes is still outstanding.
+The combined candidate adds a narrower unique-identity fold for old dateless
+duplicates, plus quote-based repair of conclusively disproved automatic week
+dates before merging. Student-confirmed dates are protected. The broad heuristics
+from `8e5e417` were not copied wholesale. All 421 crawler tests pass; uncertain
+legacy evidence remains conservative and independent review is outstanding.
 
 - Compare commit `8e5e417` on
   `harbor/session-there-s-so-many-dates-to-b99848` with the current checkout.
@@ -198,7 +206,7 @@ Any accepted baseline exception needs a specific reason and tracked follow-up.
 | Surrey login and download | Authorized SurreyLearn account | Probe succeeds; sync and repeat sync return correct courses, files and deadlines; expired sessions recover |
 | Teaching calendars | Official university term calendars | Verify provisional QMUL Semester B and add sourced Surrey rows; missing/provisional dates remain explicit |
 | Google Calendar | Configured desktop OAuth client and authorized test account | Connect, create, update, preserve a student edit, disconnect and reconnect without touching unrelated events |
-| Echo360 | Authorized QMUL module with captions | Full sync saves captions; repeat sync is stable; absent captions and expired sessions are handled |
+| Echo360 | Existing authorized QMUL sign-in | Lead live sync saved 18 transcripts; repeat sync kept all 18 byte-identical. Broader no-caption/expired-session behavior has synthetic coverage only |
 | Scheduling and reminders | Desktop running across scheduled intervals | Due sync, reminder deduplication, sleep/wake and relaunch behave as documented |
 | macOS desktop | Mac launched from Finder | Sign-in, assistant discovery, tray/login behavior and sync pass outside a terminal environment |
 
