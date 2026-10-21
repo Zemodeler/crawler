@@ -15,8 +15,9 @@ for revision.
 
 Status: **early, not release-ready**. QMplus sync, the Study Hub desktop app
 in `hub/`, calendar integration, document deadline extraction and transcript
-sync are implemented. SurreyLearn has a CLI adapter and login probe; live
-verification and desktop university selection remain unfinished. See the
+sync are implemented. SurreyLearn has a CLI adapter and login probe; the combined
+repair branch adds desktop university selection, with Surrey labeled experimental.
+Live Surrey verification and signed releases remain outstanding. See the
 [repair plan and roadmap](docs/ROADMAP.md) for validation and release gaps.
 
 ## Try it (Windows, Node 22.18+)

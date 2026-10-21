@@ -11,26 +11,26 @@ This is the active repair backlog. The milestone notes below are historical
 records, including old branch names and past test results; their checkboxes
 do not establish the current checkout's release readiness.
 
-Storage changes, regression tests, `pnpm check`, and README corrections are
-present as uncommitted working-tree edits. Node access is now restored and
-dependencies were installed from frozen lockfiles. Local validation on Windows
-passed: 400 crawler tests, 112 Hub tests, both typechecks, Hub lint (no errors;
-one existing `openModule` hook-dependency warning), and the production build.
-The root combined command initially stopped on lint errors; those were fixed
-and the affected Hub checks were rerun successfully. Logs are in ignored
-`out/repair-check.log`, `out/repair-crawler-tests.log` and
-`out/repair-hub-check.log`, and `out/repair-week-extraction-check.log`. The
-latest combined check passed with 399 crawler tests; after adding one CLI
-diagnostics test the complete crawler suite passed again with 400 tests.
-Independent review,
-macOS and authenticated integration checks remain outstanding. Harbor has no
-configured checks; these results were run directly by the lead.
+Baseline fixes are committed at `f74584b`. The combined repair candidate is
+`f8c2b14`, containing all six implementation branches, sync wiring and two
+validation follow-ups. It is awaiting final review and merge into master.
 
-The requested Harbor storage reviewer was refused before execution because
-reviewer helpers require an implementer-helper dependency, and these edits
-were made by the lead. No independent reviewer ran or approved this batch.
-The lead reviewed the storage paths directly; filesystem failure-injection
-and multi-file partial-write behavior remain explicit follow-ups below.
+The lead validated a fresh, detached checkout with separate frozen installs:
+421 crawler tests passed at `f0e060d` (crawler source/tests are unchanged through
+`f8c2b14`); at `f8c2b14`, all 132 Hub tests passed with no skips, both typechecks
+passed, lint had no errors and one existing `openModule` hook warning, and the
+production build passed. The optional packaged smoke was enabled using a locally
+built unsigned Windows executable from `a5ddbda`; runtime source is unchanged
+in the later staging-tool fix. Its four packaging/update checks passed, including
+page serving and PDF extraction. No installer GUI or macOS validation is claimed.
+
+Ignored local evidence logs include `out/combined-f0e060d-check.log`,
+`out/combined-f8c2b14-hub-check.log`, `out/combined-a5ddbda-package.log` and
+`out/combined-a5ddbda-package-tests.log`. Initial combined validation found
+two incomplete/corrupt-state test boundary assumptions and generated staging
+files leaking into lint; dedicated follow-ups fixed these without weakening
+production validation. Independent review is still outstanding. Harbor has no
+configured checks; the full checks above were run directly by the lead.
 
 Work in the order below. Each stage needs its acceptance checks and review
 before it is considered complete. A blocked live integration does not block
@@ -54,7 +54,7 @@ clear a checklist.
 and regressions from the current changes are resolved. A denied executable is
 recorded as blocked verification, never a passing check.
 
-### 2. Finish deadline storage safety (P0, local regression checks passing; review pending)
+### 2. Finish deadline storage safety (P0, implemented and validated; review pending)
 
 **Scope:** `src/deadline-store.ts`, `src/sync.ts`, `hub/host/library.mjs`,
 and their storage, sync and host tests.
@@ -149,9 +149,16 @@ check remains outstanding.
 **Done when:** a broken document is visible in both CLI and desktop summaries,
 other courses continue, and tests prove failed reads retain prior evidence.
 
-### 5. Complete desktop university selection (P1, pending)
+### 5. Complete desktop university selection (P1, implemented and locally validated)
 
 **Scope:** setup preferences/API, welcome UI, adapter selection and setup tests.
+
+The combined candidate persists QMUL/Surrey selection, scopes credentials by
+site, rejects switching during sign-in/sync, and protects library ownership.
+Legacy unmarked QMUL libraries are preserved; ambiguous Surrey/mixed evidence
+is refused rather than silently adopted. Surrey is labeled experimental.
+Focused regressions and the integrated Hub suite pass. Live Surrey sign-in
+and visual desktop validation remain outstanding.
 
 - Persist the selected university, defaulting existing installations to QMUL.
   Use that selection for sign-in, status, manual and scheduled syncs.
@@ -199,7 +206,15 @@ Do not treat synthetic fixtures or historical spike results as these checks.
 Credentials and OAuth configuration stay outside the repository. These checks
 do not authorize publishing or redistributing course material.
 
-### 8. Prepare a distributable release (P2, pending)
+### 8. Prepare a distributable release (P2, unsigned Windows runtime verified)
+
+The combined candidate adds isolated Windows/macOS packaging commands,
+frozen-input build staging, no-publish defaults, contributor guidance and a
+manual update dialog. Generated release folders are excluded from source lint.
+The lead built an unsigned Windows unpacked app and verified pages/PDF parsing.
+NSIS install/upgrade/uninstall, macOS, signing/notarization, a trusted automatic
+update target and the owner's license choice are not verified or configured.
+Manual updates are deliberately offered until a release authority exists.
 
 - Add installer configuration and verify clean installation, upgrade and
   uninstall paths. Implement an update mechanism and test failure recovery.
