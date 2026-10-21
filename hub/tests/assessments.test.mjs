@@ -141,7 +141,7 @@ test("invalid deadline fields do not modify the file", async (t) => {
 
 test("done toggles persist for user and Crawler deadlines; only user deadlines may be removed", async (t) => {
   const root = await fixture(t);
-  const crawler = { id: "qmul:1", module: "ECS529U", year: "2026-27", title: "Project", status: "confirmed", due: null, sources: [], history: [] };
+  const crawler = { id: "qmul:1", module: "ECS529U", year: "2026-27", title: "Project", kind: "coursework", status: "confirmed", due: null, sources: [], history: [] };
   await writeFile(join(root, "Deadlines.json"), JSON.stringify([crawler]));
   const { deadline } = await addDeadline(root, input);
   for (const id of [crawler.id, deadline.id]) {

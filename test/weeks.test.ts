@@ -5,11 +5,12 @@ import type { TermWeekMap } from "../src/extraction-types.ts";
 import { resolveWeek, teachingWeekAt, weekMapFor, weekMapFromQuote } from "../src/weeks.ts";
 
 const semA = weekMapFor("qmul", "2026-27 Semester A")!;
-const semB = weekMapFor("qmul", "2026-27 Semester B")!;
 
-test("weekMapFor reads the configured QM terms", () => {
+test("weekMapFor reads the confirmed QM Semester A only", () => {
   assert.deepEqual(semA, { termStart: "2026-09-21", readingWeeks: [], source: { kind: "config" } });
-  assert.equal(semB.termStart, "2027-01-25");
+  assert.equal(weekMapFor("qmul", "2026-27 Semester B"), null);
+  assert.equal(weekMapFor("surrey", "2026-27 Semester 1"), null);
+  assert.equal(weekMapFor("surrey", "2026-27 Semester 2"), null);
   assert.equal(weekMapFor("qmul", "2031-32 Semester A"), null);
   assert.equal(weekMapFor("nowhere", "2026-27 Semester A"), null);
 });
@@ -41,8 +42,9 @@ test("resolveWeek honours the autumn clock change", () => {
 
 test("resolveWeek honours the spring clock change", () => {
   // Clocks go forward on Sun 28 Mar 2027.
-  assert.equal(resolveWeek(semB, 9, 1, "09:00").iso, "2027-03-22T09:00:00.000Z");
-  assert.equal(resolveWeek(semB, 10, 1, "09:00").iso, "2027-03-29T08:00:00.000Z");
+  const map: TermWeekMap = { termStart: "2027-01-25", readingWeeks: [], source: { kind: "config" } };
+  assert.equal(resolveWeek(map, 9, 1, "09:00").iso, "2027-03-22T09:00:00.000Z");
+  assert.equal(resolveWeek(map, 10, 1, "09:00").iso, "2027-03-29T08:00:00.000Z");
 });
 
 test("resolveWeek skips reading weeks left out of the numbering", () => {
@@ -93,6 +95,7 @@ test("teachingWeekAt: teaching began Tue 22 Sep 2026, so that week is week 1", (
   assert.equal(week("2026-11-02T12:00:00Z")?.week, 7); // QM numbers its reading week
   assert.deepEqual(week("2026-12-07T12:00:00Z"), { term: "2026-27 Semester A", week: 12, monday: "2026-12-07" });
   assert.equal(week("2026-12-14T12:00:00Z"), null); // after the last teaching week
-  assert.deepEqual(week("2027-01-26T12:00:00Z"), { term: "2026-27 Semester B", week: 1, monday: "2027-01-25" });
+  assert.equal(week("2027-01-26T12:00:00Z"), null); // Semester B numbering remains unverified
   assert.equal(teachingWeekAt("surrey", new Date("2026-10-17T12:00:00Z")), null);
+  assert.equal(teachingWeekAt("surrey", new Date("2027-02-08T12:00:00Z")), null);
 });

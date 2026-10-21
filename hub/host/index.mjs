@@ -379,7 +379,7 @@ function serveLibraryFile(request, response, url) {
  * First launch and syncing. Only the desktop shell can sign in (it owns the
  * windows), so it hands the host a `setup` object; a plain `node host` has none.
  */
-async function handleSetup(setup, request, response, url) {
+export async function handleSetup(setup, request, response, url) {
   if (!setup) {
     sendJson(response, 404, { code: "no_setup", message: "Signing in needs the Study Hub desktop app." });
     return;
@@ -393,6 +393,7 @@ async function handleSetup(setup, request, response, url) {
     return;
   }
   const action = {
+    "/api/setup/university": setup.selectUniversity,
     "/api/setup/sign-in": setup.signIn,
     "/api/setup/sync": setup.startSync,
     "/api/setup/schedule": setup.setSchedule,

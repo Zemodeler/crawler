@@ -3,7 +3,7 @@
 How Crawler and Study Hub ship as one app with no bridge, no pairing and no
 manual linking.
 
-## Today (Study Hub alone)
+## Historical starting point (Study Hub alone)
 
 ```
 Browser tab (Study Hub page, localhost:3000)
@@ -22,7 +22,7 @@ hand.
 
 ```
 Desktop shell (Electron, Windows + macOS)
-  ├─ tray / menu-bar icon, notifications, start at login, auto-update
+  ├─ tray / menu-bar icon, notifications, start at login, manual updates
   ├─ app window ── same origin ──▶ host
   ├─ login window (sandboxed session) ── only during VLE sign-in
   └─ runs ──▶ Study Hub Host  (Node, one process, 127.0.0.1)
@@ -70,9 +70,11 @@ through `/api/library/*` instead of File System Access. Side effects:
 `lib/course-fs.ts` already centralises folder access, so the change is a
 backend swap behind one interface, not a rewrite of the reader.
 
-## Repositories
+## Repository layout
 
-Two repos, one install.
+The original split below describes component ownership. This checkout now contains
+the engine at `src/`, desktop adapters at `bin/`, and Study Hub at `hub/`.
+The development dependency `crawler: link:..` is not a distributable package.
 
 | Repo | Contains | Runs standalone? |
 | --- | --- | --- |
@@ -98,10 +100,10 @@ interface AiRunner {
     "Open Study Hub", "Quit"; keeps running so scheduled re-sync can happen
   - native notifications (Windows toasts, macOS Notification Center)
   - optional start at login (`app.setLoginItemSettings`)
-  - single-instance lock and auto-update from GitHub Releases
+  - single-instance lock; manual update instructions (no trusted release feed configured)
   - first-run setup: finds `claude`/`codex`, walks the student through
     signing in to one if neither is ready, then signs in to the VLE
-- **Host** (Node): runs inside the shell as a utility process. Bundled Node, so
+- **Host** (Node): runs in the shell's main process. Bundled Node, so
   there's no separate "install Node" step any more.
 - **Login window**: an Electron window with its own isolated session, open only
   during VLE sign-in. It intercepts the `moodlemobile://` redirect directly
@@ -125,7 +127,7 @@ once. Tauri would be smaller, but it adds Rust to a TypeScript project.
 | Course files, deadlines, `.ics` | `Documents\My Studies` | `~/Documents/My Studies` | The folder contract — see 03. Changeable. |
 | Crawl manifest | `My Studies/.crawler/` | same | Hidden; Study Hub already skips dotfolders. |
 | VLE tokens, Google refresh token | encrypted with Electron `safeStorage` (DPAPI) | `safeStorage` (Keychain) | Never in the folder, never in logs. On Windows the key lives in `Local State` inside the app-data folder, so a token only decrypts there: **never change the app name or the data folder** without migrating both files. |
-| Settings, logs | `%APPDATA%\StudyHub` | `~/Library/Application Support/StudyHub` | Re-sync interval, calendar choice, enabled modules. |
+| Settings, logs | `%APPDATA%\Study Hub` | `~/Library/Application Support/Study Hub` | Electron `app.setName("Study Hub")`; preserve this identity during upgrades. |
 | Study progress | app window storage (IndexedDB) | same | Study Hub's existing model. |
 
 ## Cross-platform specifics
@@ -142,16 +144,57 @@ once. Tauri would be smaller, but it adds Rust to a TypeScript project.
 - **Opening a cited page.** `shell.openPath` for the file; PDFs cited by page
   open in the app's built-in viewer at `#page=N`, which behaves the same on both.
 - **Signing.**
-  - macOS: Gatekeeper blocks unsigned apps unless they're signed with an Apple
-    Developer ID and notarized ($99/year). **Deferred to M6.** Until then, builds
-    are unsigned, and the README tells Mac users to right-click → Open the first
-    time. Auto-update on macOS needs a signed app, so Mac friends update by
-    downloading the new `.dmg` until then.
-  - Windows: an unsigned installer triggers a SmartScreen warning. That's
-    survivable for friends, but worth fixing before a public release.
-- **CI** builds both: a Windows `.exe` installer and a macOS universal `.dmg`
-  (Apple Silicon + Intel), attached to each GitHub Release.
+  - macOS: local builds are unsigned and unnotarized, and Gatekeeper may block
+    them. Developer ID signing/notarization and real Mac validation remain
+    external release requirements; upgrades currently replace the app manually.
+  - Windows: unsigned installers may trigger SmartScreen. Signing remains an
+    external requirement for a public release.
+- **Local packaging** builds an unsigned Windows NSIS `.exe` or a native-architecture
+  macOS `.dmg` on the corresponding OS. There is no release CI, universal macOS
+  verification, publishing configuration, or trusted update feed in this work.
 - **Linux** works from source (`pnpm start`) but isn't a supported target.
+
+## Desktop release delivery (local unsigned path)
+
+`hub/build/desktop-release.mjs` creates a new workspace under `hub/outputs/`
+for each invocation. `--build` copies only source/build inputs and installs
+dependencies there with lifecycle scripts disabled; vinext never rebuilds the
+live `hub/dist`. The default without `--build` stages an already completed
+`hub/dist`. Failed and previous workspaces remain available for inspection.
+
+The staged application root is a `crawler` package with `main` pointing at
+`hub/shell/main.mjs`. There is deliberately no nested `hub/package.json`:
+shell imports of `crawler` and `crawler/electron` resolve by package
+self-reference. Host imports such as `../../src/deadline-store.ts` retain
+their relative topology. Runtime `.ts` files are transpiled to `.js`, with
+module specifiers and package exports rewritten; Electron does not need a
+TypeScript loader. PDF.js is copied as an external runtime package with its
+installed canvas dependency and target OS native binary; missing canvas fails
+staging. The vinext UI is already bundled.
+
+`hub/electron-builder.config.mjs` packages that root without ASAR so the
+existing host's build snapshot copy/import works on ordinary files. Generated
+`builder.json` and `release.json` record the inputs and configuration. Packaging
+uses electron-builder 26.15.3, Electron 44.7.2, publishing disabled and signing
+disabled. Windows produces a per-user NSIS installer; macOS produces a DMG
+for the machine's native architecture. Both require local target-OS checks.
+The staged package uses npm's read-only dependency listing for the flat copied
+runtime, avoiding pnpm workspace/linked dependency discovery during packaging;
+source dependencies are still installed only with pnpm in the isolated copy.
+
+There is no configured Git remote or trusted update authority. The Updates
+menu only shows local manual replacement/recovery instructions; it does not
+check, download, or install. A future updater requires an explicitly trusted
+HTTPS authority and artifact integrity policy, confirmation before download
+and installation, and interruption/rollback handling. None is inferred from
+the app name. Users must quit from the tray, retain the previous installer,
+and preserve `My Studies` and the `Study Hub` application data directory.
+
+See [CONTRIBUTING.md](../../CONTRIBUTING.md) for commands, unsigned installation
+limitations, manual recovery, and external release prerequisites. Signing,
+notarization, OAuth credentials, distribution licensing and a complete frozen
+dependency graph remain maintainer work. No public release or macOS validation
+is implied by a Windows packaging smoke check.
 
 ## Failure behaviour
 

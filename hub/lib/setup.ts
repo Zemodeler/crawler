@@ -52,6 +52,7 @@ export type CalendarStatus = {
 
 export type SetupStatus = {
   university: { id: string; name: string };
+  universities: { id: string; name: string; experimental: boolean }[];
   signedIn: boolean;
   signingIn: boolean;
   sync: SyncRun;
@@ -76,6 +77,7 @@ async function call<T>(path: string, method: "GET" | "POST" = "GET", payload?: o
 }
 
 export const setupStatus = () => call<SetupStatus>("/api/setup/status");
+export const selectUniversity = (university: string) => call<{ ok: true }>("/api/setup/university", "POST", { university });
 export const signIn = () => call<{ ok: true }>("/api/setup/sign-in", "POST");
 export const startSync = () => call<{ ok: true }>("/api/setup/sync", "POST", { assistant: chosenAssistant() });
 export const setSchedule = (everyDays: 1 | 3 | 7) => call<{ ok: true }>("/api/setup/schedule", "POST", { everyDays });
