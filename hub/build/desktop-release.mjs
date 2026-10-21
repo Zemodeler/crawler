@@ -98,6 +98,21 @@ function run(command, args, cwd, env = {}) {
   });
 }
 
+export async function buildSource({ root = ROOT, destination, runCommand = run }) {
+  // Refuse reuse, including a failed prior build, rather than overlaying inputs.
+  await mkdir(destination);
+  await mkdir(join(destination, "hub"));
+  for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "src", "bin"])
+    await cp(join(root, name), join(destination, name), { recursive: true });
+  for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "app", "lib", "public", "worker", "build", "vite.config.ts", "postcss.config.mjs", "tsconfig.json", "next.config.ts", "next-env.d.ts"])
+    await cp(join(root, "hub", name), join(destination, "hub", name), { recursive: true });
+  // Both packages have independent lockfiles. Never install into the linked checkout.
+  for (const cwd of [destination, join(destination, "hub")])
+    await runCommand("corepack", ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], cwd);
+  await runCommand("corepack", ["pnpm", "build"], join(destination, "hub"));
+  return join(destination, "hub/dist");
+}
+
 export async function release(args = process.argv.slice(2)) {
   const platform = args.includes("--mac") ? "mac" : "win";
   if (args.some((arg) => !["--mac", "--win", "--dir", "--stage-only", "--build"].includes(arg) && !arg.startsWith("--dist=")))
@@ -113,16 +128,7 @@ export async function release(args = process.argv.slice(2)) {
   console.log(`Release workspace: ${work}`);
   let dist = distArg ? resolve(distArg.slice(7)) : join(ROOT, "hub/dist");
   if (args.includes("--build")) {
-    const source = join(work, "source");
-    await mkdir(join(source, "hub"), { recursive: true });
-    for (const name of ["package.json", "src", "bin"])
-      await cp(join(ROOT, name), join(source, name), { recursive: true });
-    for (const name of ["package.json", "app", "lib", "public", "worker", "build", "vite.config.ts", "postcss.config.mjs", "tsconfig.json", "next.config.ts", "next-env.d.ts"])
-      await cp(join(ROOT, "hub", name), join(source, "hub", name), { recursive: true });
-    // Installation happens only in this newly created source copy, never the linked checkout.
-    await run("corepack", ["pnpm", "install", "--ignore-scripts"], join(source, "hub"));
-    await run("corepack", ["pnpm", "build"], join(source, "hub"));
-    dist = join(source, "hub/dist");
+    dist = await buildSource({ destination: join(work, "source") });
   }
   const stage = join(work, "app");
   await stageRuntime({ destination: stage, dist });

@@ -4,8 +4,52 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { stageRuntime } from "../build/desktop-release.mjs";
+import { buildSource, stageRuntime } from "../build/desktop-release.mjs";
+import { ESLint } from "eslint";
 import config from "../electron-builder.config.mjs";
+
+const root = fileURLToPath(new URL("../../", import.meta.url));
+
+test("ESLint ignores generated release trees while including application source", async () => {
+  const eslint = new ESLint({ cwd: join(root, "hub") });
+  for (const path of ["outputs/desktop-test-example/app/src/sync.js", "outputs/desktop-release-example/source/hub/app/page.tsx"])
+    assert.equal(await eslint.isPathIgnored(join(root, "hub", path)), true, path);
+  for (const path of ["app/welcome/page.tsx", "host/index.mjs", "shell/main.mjs", "lib/setup.ts"])
+    assert.equal(await eslint.isPathIgnored(join(root, "hub", path)), false, path);
+});
+
+test("isolated builds preserve both locked inputs and install frozen before building", async () => {
+  const outputs = join(root, "hub/outputs");
+  await mkdir(outputs, { recursive: true });
+  const work = await mkdtemp(join(outputs, "desktop-test-locks-"));
+  const destination = join(work, "source");
+  const inputs = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "hub/package.json", "hub/pnpm-lock.yaml", "hub/pnpm-workspace.yaml"];
+  const original = await Promise.all(inputs.map((name) => readFile(join(root, name))));
+  const calls = [];
+  const runCommand = async (command, args, cwd) => {
+    for (const [index, name] of inputs.entries())
+      assert.deepEqual(await readFile(join(destination, name)), original[index], name);
+    await assert.rejects(access(join(destination, "node_modules")));
+    await assert.rejects(access(join(destination, "hub/node_modules")));
+    calls.push({ command, args, cwd });
+  };
+  assert.equal(await buildSource({ destination, runCommand }), join(destination, "hub/dist"));
+  assert.deepEqual(calls, [
+    { command: "corepack", args: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], cwd: destination },
+    { command: "corepack", args: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], cwd: join(destination, "hub") },
+    { command: "corepack", args: ["pnpm", "build"], cwd: join(destination, "hub") },
+  ]);
+  await assert.rejects(buildSource({ destination, runCommand }), { code: "EEXIST" });
+  assert.equal(calls.length, 3);
+  let attempts = 0;
+  await assert.rejects(buildSource({ destination: join(work, "failed"), runCommand: async () => {
+    attempts++;
+    throw new Error("frozen install rejected");
+  } }), /frozen install rejected/);
+  assert.equal(attempts, 1, "a failed install must stop before further installs or build");
+  for (const [index, name] of inputs.entries())
+    assert.deepEqual(await readFile(join(root, name)), original[index], name);
+});
 
 test("staging retains direct src imports and crawler self-reference without modifying its input", async () => {
   const outputs = fileURLToPath(new URL("../outputs/", import.meta.url));
