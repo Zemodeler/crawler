@@ -17,7 +17,11 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "host": "node host/index.mjs",
     "app": "electron shell/main.mjs",
-    "app:selftest": "electron shell/main.mjs --selftest"
+    "app:selftest": "electron shell/main.mjs --selftest",
+    "desktop:stage": "node build/desktop-release.mjs --stage-only",
+    "desktop:win": "node build/desktop-release.mjs --win --build",
+    "desktop:mac": "node build/desktop-release.mjs --mac --build",
+    "desktop:test": "node --test tests/desktop-release.test.mjs tests/updates.test.mjs"
   },
   "dependencies": {
     "crawler": "link:..",

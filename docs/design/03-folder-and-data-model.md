@@ -182,3 +182,23 @@ Every sync appends to `history` and to `Changes.md`:
   (announcement "CW2 extension", https://qmplus…/discuss.php?d=…)
 - ECS414U · 6 new files in Lectures/
 ```
+
+## Library account ownership
+
+CLI and direct engine syncs validate `.crawler/university.json` inside the full-sync
+lock before downloads, temporary-file cleanup, manifest or deadline changes. Desktop
+sign-in uses the same policy and lock before replacing saved credentials. Version 2
+binds the university ID, canonical VLE base URL and a SHA-256 fingerprint of the
+validated `whoAmI` numeric user ID scoped to that university and site. It contains
+no tokens or cookies; diagnostics omit account IDs and fingerprints. Token renewal
+for the same account preserves ownership. Locks are never stolen based on age.
+
+Only a fresh library can be claimed. Schedule/reminder metadata alone does not
+establish course data. Malformed ownership markers fail closed. Unmarked populated
+libraries and the old version 1 university-only markers have unknown account
+ownership and cannot be adopted automatically, including by the same university.
+Back up the old library and sync the verified account into a separate empty folder;
+retain the old library for reference and manually copy personal notes as needed.
+There is no verified in-place adoption workflow in this release. Do not remove a
+marker to migrate ownership. A rejection preserves existing course data and saved
+desktop credentials.

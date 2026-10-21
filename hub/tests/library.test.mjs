@@ -22,8 +22,8 @@ function fixture() {
         id: "d1", module: "ECS505U", year: "2026-27", title: "Coursework 1", kind: "coursework", status: "conflict",
         due: { iso: "2026-11-07T16:00:00", allDay: false, tz: "Europe/London" },
         sources: [
-          { type: "vle-field", strength: "structured", url: "https://example.org/a", quote: "Due 7 Nov", date: { iso: "2026-11-07T16:00:00", allDay: false, tz: "Europe/London" } },
-          { type: "document", strength: "quoted", url: "", localPath: "2026-27/ECS505U - Software Engineering/Course Materials/Week 1.pdf", page: 4, quote: "Due 14 November", date: { iso: "2026-11-14", allDay: true, tz: "Europe/London" } },
+          { type: "vle-field", strength: "structured", seenAt: "2026-10-16T09:00:00Z", url: "https://example.org/a", quote: "Due 7 Nov", date: { iso: "2026-11-07T16:00:00", allDay: false, tz: "Europe/London" } },
+          { type: "document", strength: "quoted", seenAt: "2026-10-16T09:00:00Z", url: "", localPath: "2026-27/ECS505U - Software Engineering/Course Materials/Week 1.pdf", page: 4, quote: "Due 14 November", date: { iso: "2026-11-14", allDay: true, tz: "Europe/London" } },
         ],
         history: [],
       },

@@ -426,6 +426,30 @@ function addSource(sources: Source[], source: Source): Source[] {
   return sources.some((s) => sameSource(s, source)) ? sources : [...sources, source];
 }
 
+/** Fold an unreviewed, undated text record into its one specifically named dated assessment. */
+export function foldIntoDated(deadlines: Deadline[]): Deadline[] {
+  const foldable = (d: Deadline) => d.id.includes(":text:") && d.due === null && d.status === "tbc" && d.done === undefined && d.userNote === undefined;
+  const dated = deadlines.filter((d) => d.due !== null && (d.status === "confirmed" || d.status === "conflict" || d.status === "user-verified"));
+  const additions = new Map<string, Source[]>();
+  const folded = new Set<Deadline>();
+  for (const text of deadlines) {
+    if (!foldable(text)) continue;
+    const matches = dated.filter((d) =>
+      d.year === text.year && d.module === text.module &&
+      assessmentCompatible(text, d, true) && sameAssessmentTitle(text.title, d.title) &&
+      (text.kind === d.kind || text.kind === "other" || d.kind === "other" || !genericTitle(text.title)),
+    );
+    if (matches.length !== 1) continue;
+    const target = matches[0]!;
+    additions.set(target.id, text.sources.reduce(addSource, additions.get(target.id) ?? target.sources));
+    folded.add(text);
+  }
+  return deadlines.filter((d) => !folded.has(d)).map((d) => {
+    const sources = additions.get(d.id);
+    return sources ? { ...d, sources } : d;
+  });
+}
+
 /* ------------------------------------------------------------- AI hashes and rejected.json */
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
@@ -633,5 +657,5 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
 
   const out = [...vle.map((d, i) => (touched.has(i) ? placeInWeek(detectConflict(d), map) : d)), ...[...fresh.values()].map(detectConflict)];
   if (updatedHashes) await writeJson(updatedHashes.path, updatedHashes.hashes);
-  return { deadlines: out, counts, refreshed, weekMap: map, issues: documents.issues };
+  return { deadlines: foldIntoDated(out), counts, refreshed, weekMap: map, issues: documents.issues };
 }

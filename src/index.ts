@@ -29,3 +29,4 @@ export * from "./pipeline.ts";
 export * from "./transcripts.ts";
 export * from "./forum.ts";
 export * from "./adapters/echo360.ts";
+export * from "./library-owner.ts";

@@ -28,13 +28,13 @@ type TermConfig = { termStart: string; readingWeeks: number[]; weeks: number };
  *
  * QM 2026-27 Semester A is confirmed: teaching began on Tuesday 22 Sep 2026,
  * so week 1 is the week of Monday 21 Sep, which QMplus section names agree
- * with ("Assessment 1 - Week 11: Monday 30/11/2026"). Semester B is still
- * provisional and follows the usual late-January start.
+ * with ("Assessment 1 - Week 11: Monday 30/11/2026"). Its numbered week 7
+ * is a reading week, so it remains in the map. Semester B and Surrey 2026-27
+ * have published term dates but no verified module week-number maps; see 02.
  */
 export const TERM_WEEKS: Record<string, Record<string, TermConfig>> = {
   qmul: {
     "2026-27 Semester A": { termStart: "2026-09-21", readingWeeks: [], weeks: 12 },
-    "2026-27 Semester B": { termStart: "2027-01-25", readingWeeks: [], weeks: 12 },
   },
 };
 

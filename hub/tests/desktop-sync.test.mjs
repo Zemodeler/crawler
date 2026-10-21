@@ -14,9 +14,9 @@ const syncResult = { courses: [], deadlines: [], notifications: [] };
 async function setupSync(t, dependencies) {
   const root = await mkdtemp(join(tmpdir(), "studyhub-setup-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  return createSetup({ app: { getPath: () => root }, libraryRoot: () => root }, {
-    adapter: { site: "https://vle.example" },
-    tokens: { load: async () => ({ token: "fixture" }) },
+  return createSetup({ app: { getPath: () => join(root, "app") }, libraryRoot: () => join(root, "library") }, {
+    adapter: { id: "qmul", site: "https://vle.example", whoAmI: async () => ({ userId: 1, permittedFunctions: [] }) },
+    tokens: { load: async () => ({ site: "https://vle.example", token: "fixture" }) },
     calendarTokens: { load: async () => null },
     sync: async () => syncResult,
     ...dependencies,
@@ -29,7 +29,7 @@ test("a credential-load failure releases the sync claim so the next sync can sta
   const setup = await setupSync(t, {
     tokens: { load: async () => {
       if (++loads === 1) throw new Error("Credential store unavailable");
-      return { token: "fixture" };
+      return { site: "https://vle.example", token: "fixture" };
     } },
     sync: async () => { starts++; return syncResult; },
   });
@@ -133,7 +133,7 @@ test("a due sync starts on catch-up, and a fresh one does not", async () => {
     await background.maybeSync(new Date("2026-10-16T09:00:00Z"));
     assert.deepEqual(started, ["first"]);
     await mkdir(join(root, ".crawler"), { recursive: true });
-    await writeFile(join(root, ".crawler", "state.json"), JSON.stringify({ lastSync: "2026-10-15T09:00:00Z" }));
+    await writeFile(join(root, ".crawler", "state.json"), JSON.stringify({ version: 1, lastSync: "2026-10-15T09:00:00Z", courses: {} }));
     await background.maybeSync(new Date("2026-10-16T09:00:00Z"));
     assert.deepEqual(started, ["first"]);
     await background.maybeSync(new Date("2026-10-19T12:00:00Z"));

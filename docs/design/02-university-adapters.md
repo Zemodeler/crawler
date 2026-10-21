@@ -190,13 +190,51 @@ unix seconds the rest of Crawler uses.
 
 ### Not yet known
 
-- Course naming and start/end dates at Surrey (needed for year placement and
-  the week map in `src/weeks.ts`, where `surrey` has no semester yet).
+- Course naming and module start/end dates at Surrey (needed for year placement).
+  The published semester dates do not establish module week numbering; see below.
 - Surrey's lecture capture (likely Panopto, not Echo360), so transcripts need
   their own spike.
 - Item ids are still `moodle:`-prefixed in `src/sorter.ts`, `src/pipeline.ts`
   and `src/deadlines.ts`; they should become platform-neutral before Surrey
   ships.
+
+## Teaching-week maps (checked 2026-10-21)
+
+`src/weeks.ts` maps a module's **numbered week** to a Monday. A term or semester
+boundary alone does not say whether a module numbers a study or vacation week,
+or how many numbered weeks it has. `readingWeeks` means calendar weeks omitted
+from the numbering; a numbered reading week must not appear in that list.
+
+- **QMUL 2026-27 Semester A:** keep the previously confirmed map: week 1 is
+  Monday 21 September 2026, 12 numbered weeks, and reading week 7 (2 November)
+  is still numbered. The existing QMplus observation "Assessment 1 - Week 11:
+  Monday 30/11/2026" corroborates the numbering. QM's [central calendar](https://www.qmul.ac.uk/about/calendar/)
+  gives teaching as 21 September–11 December but calls its 2026-27 dates
+  provisional. School teaching dates can differ: the [School of Law year
+  planner](https://www.qmul.ac.uk/law/postgraduate/programmes/llm-dip-year-planner-sept/)
+  begins teaching on 28 September and has a study week on 2–6 November.
+- **QMUL 2026-27 Semester B:** the [central calendar](https://www.qmul.ac.uk/about/calendar/)
+  gives 25 January–16 April 2027, provisionally. The [School of Economics and
+  Finance timeline](https://www.qmul.ac.uk/sef/postgraduate/msc/academic-year-timeline/)
+  calls 8–12 March a reading week, while the [School of Law year
+  planner](https://www.qmul.ac.uk/law/postgraduate/programmes/llm-dip-year-planner-sept/)
+  has a no-teaching study week on 1–5 March and ends teaching on 9 April.
+  Neither source establishes a common numbered week map, or whether the break
+  is included in module numbering. The former provisional Semester B row was
+  removed: `weekMapFor` and `teachingWeekAt` return `null` until a module's
+  numbered sections or an explicit week-1 source verifies it.
+- **Surrey 2026-27:** [university key dates](https://www.surrey.ac.uk/about/facts/key-dates)
+  put semester one at 28 September–29 January (including winter vacation,
+  revision and exams), and semester two at 8 February–11 June (including spring
+  vacation and exams). [Visiting-student dates](https://www.surrey.ac.uk/incoming-exchange-study-abroad-and-traineeships/key-dates)
+  identify teaching as 28 September–11 December and 8 February–14 May,
+  interrupted by spring vacation 20 March–11 April. The university's [scheduling
+  code](https://www.surrey.ac.uk/sites/default/files/2023-06/code-of-practice-scheduling-teaching-assessment.pdf)
+  describes a *normal* pattern of teaching in semester weeks 1–11 and a
+  semester-one week-15 reading week; it is not a 2026-27 module week map.
+  Programme exceptions are listed on the key-dates page. No Surrey row is
+  configured until its actual numbered module weeks and treatment of the
+  spring break are verified.
 
 ## Transcripts
 

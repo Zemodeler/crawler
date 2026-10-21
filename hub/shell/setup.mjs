@@ -17,7 +17,9 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
-  UNIVERSITIES,
+  ALL_UNIVERSITIES,
+  checkLibraryOwner,
+  withLibraryOwner,
   VleError,
   connectCalendar,
   describeFreshness,
@@ -40,8 +42,9 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   const tokens = dependencies.tokens ?? createTokenStore({ safeStorage, dir: join(userData, "tokens") });
   const calendarTokens = dependencies.calendarTokens ?? createCalendarTokenStore({ safeStorage, dir: join(userData, "tokens") });
   const loginBrowser = createLoginBrowser({ BrowserWindow, session, parent });
-  const university = UNIVERSITIES[0];
-  const adapter = dependencies.adapter ?? getUniversity(university.id);
+  const universities = ALL_UNIVERSITIES.filter((u) => ["qmul", "surrey"].includes(u.id));
+  const selected = () => universities.find((u) => u.id === prefs().university) ?? universities.find((u) => u.id === "qmul");
+  const adapterFor = (university) => dependencies.adapter ?? (dependencies.getUniversity ?? getUniversity)(university.id);
   const runSync = dependencies.sync ?? sync;
   const prefsFile = join(userData, "sync-prefs.json");
 
@@ -67,6 +70,24 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     writeFileSync(prefsFile, `${JSON.stringify({ ...prefs(), ...next }, null, 2)}\n`);
   }
 
+  function checkLibrary(university) {
+    return checkLibraryOwner(libraryRoot(), university.id, adapterFor(university).site);
+  }
+
+  async function selectUniversity(body = {}) {
+    if (signingIn || run.state === "running") return { error: "Wait for sign-in or sync to finish before switching university." };
+    const university = universities.find((u) => u.id === body.university);
+    if (!university) return { error: "Choose a supported university." };
+    try {
+      await checkLibrary(university);
+      savePrefs({ university: university.id });
+      run = emptyRun("idle");
+      return { ok: true };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
   function calendarEnv() {
     return {
       tokens: calendarTokens,
@@ -76,12 +97,15 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   }
 
   async function status() {
+    const university = selected();
+    const adapter = adapterFor(university);
     const credentials = await tokens.load(adapter.site);
     const root = libraryRoot();
     const lastSync = (await readState(root)).lastSync;
     const env = calendarEnv();
     return {
       university: { id: university.id, name: university.displayName },
+      universities: universities.map((u) => ({ id: u.id, name: u.displayName, experimental: u.id === "surrey" })),
       signedIn: Boolean(credentials),
       signingIn,
       sync: run,
@@ -98,12 +122,15 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   }
 
   async function signIn() {
+    if (run.state === "running") return { error: "Wait for sync to finish before signing in." };
     if (signingIn) return { error: "The sign-in window is already open." };
     signingIn = true;
+    const university = selected();
+    const adapter = adapterFor(university);
     try {
+      await checkLibrary(university);
       const credentials = await adapter.login(loginBrowser);
-      await adapter.whoAmI(credentials);
-      await tokens.save(credentials);
+      await withLibraryOwner(libraryRoot(), adapter, credentials, () => tokens.save(credentials));
       return { ok: true };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
@@ -191,7 +218,10 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   }
 
   async function begin(origin) {
+    if (signingIn) return { error: "Wait for sign-in to finish before syncing." };
     if (run.state === "running") return { ok: true };
+    const university = selected();
+    const adapter = adapterFor(university);
     const previous = run;
     run = emptyRun("running"); // claimed before any await, so two callers cannot both start
     let credentials;
@@ -201,6 +231,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       credentials = await tokens.load(adapter.site);
       assistant = prefs().assistant ?? null;
       root = libraryRoot();
+      await checkLibrary(university);
     } catch (error) {
       run = previous;
       return { error: error instanceof Error ? error.message : String(error) };
@@ -210,7 +241,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       return { error: `Sign in to ${university.displayName} first.` };
     }
 
-    runSync({
+    try {
+      await withLibraryOwner(root, adapter, credentials, async () => {});
+    } catch (error) {
+      run = previous;
+      return { error: error.message };
+    }
+    Promise.resolve().then(() => runSync({
       adapter,
       credentials,
       root,
@@ -226,7 +263,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
           if (event.result === "new") run.newFiles++;
         }
       },
-    })
+    }))
       .then(async (result) => {
         try {
           await formatLibrary(root, result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
@@ -292,6 +329,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
 
   return {
     status,
+    selectUniversity,
     signIn,
     startSync,
     startBackgroundSync,

@@ -21,17 +21,20 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { once } from "node:events";
 
+import { enforceLibraryOwnerUnlocked } from "./library-owner.ts";
 import { changeLines, deadlinesFromItems, mergeDeadlines } from "./deadlines.ts";
 import { readDeadlineFile, withDeadlineLock, withSyncLock, writeDeadlineFile } from "./deadline-store.ts";
+import type { DeadlineFileOps } from "./deadline-store.ts";
 import { parseAssessmentOverview } from "./assessments.ts";
 import type { AssessmentComponent } from "./assessments.ts";
+import { repairAutomaticWeekDates } from "./revalidate-week-dates.ts";
 import { toIcs } from "./ics.ts";
 import { selectForumPosts } from "./forum.ts";
 import type { ForumHighlight } from "./forum.ts";
 import { placeCourse, sanitizeSegment } from "./naming.ts";
 import { eventsFromDiff, filesSummary } from "./notifications.ts";
 import type { NotificationEvent } from "./notifications.ts";
-import { mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
+import { foldIntoDated, mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
 import type { ExtractionIssue, TextCounts } from "./pipeline.ts";
 import type { TermWeekMap } from "./extraction-types.ts";
 import { planFiles } from "./sorter.ts";
@@ -76,6 +79,8 @@ export type SyncOptions = {
   /** Pause between Echo360 requests, in ms (default 500). */
   transcriptPauseMs?: number;
   onProgress?: (event: SyncEvent) => void;
+  /** Per-call file operations for storage failure tests. */
+  storage?: Partial<DeadlineFileOps>;
 };
 
 export type SyncEvent =
@@ -140,13 +145,27 @@ export function defaultSelection(now: Date): (course: Course, placement: ModuleP
   return (_course, placement) => placement.isModule && placement.year === year;
 }
 
-export async function readState(root: string): Promise<SyncState> {
+export async function readState(root: string, io: Partial<DeadlineFileOps> = {}): Promise<SyncState> {
+  const path = join(root, STATE_DIR, "state.json");
+  let text: string;
   try {
-    const parsed = JSON.parse(await readFile(join(root, STATE_DIR, "state.json"), "utf8")) as Partial<SyncState>;
-    return { version: 1, lastSync: parsed.lastSync ?? null, courses: parsed.courses ?? {} };
-  } catch {
-    return { version: 1, lastSync: null, courses: {} };
+    text = await (io.readFile ?? readFile)(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, lastSync: null, courses: {} };
+    throw error;
   }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); }
+  catch { throw new Error(`Cannot read ${path}: invalid JSON. Restore or repair this file before syncing.`); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`Cannot read ${path}: invalid sync state. Restore or repair this file before syncing.`);
+  const state = parsed as Partial<SyncState>;
+  if (state.version !== 1 || (state.lastSync !== null && typeof state.lastSync !== "string") ||
+    !state.courses || typeof state.courses !== "object" || Array.isArray(state.courses) ||
+    Object.values(state.courses).some((course) => !course || typeof course !== "object" || Array.isArray(course) ||
+      (course.enabled !== undefined && typeof course.enabled !== "boolean"))) {
+    throw new Error(`Cannot read ${path}: invalid sync state. Restore or repair this file before syncing.`);
+  }
+  return state as SyncState;
 }
 
 /* ------------------------------------------------------------- the sync */
@@ -164,13 +183,15 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const select = options.select ?? defaultSelection(now);
   const emit = options.onProgress ?? (() => {});
 
+  await enforceLibraryOwnerUnlocked(root, adapter, credentials);
+
   await mkdir(join(root, STATE_DIR, "tmp"), { recursive: true });
   await clearTmp(root);
 
-  const state = await readState(root);
+  const state = await readState(root, options.storage);
   const manifest = new Map((await readJson<ManifestEntry[]>(join(root, STATE_DIR, "manifest.json"), [])).map((e) => [e.vleId, e]));
   // Fail before downloading if the student's saved deadlines cannot be read.
-  await readDeadlineFile(root);
+  await readDeadlineFile(root, options.storage);
   const freshAssessments = new Map<string, AssessmentComponent[]>();
 
   const courses = await adapter.listCourses(credentials);
@@ -270,10 +291,10 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
           report.textError = error instanceof Error ? error.message : String(error);
         }
       }
-      freshDeadlines.push(...deadlines);
-      syncedKeys.add(`${placement.year}|${placement.code ?? course.shortname}`);
       report.deadlines = deadlines.length;
       await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
+      freshDeadlines.push(...deadlines);
+      syncedKeys.add(`${placement.year}|${placement.code ?? course.shortname}`);
       emit({ type: "course-done", course: course.shortname });
       try {
         const components = new Map<string, AssessmentComponent>();
@@ -308,22 +329,35 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const inSync = (d: Deadline) => syncedKeys.has(`${d.year}|${d.module}`);
   const { deadlines, placed, previousSynced, deadlineLines } = await withDeadlineLock(root, async () => {
     // Read again at commit time: UI edits made during downloads must survive.
-    const previousDeadlines = await readDeadlineFile(root);
+    const previousDeadlines = await readDeadlineFile(root, options.storage);
     const previousSynced = previousDeadlines.filter(inSync);
     const untouched = previousDeadlines.filter((d) => !inSync(d));
-    const merged = mergeDeadlines(previousSynced, freshDeadlines, now, (source, deadline) => {
+    const repaired = previousSynced.map((deadline) => {
+      const next = repairAutomaticWeekDates(deadline, weekMaps.get(`${deadline.year}|${deadline.module}`) ?? null);
+      if (next === deadline) return deadline;
+      // Compare against the original latest read for both history and notifications.
+      const history = [...deadline.history];
+      if (deadline.due?.iso !== next.due?.iso) history.push({ at: startedAt, field: "due", from: deadline.due?.iso ?? null, to: next.due?.iso ?? null });
+      if (deadline.status !== next.status) history.push({ at: startedAt, field: "status", from: deadline.status, to: next.status });
+      return { ...next, history };
+    });
+    const merged = mergeDeadlines(repaired, freshDeadlines, now, (source, deadline) => {
       const refreshed = textRefresh.get(`${deadline.year}|${deadline.module}`);
       if (!refreshed) return false; // Text disabled or failed: retain previous evidence.
       if (!refreshed.current.has(source.url)) return true; // Removed from the VLE.
       return (source.origin === "ai" ? refreshed.ai : refreshed.rule).has(source.url);
     });
-    const placed = mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null)));
+    const placed = foldIntoDated(mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null))));
     const deadlines = sortAll([...untouched, ...placed]);
     const deadlineLines = changeLines(previousSynced, placed);
 
-    await writeDeadlineFile(root, deadlines);
+    await writeDeadlineFile(root, deadlines, options.storage);
     // Keep the calendar export in order with other sync commits as well.
-    await writeText(join(root, "Deadlines.ics"), toIcs(deadlines, now));
+    try {
+      await writeText(join(root, "Deadlines.ics"), toIcs(deadlines, now), options.storage);
+    } catch (error) {
+      throw new Error("Deadlines.json was saved, but Deadlines.ics was not updated. Sync is incomplete; rerun after fixing storage.", { cause: error });
+    }
     return { deadlines, placed, previousSynced, deadlineLines };
   });
   let assessmentsError: string | undefined;
@@ -344,7 +378,11 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   if (changes.length) await prependChanges(root, now, changes);
 
   state.lastSync = now.toISOString();
-  await writeJson(join(root, STATE_DIR, "state.json"), state);
+  try {
+    await writeJson(join(root, STATE_DIR, "state.json"), state, options.storage);
+  } catch (error) {
+    throw new Error("Deadlines and calendar were saved, but sync state was not updated. Sync is incomplete; rerun after fixing storage.", { cause: error });
+  }
   await clearTmp(root);
 
   const summary = filesSummary(newFiles);
@@ -588,14 +626,18 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
-async function writeText(path: string, text: string): Promise<void> {
+async function writeText(path: string, text: string, io: Partial<DeadlineFileOps> = {}): Promise<void> {
   const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(tmp, text, "utf8");
-  await renameWithRetry(tmp, path);
+  try {
+    await (io.writeFile ?? writeFile)(tmp, text, "utf8");
+    await (io.rename ?? renameWithRetry)(tmp, path);
+  } finally {
+    await (io.rm ?? rm)(tmp, { force: true });
+  }
 }
 
-const writeJson = (path: string, value: unknown) => writeText(path, `${JSON.stringify(value, null, 2)}\n`);
+const writeJson = (path: string, value: unknown, io: Partial<DeadlineFileOps> = {}) => writeText(path, `${JSON.stringify(value, null, 2)}\n`, io);
 
 /** The kept forum posts of one module, replacing last sync's; none kept removes the file. */
 async function writeForumHighlights(root: string, placement: ModulePlacement, highlights: ForumHighlight[]): Promise<void> {

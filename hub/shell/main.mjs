@@ -11,7 +11,7 @@
  *   electron shell/main.mjs --sync       open Study Hub and sync every module now
  */
 
-import { app, BrowserWindow, Menu, Notification, Tray, dialog, nativeImage, safeStorage, session, shell } from "electron";
+import { app, BrowserWindow, Menu, MenuItem, Notification, Tray, dialog, nativeImage, safeStorage, session, shell } from "electron";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { LOGIN_ITEM, createBackground } from "./background.mjs";
 import { createSetup } from "./setup.mjs";
 import { createAutoGenerator } from "./auto-generate.mjs";
 import { listLibrary } from "../host/library.mjs";
+import { showUpdateInstructions } from "./updates.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SELFTEST = process.argv.includes("--selftest");
@@ -140,6 +141,14 @@ function openPage(path) {
 }
 
 app.whenReady().then(async () => {
+  const menu = Menu.getApplicationMenu() ?? Menu.buildFromTemplate([
+    ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
+    { role: "fileMenu" }, { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
+  ]);
+  menu.append(new MenuItem({ label: "Updates", submenu: [
+    { label: "Update instructions…", click: () => void showUpdateInstructions({ dialog, version: app.getVersion() }) },
+  ] }));
+  Menu.setApplicationMenu(menu);
   let host;
   let setup;
   try {
