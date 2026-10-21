@@ -133,7 +133,7 @@ test("a due sync starts on catch-up, and a fresh one does not", async () => {
     await background.maybeSync(new Date("2026-10-16T09:00:00Z"));
     assert.deepEqual(started, ["first"]);
     await mkdir(join(root, ".crawler"), { recursive: true });
-    await writeFile(join(root, ".crawler", "state.json"), JSON.stringify({ lastSync: "2026-10-15T09:00:00Z" }));
+    await writeFile(join(root, ".crawler", "state.json"), JSON.stringify({ version: 1, lastSync: "2026-10-15T09:00:00Z", courses: {} }));
     await background.maybeSync(new Date("2026-10-16T09:00:00Z"));
     assert.deepEqual(started, ["first"]);
     await background.maybeSync(new Date("2026-10-19T12:00:00Z"));

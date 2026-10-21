@@ -99,7 +99,13 @@ for (const file of [".crawler/state.json", "2026-27/module/file.txt", "Deadlines
   await writeFile(path, "legacy content");
   assert.match((await f.setup.selectUniversity({ university: "surrey" })).error, /library belongs/);
   assert.equal(await readFile(path, "utf8"), "legacy content");
-  assert.equal((await f.create().status()).university.id, "qmul");
+  const setup = f.create();
+  assert.equal(setup.prefs().university ?? "qmul", "qmul");
+  if (file === ".crawler/state.json") {
+    await assert.rejects(setup.status(), /invalid JSON/);
+  } else {
+    assert.equal((await setup.status()).university.id, "qmul");
+  }
 });
 
 test("invalid ownership metadata refuses selection and sync", async (t) => {
