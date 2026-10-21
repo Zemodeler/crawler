@@ -1,14 +1,37 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile, access } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, access, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { buildSource, stageRuntime } from "../build/desktop-release.mjs";
 import { ESLint } from "eslint";
+import ts from "typescript";
 import config from "../electron-builder.config.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+
+test("TypeScript excludes generated release sources while including application sources", async () => {
+  const hub = join(root, "hub");
+  const configPath = join(hub, "tsconfig.json");
+  await mkdir(join(hub, "outputs"), { recursive: true });
+  const fixture = await mkdtemp(join(hub, "outputs", "desktop-test-tsconfig-"));
+  const generated = join(fixture, "source", "hub", "app", "page.tsx");
+  try {
+    await mkdir(dirname(generated), { recursive: true });
+    await writeFile(generated, "export default function Page() { return null; }\n");
+    const config = ts.readConfigFile(configPath, ts.sys.readFile);
+    assert.equal(config.error, undefined);
+    const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, hub, undefined, configPath);
+    assert.deepEqual(parsed.errors, []);
+    const included = new Set(parsed.fileNames.map((name) => resolve(name)));
+    assert.equal(included.has(resolve(generated)), false, "generated release source must be excluded");
+    for (const path of ["app/welcome/page.tsx", "lib/setup.ts"])
+      assert.equal(included.has(resolve(hub, path)), true, path);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
+});
 
 test("ESLint ignores generated release trees while including application source", async () => {
   const eslint = new ESLint({ cwd: join(root, "hub") });
