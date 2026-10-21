@@ -221,12 +221,12 @@ frozen-input build staging, no-publish defaults, contributor guidance and a
 manual update dialog. Generated release folders are excluded from source lint.
 The lead built an unsigned Windows unpacked app and verified pages/PDF parsing.
 NSIS install/upgrade/uninstall, macOS, signing/notarization, a trusted automatic
-update target and the owner's license choice are not verified or configured.
+update target are not verified or configured (license: MIT, chosen 2026-10-21).
 Manual updates are deliberately offered until a release authority exists.
 
 - Add installer configuration and verify clean installation, upgrade and
   uninstall paths. Implement an update mechanism and test failure recovery.
-- Draft contribution guidance. Obtain the owner's license choice, signing
+- Draft contribution guidance. Obtain signing
   identities, OAuth distribution configuration and intended release target.
 - Sign/notarize artifacts when credentials are available. Publishing, pushing
   and release uploads require explicit authorization.

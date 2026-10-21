@@ -64,9 +64,8 @@ client chunks into a writable temporary directory. Do not enable ASAR without
 testing that copy/import path. Only PDF.js is required as an external runtime
 package with its installed optional canvas dependency and target OS native binary.
 Missing canvas fails staging because PDF.js needs its DOM polyfills. Validate PDF text
-extraction on real documents before distributing a build. No license has been
-selected by this change; maintainers must resolve distribution licensing and
-third-party notices before a public release.
+extraction on real documents before distributing a build. Crawler is MIT licensed (see LICENSE);
+maintainers must still resolve third-party notices before a public release.
 
 ## Install, upgrade, and recover
 

@@ -64,3 +64,7 @@ removing the affected lock directory; never remove it while a writer is running.
   4. [Extraction and AI](docs/design/04-extraction-and-ai.md)
   5. [Sync and calendar](docs/design/05-sync-and-calendar.md)
   6. [Study Hub changes](docs/design/06-study-hub-changes.md)
+
+## License
+
+[MIT](LICENSE)

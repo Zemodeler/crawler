@@ -2,6 +2,7 @@
   "name": "universal-study-hub",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "packageManager": "pnpm@12.11.2",
   "engines": {
     "node": ">=22.13.0"

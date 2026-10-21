@@ -155,4 +155,4 @@ Crawler's folder is useful in plain Explorer.
 - **Acceptable use.** Crawler signs in the same way the official Moodle app does.
   Fine for personal use; check QM's IT acceptable-use policy before a public
   release.
-- **Name and licence** for the public GitHub repo.
+- **Name** for the public GitHub repo. Licence: MIT (chosen 2026-10-21).

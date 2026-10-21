@@ -2,6 +2,7 @@
   "name": "crawler",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "packageManager": "pnpm@12.11.2",
   "description": "Syncs a university VLE into a Study Hub folder: files sorted by module, deadlines with their sources.",
   "type": "module",
