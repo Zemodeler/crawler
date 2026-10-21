@@ -129,14 +129,8 @@ export default function Welcome() {
               ))}
             </ol>
 
-            {step === "sign-in" && (
-              <>
-                <p className="eyebrow">Step 1 of 3</p>
-                <h1>Sign in to {universityName}.</h1>
-                <p className="lede">
-                  Your university&apos;s own sign-in page opens in a separate window. Study Hub never sees your password. It keeps
-                  only a sign-in token, encrypted on this computer.
-                </p>
+            {step !== "sync" && (
+              <div>
                 <label htmlFor="university">University</label>
                 <select id="university" value={status?.university.id ?? "qmul"}
                   disabled={busy || !status || status.signingIn || status.sync.state === "running"}
@@ -147,6 +141,8 @@ export default function Welcome() {
                     try {
                       await selectUniversity(university);
                       setStatus(await setupStatus());
+                      setStep("sign-in");
+                      setRun(null);
                     } catch (e) {
                       setError((e as Error).message);
                     } finally {
@@ -156,8 +152,19 @@ export default function Welcome() {
                   {status?.universities.map((u) => <option key={u.id} value={u.id}>{u.name}{u.experimental ? " (experimental)" : ""}</option>)}
                 </select>
                 {status?.university.id === "surrey" && <p>Surrey support is experimental. Check your synced modules and deadlines.</p>}
+              </div>
+            )}
+
+            {step === "sign-in" && (
+              <>
+                <p className="eyebrow">Step 1 of 3</p>
+                <h1>Sign in to {universityName}.</h1>
+                <p className="lede">
+                  Your university&apos;s own sign-in page opens in a separate window. Study Hub never sees your password. It keeps
+                  only a sign-in token, encrypted on this computer.
+                </p>
                 <div className="welcome-actions">
-                  <button className="primary large" onClick={doSignIn} disabled={busy || !status}>
+                  <button className="primary large" onClick={doSignIn} disabled={busy || !status || status.signingIn || status.sync.state === "running"}>
                     {busy ? "Waiting for you to sign in…" : "Sign in"}
                   </button>
                 </div>

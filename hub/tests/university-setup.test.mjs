@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { setTimeout } from "node:timers/promises";
 import { createSetup } from "../shell/setup.mjs";
 import { handleSetup } from "../host/index.mjs";
+import { VleError } from "../../src/types.ts";
 
 const result = { courses: [], deadlines: [], notifications: [] };
 async function fixture(t, dependencies = {}) {
@@ -112,7 +113,7 @@ test("invalid ownership metadata refuses selection and sync", async (t) => {
 
 test("setup API routes university selection and returns a clear rejection", async () => {
   for (const rejected of [false, true]) {
-    const request = Readable.from([JSON.stringify({ university: "surrey" })]);
+    const request = Readable.from([Buffer.from(JSON.stringify({ university: "surrey" }))]);
     request.method = "POST";
     let status, body;
     const response = { writeHead: (code) => { status = code; }, end: (value) => { body = JSON.parse(value); } };
@@ -123,4 +124,51 @@ test("setup API routes university selection and returns a clear rejection", asyn
     assert.equal(status, rejected ? 400 : 200);
     assert.deepEqual(body, rejected ? { code: "setup_failed", message: "Wait for sync to finish." } : { ok: true });
   }
+});
+test("expired Surrey credentials clear only Surrey's site", async (t) => {
+  const f = await fixture(t, { sync: async () => { throw new VleError("invalid_token", "expired"); } });
+  await f.setup.signIn();
+  await f.setup.selectUniversity({ university: "surrey" });
+  await f.setup.signIn();
+  await f.setup.startSync();
+  await finished(f.setup);
+  assert.equal((await f.setup.status()).sync.state, "failed");
+  assert.equal(f.saved.has(f.adapters.qmul.site), true);
+  assert.equal(f.saved.has(f.adapters.surrey.site), false);
+});
+
+test("a selected Surrey install cannot sync legacy QMUL content manually or on schedule", async (t) => {
+  const f = await fixture(t);
+  await f.setup.selectUniversity({ university: "surrey" });
+  await f.setup.signIn();
+  await writeFile(join(f.root, "Deadlines.json"), "[]");
+  const setup = f.create();
+  assert.match((await setup.startSync()).error, /library belongs/);
+  assert.match((await setup.startBackgroundSync("schedule")).error, /library belongs/);
+  assert.equal(f.calls.length, 0);
+  assert.equal((await setup.status()).sync.state, "idle");
+});
+
+test("a schedule alone does not claim an empty library", async (t) => {
+  const f = await fixture(t);
+  await f.setup.setSchedule({ everyDays: 7 });
+  assert.deepEqual(await f.setup.selectUniversity({ university: "surrey" }), { ok: true });
+  const status = await f.setup.status();
+  assert.equal(status.schedule.everyDays, 7);
+  assert.equal(status.universities.find((u) => u.id === "surrey").experimental, true);
+  assert.equal(status.universities.find((u) => u.id === "qmul").experimental, false);
+});
+
+for (const file of [".crawler/manifest.json", "Deadlines.json"]) test(`unmarked Surrey evidence in ${file} cannot be adopted as QMUL`, async (t) => {
+  const f = await fixture(t);
+  const path = join(f.root, file);
+  await mkdir(join(path, ".."), { recursive: true });
+  const original = JSON.stringify([{ sourceUrl: "https://surreylearn.surrey.ac.uk/content/1" }]);
+  await writeFile(path, original);
+  for (const university of ["qmul", "surrey"]) {
+    assert.match((await f.setup.selectUniversity({ university })).error, /Surrey or mixed/);
+  }
+  assert.match((await f.setup.startBackgroundSync("schedule")).error, /Surrey or mixed/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(await readFile(path, "utf8"), original);
 });

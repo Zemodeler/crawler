@@ -73,8 +73,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   function libraryOwner(root) {
     const file = join(root, ".crawler", "university.json");
     if (existsSync(file)) {
-      const owner = JSON.parse(readFileSync(file, "utf8"));
-      if (owner.version !== 1 || !universities.some((u) => u.id === owner.university))
+      let owner;
+      try {
+        owner = JSON.parse(readFileSync(file, "utf8"));
+      } catch {
+        // An unreadable marker must never make an owned library look empty.
+      }
+      if (owner?.version !== 1 || !universities.some((u) => u.id === owner.university))
         throw new Error("Library university metadata is invalid. Use a separate empty library to change university.");
       return owner.university;
     }
@@ -85,6 +90,14 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     const metadata = existsSync(join(root, ".crawler"))
       ? readdirSync(join(root, ".crawler")).filter((name) => !["schedule.json", "reminders.json"].includes(name)) : [];
     if (!content.length && !metadata.length) return null;
+    // A CLI-created Surrey library may also lack this desktop marker. Its
+    // manifest source URLs and deadline sources must not be adopted as QMUL.
+    for (const metadataFile of [join(root, ".crawler", "manifest.json"), join(root, "Deadlines.json")]) {
+      if (!existsSync(metadataFile)) continue;
+      const text = readFileSync(metadataFile, "utf8");
+      if (/surreylearn\.surrey\.ac\.uk|"surrey:/i.test(text))
+        throw new Error("This library contains Surrey or mixed university metadata without a university ownership marker. Use a separate empty library; existing files will not be moved or deleted.");
+    }
     claimLibrary(root, "qmul");
     return "qmul";
   }
