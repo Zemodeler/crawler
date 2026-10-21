@@ -13,11 +13,13 @@
  * must pass Crawler's quote check before it reaches the calendar.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
   ALL_UNIVERSITIES,
+  checkLibraryOwner,
+  withLibraryOwner,
   VleError,
   connectCalendar,
   describeFreshness,
@@ -68,51 +70,8 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     writeFileSync(prefsFile, `${JSON.stringify({ ...prefs(), ...next }, null, 2)}\n`);
   }
 
-  // Core state has only lastSync/courses and is rewritten by sync. Keep ownership
-  // separately in the library, so changing desktop preferences cannot relabel it.
-  function libraryOwner(root) {
-    const file = join(root, ".crawler", "university.json");
-    if (existsSync(file)) {
-      let owner;
-      try {
-        owner = JSON.parse(readFileSync(file, "utf8"));
-      } catch {
-        // An unreadable marker must never make an owned library look empty.
-      }
-      if (owner?.version !== 1 || !universities.some((u) => u.id === owner.university))
-        throw new Error("Library university metadata is invalid. Use a separate empty library to change university.");
-      return owner.university;
-    }
-    // Unmarked content predates university selection. Preserve it as QMUL,
-    // including partial syncs and unreadable state; never infer that it is empty.
-    if (!existsSync(root)) return null;
-    const content = readdirSync(root).filter((name) => name !== ".crawler");
-    const metadata = existsSync(join(root, ".crawler"))
-      ? readdirSync(join(root, ".crawler")).filter((name) => !["schedule.json", "reminders.json"].includes(name)) : [];
-    if (!content.length && !metadata.length) return null;
-    // A CLI-created Surrey library may also lack this desktop marker. Its
-    // manifest source URLs and deadline sources must not be adopted as QMUL.
-    for (const metadataFile of [join(root, ".crawler", "manifest.json"), join(root, "Deadlines.json")]) {
-      if (!existsSync(metadataFile)) continue;
-      const text = readFileSync(metadataFile, "utf8");
-      if (/surreylearn\.surrey\.ac\.uk|"surrey:/i.test(text))
-        throw new Error("This library contains Surrey or mixed university metadata without a university ownership marker. Use a separate empty library; existing files will not be moved or deleted.");
-    }
-    claimLibrary(root, "qmul");
-    return "qmul";
-  }
-
-  function claimLibrary(root, university) {
-    mkdirSync(join(root, ".crawler"), { recursive: true });
-    writeFileSync(join(root, ".crawler", "university.json"), `${JSON.stringify({ version: 1, university })}\n`, { flag: "wx" });
-  }
-
-  function checkLibrary(university, claim = false) {
-    const root = libraryRoot();
-    const owner = libraryOwner(root);
-    if (owner && owner !== university.id)
-      throw new Error(`This library belongs to ${universities.find((u) => u.id === owner).displayName}. Use a separate empty library to switch universities; existing files will not be moved or deleted.`);
-    if (!owner && claim) claimLibrary(root, university.id);
+  function checkLibrary(university) {
+    return checkLibraryOwner(libraryRoot(), university.id, adapterFor(university).site);
   }
 
   async function selectUniversity(body = {}) {
@@ -120,7 +79,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     const university = universities.find((u) => u.id === body.university);
     if (!university) return { error: "Choose a supported university." };
     try {
-      checkLibrary(university);
+      await checkLibrary(university);
       savePrefs({ university: university.id });
       run = emptyRun("idle");
       return { ok: true };
@@ -169,10 +128,9 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     const university = selected();
     const adapter = adapterFor(university);
     try {
-      checkLibrary(university);
+      await checkLibrary(university);
       const credentials = await adapter.login(loginBrowser);
-      await adapter.whoAmI(credentials);
-      await tokens.save(credentials);
+      await withLibraryOwner(libraryRoot(), adapter, credentials, () => tokens.save(credentials));
       return { ok: true };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
@@ -273,7 +231,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       credentials = await tokens.load(adapter.site);
       assistant = prefs().assistant ?? null;
       root = libraryRoot();
-      checkLibrary(university);
+      await checkLibrary(university);
     } catch (error) {
       run = previous;
       return { error: error instanceof Error ? error.message : String(error) };
@@ -284,7 +242,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     }
 
     try {
-      checkLibrary(university, true);
+      await withLibraryOwner(root, adapter, credentials, async () => {});
     } catch (error) {
       run = previous;
       return { error: error.message };

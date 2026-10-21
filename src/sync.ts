@@ -21,6 +21,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { once } from "node:events";
 
+import { enforceLibraryOwnerUnlocked } from "./library-owner.ts";
 import { changeLines, deadlinesFromItems, mergeDeadlines } from "./deadlines.ts";
 import { readDeadlineFile, withDeadlineLock, withSyncLock, writeDeadlineFile } from "./deadline-store.ts";
 import type { DeadlineFileOps } from "./deadline-store.ts";
@@ -181,6 +182,8 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const startedAt = now.toISOString();
   const select = options.select ?? defaultSelection(now);
   const emit = options.onProgress ?? (() => {});
+
+  await enforceLibraryOwnerUnlocked(root, adapter, credentials);
 
   await mkdir(join(root, STATE_DIR, "tmp"), { recursive: true });
   await clearTmp(root);

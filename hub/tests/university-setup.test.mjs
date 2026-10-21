@@ -18,9 +18,10 @@ async function fixture(t, dependencies = {}) {
   const saved = new Map();
   const calls = [];
   const adapters = Object.fromEntries(["qmul", "surrey"].map((id) => [id, {
+    id,
     site: `https://${id}.example`,
     login: async () => ({ site: `https://${id}.example`, token: id }),
-    whoAmI: async (credentials) => assert.equal(credentials.token, id),
+    whoAmI: async (credentials) => { assert.equal(credentials.token, id); return { userId: 1, permittedFunctions: [] }; },
   }]));
   const deps = {
     getUniversity: (id) => adapters[id],
@@ -64,15 +65,12 @@ for (const id of ["qmul", "surrey"]) test(`${id}: persistence, site credentials 
   assert.equal((await f.create().status()).university.id, id);
 });
 
-test("switching without a library retains separate site credentials", async (t) => {
-  const { setup } = await fixture(t);
-  await setup.signIn();
-  await setup.selectUniversity({ university: "surrey" });
-  assert.equal((await setup.status()).signedIn, false);
-  await setup.signIn();
-  await setup.selectUniversity({ university: "qmul" });
-  assert.equal((await setup.status()).signedIn, true);
-  assert.ok((await setup.selectUniversity({ university: "unknown" })).error);
+test("sign-in claims an empty library and rejects another university", async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(await f.setup.selectUniversity({ university: "surrey" }), { ok: true });
+  assert.deepEqual(await f.setup.signIn(), { ok: true });
+  assert.match((await f.setup.selectUniversity({ university: "qmul" })).error, /library belongs/);
+  assert.equal(f.saved.has(f.adapters.surrey.site), true);
 });
 
 test("busy sign-in and sync reject switches before changing preferences", async (t) => {
@@ -83,6 +81,7 @@ test("busy sign-in and sync reject switches before changing preferences", async 
   const signing = f.setup.signIn();
   assert.match((await f.setup.selectUniversity({ university: "surrey" })).error, /Wait/);
   assert.match((await f.setup.startSync()).error, /sign-in/);
+  while (!loginRelease) await setTimeout(1);
   loginRelease();
   await signing;
   await f.setup.startSync();
@@ -97,7 +96,7 @@ for (const file of [".crawler/state.json", "2026-27/module/file.txt", "Deadlines
   const path = join(f.root, file);
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, "legacy content");
-  assert.match((await f.setup.selectUniversity({ university: "surrey" })).error, /library belongs/);
+  assert.match((await f.setup.selectUniversity({ university: "surrey" })).error, /legacy data/);
   assert.equal(await readFile(path, "utf8"), "legacy content");
   const setup = f.create();
   assert.equal(setup.prefs().university ?? "qmul", "qmul");
@@ -133,7 +132,7 @@ test("setup API routes university selection and returns a clear rejection", asyn
 });
 test("expired Surrey credentials clear only Surrey's site", async (t) => {
   const f = await fixture(t, { sync: async () => { throw new VleError("invalid_token", "expired"); } });
-  await f.setup.signIn();
+  f.saved.set(f.adapters.qmul.site, { site: f.adapters.qmul.site, token: "qmul" });
   await f.setup.selectUniversity({ university: "surrey" });
   await f.setup.signIn();
   await f.setup.startSync();
@@ -143,14 +142,14 @@ test("expired Surrey credentials clear only Surrey's site", async (t) => {
   assert.equal(f.saved.has(f.adapters.surrey.site), false);
 });
 
-test("a selected Surrey install cannot sync legacy QMUL content manually or on schedule", async (t) => {
+test("a selected Surrey install refuses legacy data manually and on schedule", async (t) => {
   const f = await fixture(t);
   await f.setup.selectUniversity({ university: "surrey" });
-  await f.setup.signIn();
+  f.saved.set(f.adapters.surrey.site, { site: f.adapters.surrey.site, token: "surrey" });
   await writeFile(join(f.root, "Deadlines.json"), "[]");
   const setup = f.create();
-  assert.match((await setup.startSync()).error, /library belongs/);
-  assert.match((await setup.startBackgroundSync("schedule")).error, /library belongs/);
+  assert.match((await setup.startSync()).error, /legacy data/);
+  assert.match((await setup.startBackgroundSync("schedule")).error, /legacy data/);
   assert.equal(f.calls.length, 0);
   assert.equal((await setup.status()).sync.state, "idle");
 });
@@ -172,9 +171,51 @@ for (const file of [".crawler/manifest.json", "Deadlines.json"]) test(`unmarked 
   const original = JSON.stringify([{ sourceUrl: "https://surreylearn.surrey.ac.uk/content/1" }]);
   await writeFile(path, original);
   for (const university of ["qmul", "surrey"]) {
-    assert.match((await f.setup.selectUniversity({ university })).error, /Surrey or mixed/);
+    assert.match((await f.setup.selectUniversity({ university })).error, /legacy data/);
   }
-  assert.match((await f.setup.startBackgroundSync("schedule")).error, /Surrey or mixed/);
+  assert.match((await f.setup.startBackgroundSync("schedule")).error, /legacy data/);
   assert.equal(f.calls.length, 0);
   assert.equal(await readFile(path, "utf8"), original);
+});
+
+for (const scenario of ["account", "site", "invalid identity", "malformed", "legacy marker"]) test(`rejected desktop ${scenario} preserves credentials and library bytes`, async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(await f.setup.signIn(), { ok: true });
+  const marker = join(f.root, ".crawler", "university.json");
+  if (scenario === "malformed") await writeFile(marker, "{broken");
+  if (scenario === "legacy marker") await writeFile(marker, JSON.stringify({ version: 1, university: "qmul" }));
+  await writeFile(join(f.root, "Deadlines.json"), "[]");
+  const before = await readFile(marker, "utf8");
+  const saved = f.saved.get(f.adapters.qmul.site);
+  f.adapters.qmul.login = async () => ({ site: scenario === "site" ? "https://other.example" : f.adapters.qmul.site, token: "replacement" });
+  f.adapters.qmul.whoAmI = async () => ({ userId: scenario === "invalid identity" ? NaN : 2, permittedFunctions: [] });
+  const rejection = await f.setup.signIn();
+  assert.ok(rejection.error);
+  assert.ok(!rejection.error.includes("replacement"));
+  assert.equal(f.saved.get(f.adapters.qmul.site), saved);
+  assert.equal(await readFile(marker, "utf8"), before);
+  assert.equal(await readFile(join(f.root, "Deadlines.json"), "utf8"), "[]");
+});
+
+test("same-account desktop token renewal preserves marker and replaces credentials", async (t) => {
+  const f = await fixture(t);
+  await f.setup.signIn();
+  const marker = join(f.root, ".crawler", "university.json");
+  const before = await readFile(marker, "utf8");
+  f.adapters.qmul.login = async () => ({ site: f.adapters.qmul.site, token: "renewed" });
+  f.adapters.qmul.whoAmI = async () => ({ userId: 1, permittedFunctions: [] });
+  assert.deepEqual(await f.setup.signIn(), { ok: true });
+  assert.equal(f.saved.get(f.adapters.qmul.site).token, "renewed");
+  assert.equal(await readFile(marker, "utf8"), before);
+});
+
+test("desktop cannot replace credentials while another process holds the full-sync lock", async (t) => {
+  const f = await fixture(t);
+  await f.setup.signIn();
+  const saved = f.saved.get(f.adapters.qmul.site);
+  const lock = join(f.root, ".crawler", "sync.lock");
+  await mkdir(lock);
+  assert.match((await f.setup.signIn()).error, /already running/);
+  assert.equal(f.saved.get(f.adapters.qmul.site), saved);
+  await rm(lock, { recursive: true });
 });

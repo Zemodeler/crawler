@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { currentAcademicYear, safeJoin, sync, VleError } from "../src/index.ts";
+import { withLibraryOwner, currentAcademicYear, safeJoin, sync, VleError } from "../src/index.ts";
 import { readDeadlineFile, withDeadlineLock, writeDeadlineFile } from "../src/deadline-store.ts";
 import type { AssessmentComponent, AiRunner, Course, Credentials, Deadline, UniversityAdapter, VleFile, VleItem } from "../src/index.ts";
 
@@ -97,6 +97,7 @@ class FakeVle implements UniversityAdapter {
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), "crawler-sync-"));
   const vle = new FakeVle();
+  await withLibraryOwner(root, vle, CREDENTIALS, async () => {});
   vle.courses = [course(1, "TST101U", "Testing Basics"), course(2, "TST202U", "Advanced Testing")];
   vle.files.set(1, [
     { id: 10, name: "Lecture1.pdf", content: "lecture one", modified: "2026-09-25T10:00:00Z", activity: "Week 1 lecture slides" },
@@ -959,4 +960,35 @@ test("repair falling back to a supported date retains notification evidence", as
     assert.deepEqual(result.deadlines.find((d) => d.id === legacy.id)!.due, supported);
     assert.ok(result.notifications.some((n) => n.kind === "date-changed" && n.deadlineId === legacy.id));
   } finally { await t.cleanup(); }
+});
+
+test("direct sync rejects account/site/university changes before course or storage work", async () => {
+  const t = await setup();
+  try {
+    await t.run(NOW, { textDeadlines: false });
+    const before = await Promise.all(["Deadlines.json", ".crawler/manifest.json", ".crawler/state.json"].map((name) => read(t.path(name))));
+    for (const variant of ["account", "university", "site"]) {
+      const candidate = new FakeVle();
+      if (variant === "account") candidate.whoAmI = async () => ({ userId: 2, permittedFunctions: [] });
+      if (variant === "university") candidate.id = "surrey";
+      if (variant === "site") candidate.site = "https://other.example";
+      candidate.listCourses = async () => { assert.fail("must reject before listing courses"); };
+      await assert.rejects(t.run(NOW, { adapter: candidate }), /library belongs/);
+      assert.deepEqual(await Promise.all(["Deadlines.json", ".crawler/manifest.json", ".crawler/state.json"].map((name) => read(t.path(name)))), before);
+      assert.deepEqual(candidate.downloads, []);
+    }
+  } finally { await t.cleanup(); }
+});
+
+test("direct sync claims a fresh library and refuses unknown legacy data", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sync-owner-"));
+  const vle = new FakeVle();
+  try {
+    await writeFile(join(root, "notes.txt"), "mine");
+    await assert.rejects(sync({ root, adapter: vle, credentials: CREDENTIALS }), /legacy data/);
+    assert.equal(await read(join(root, "notes.txt")), "mine");
+    await rm(join(root, "notes.txt"));
+    await sync({ root, adapter: vle, credentials: CREDENTIALS });
+    assert.equal(JSON.parse(await read(join(root, ".crawler", "university.json"))).version, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

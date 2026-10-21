@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { doctor, parseArgs, runCli } from "../src/index.ts";
+import { doctor, parseArgs, runCli, withLibraryOwner } from "../src/index.ts";
 import type { CliEnv, Credentials, TokenStore } from "../src/index.ts";
 
 const publicConfig = (data: Record<string, unknown>) =>
@@ -404,5 +404,34 @@ test("schedule --every repairs an unreadable or invalid schedule.json", async ()
       assert.equal(await runCli(["schedule", "--every", "3"], t.env), 0);
       assert.deepEqual(JSON.parse(await readFile(join(root, ".crawler", "schedule.json"), "utf8")), { everyDays: 3 });
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const variant of ["university", "account", "malformed", "legacy"]) test(`CLI sync enforces shared ownership: ${variant}`, async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-owner-"));
+  const site = "https://qmplus.qmul.ac.uk";
+  const credentials = { site, token: "never-print-token", privateToken: null };
+  try {
+    const { getUniversity } = await import("../src/adapters/universities.ts");
+    const adapter = getUniversity("qmul")!;
+    adapter.whoAmI = async () => ({ userId: 123456789, permittedFunctions: [] });
+    if (variant !== "legacy") await withLibraryOwner(root, adapter, credentials, async () => {});
+    await writeFile(join(root, "Deadlines.json"), "[]");
+    if (variant === "malformed") await writeFile(join(root, ".crawler", "university.json"), "{broken");
+    const marker = join(root, ".crawler", "university.json");
+    const before = variant === "legacy" ? null : await readFile(marker, "utf8");
+    const t = env({ fetch: (async (_url: unknown, init?: RequestInit) => {
+      const params = init?.body as URLSearchParams;
+      assert.equal(params.get("wsfunction"), "core_webservice_get_site_info", "no course reads after rejection");
+      return new Response(JSON.stringify({ userid: 2, functions: [] }));
+    }) as typeof fetch });
+    t.saved.set(site, credentials);
+    t.saved.set("https://surreylearn.surrey.ac.uk", { site: "https://surreylearn.surrey.ac.uk", token: "", privateToken: null, cookies: "never-print-cookie" });
+    const args = ["sync", "--root", root, ...(variant === "university" ? ["--university", "surrey"] : [])];
+    assert.equal(await runCli(args, t.env), 1);
+    assert.match(t.err.join(" "), /library belongs|invalid|legacy data/);
+    for (const secret of ["123456789", "never-print-token", "never-print-cookie"]) assert.ok(!t.err.join(" ").includes(secret));
+    assert.equal(await readFile(join(root, "Deadlines.json"), "utf8"), "[]");
+    if (before !== null) assert.equal(await readFile(marker, "utf8"), before);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
