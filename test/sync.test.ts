@@ -159,6 +159,112 @@ test("sync preserves edits and manual additions made while course downloads are 
   } finally { await t.cleanup(); }
 });
 
+test("latest-read commit preserves notes and done flags on ordinary deadlines", async () => {
+  const t = await setup();
+  try {
+    await t.run(NOW, { textDeadlines: false });
+    const listItems = t.vle.listItems.bind(t.vle);
+    let edited = false;
+    t.vle.listItems = async (credentials, c) => {
+      if (!edited) {
+        edited = true;
+        await withDeadlineLock(t.root, async () => {
+          const deadlines = await readDeadlineFile(t.root);
+          deadlines[0]!.userNote = "Check room with tutor";
+          deadlines[0]!.done = false;
+          await writeDeadlineFile(t.root, deadlines);
+        });
+      }
+      return listItems(credentials, c);
+    };
+    t.vle.assignments.set(1, [{ id: 5, title: "Coursework 1 (20%)", due: "2026-12-21T10:00:00Z" }]);
+    const result = await t.run(LATER, { textDeadlines: false });
+    assert.equal(result.deadlines[0]!.userNote, "Check room with tutor");
+    assert.equal(result.deadlines[0]!.done, false);
+    assert.equal(result.deadlines[0]!.due?.iso, "2026-12-21T10:00:00.000Z");
+  } finally { await t.cleanup(); }
+});
+
+test("corrupt state is preserved and fails before querying the VLE", async () => {
+  const t = await setup();
+  try {
+    for (const content of ["{broken", JSON.stringify({ version: 1, lastSync: null, courses: { TST101U: { enabled: "false" } } })]) {
+      await mkdir(t.path(".crawler"), { recursive: true });
+      await writeFile(t.path(".crawler", "state.json"), content);
+      t.vle.listCourses = async () => { throw new Error("VLE must not be queried"); };
+      await assert.rejects(t.run(), /Cannot read .*state\.json/);
+      assert.equal(await read(t.path(".crawler", "state.json")), content);
+    }
+  } finally { await t.cleanup(); }
+});
+
+test("state read permission failure propagates before querying the VLE", async () => {
+  const t = await setup();
+  try {
+    t.vle.listCourses = async () => { throw new Error("VLE must not be queried"); };
+    await assert.rejects(t.run(NOW, { storage: { readFile: async (path, encoding) => {
+      if (path === t.path(".crawler", "state.json")) throw Object.assign(new Error("state denied"), { code: "EACCES" });
+      return readFile(path, encoding);
+    } } }), { code: "EACCES" });
+  } finally { await t.cleanup(); }
+});
+
+test("deadline write failure leaves the prior JSON and calendar and cleans temporary files", async () => {
+  const t = await setup();
+  try {
+    await t.run(NOW, { textDeadlines: false });
+    const json = await read(t.path("Deadlines.json"));
+    const ics = await read(t.path("Deadlines.ics"));
+    t.vle.assignments.set(1, [{ id: 5, title: "Coursework 1 (20%)", due: "2026-12-21T10:00:00Z" }]);
+    await assert.rejects(t.run(LATER, { textDeadlines: false, storage: {
+      writeFile: async (path, data, encoding) => {
+        if (path.startsWith(t.path("Deadlines.json"))) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+        await writeFile(path, data, encoding);
+      },
+    } }), /disk full/);
+    assert.equal(await read(t.path("Deadlines.json")), json);
+    assert.equal(await read(t.path("Deadlines.ics")), ics);
+    assert.deepEqual((await readdir(t.root)).filter((name) => name.endsWith(".tmp")), []);
+  } finally { await t.cleanup(); }
+});
+
+test("calendar rename failure reports saved JSON and leaves old ICS and lastSync", async () => {
+  const t = await setup();
+  try {
+    await t.run(NOW, { textDeadlines: false });
+    const oldIcs = await read(t.path("Deadlines.ics"));
+    t.vle.assignments.set(1, [{ id: 5, title: "Coursework 1 (20%)", due: "2026-12-21T10:00:00Z" }]);
+    await assert.rejects(t.run(LATER, { textDeadlines: false, storage: {
+      rename: async (from, to) => {
+        if (to === t.path("Deadlines.ics")) throw Object.assign(new Error("calendar denied"), { code: "EACCES" });
+        await rename(from, to);
+      },
+    } }), /Deadlines.json was saved, but Deadlines.ics was not updated/);
+    assert.equal((await readDeadlineFile(t.root))[0]!.due?.iso, "2026-12-21T10:00:00.000Z");
+    assert.equal(await read(t.path("Deadlines.ics")), oldIcs);
+    assert.equal(JSON.parse(await read(t.path(".crawler", "state.json"))).lastSync, NOW.toISOString());
+    assert.deepEqual((await readdir(t.root)).filter((name) => name.endsWith(".tmp")), []);
+  } finally { await t.cleanup(); }
+});
+
+test("state rename failure reports partial completion and preserves previous state", async () => {
+  const t = await setup();
+  try {
+    await t.run(NOW, { textDeadlines: false });
+    t.vle.assignments.set(1, [{ id: 5, title: "Coursework 1 (20%)", due: "2026-12-21T10:00:00Z" }]);
+    await assert.rejects(t.run(LATER, { textDeadlines: false, storage: {
+      rename: async (from, to) => {
+        if (to === t.path(".crawler", "state.json")) throw Object.assign(new Error("state denied"), { code: "EACCES" });
+        await rename(from, to);
+      },
+    } }), /sync state was not updated/);
+    assert.equal((await readDeadlineFile(t.root))[0]!.due?.iso, "2026-12-21T10:00:00.000Z");
+    assert.match(await read(t.path("Deadlines.ics")), /20261221/);
+    assert.equal(JSON.parse(await read(t.path(".crawler", "state.json"))).lastSync, NOW.toISOString());
+    assert.deepEqual((await readdir(t.path(".crawler"))).filter((name) => name.endsWith(".tmp")), []);
+  } finally { await t.cleanup(); }
+});
+
 test("sync refuses corrupt deadline data before querying the VLE", async () => {
   const t = await setup();
   try {
