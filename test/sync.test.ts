@@ -882,3 +882,81 @@ test("lecture captions become transcripts once, are not read for deadlines, and 
     await t.cleanup();
   }
 });
+
+// Seed records from an older extraction version, then exercise the real commit path.
+function legacyText(base: Deadline, id: string, due: Deadline["due"] = null): Deadline {
+  return { ...base, id: `tst:TST101U:text:${id}`, title: "Coursework 1", status: due ? "confirmed" : "tbc", due,
+    history: [], sources: [{ type: "announcement", strength: "quoted", origin: "ai", url: `${CREDENTIALS.site}/legacy/${id}`,
+      quote: "Coursework 1 is released in week 7 for all students on this module.", date: due, seenAt: NOW.toISOString() }] };
+}
+
+test("sync repairs a legacy AI release-week date when AI is skipped and keeps change evidence", async () => {
+  const t = await setup();
+  try {
+    const base = (await t.run()).deadlines[0]!;
+    const legacy = legacyText(base, "bad-ai", base.due);
+    legacy.title = "Separate project";
+    legacy.userNote = "Keep my note";
+    await writeDeadlineFile(t.root, [base, legacy]);
+    const result = await t.run(LATER, { textDeadlines: false });
+    const repaired = result.deadlines.find((d) => d.id === legacy.id)!;
+    assert.equal(repaired.due, null);
+    assert.equal(repaired.status, "tbc");
+    assert.equal(repaired.sources[0]!.date, null);
+    assert.equal(repaired.sources[0]!.quote, legacy.sources[0]!.quote);
+    assert.equal(repaired.userNote, legacy.userNote);
+    assert.ok(repaired.history.some((h) => h.field === "due" && h.from === base.due!.iso && h.to === null));
+    assert.ok(result.changes.some((line) => line.includes("Separate project") && line.includes("due moved")));
+    // The existing notification policy suppresses undated TBC records.
+    assert.ok(!result.notifications.some((n) => n.deadlineId === legacy.id));
+    const again = await t.run(LATER, { textDeadlines: false });
+    assert.deepEqual(again.changes, []);
+  } finally { await t.cleanup(); }
+});
+
+test("sync folds a prior undated duplicate into its unique dated assessment and retains its source", async () => {
+  const t = await setup();
+  try {
+    const base = (await t.run()).deadlines[0]!;
+    const duplicate = legacyText(base, "duplicate");
+    await writeDeadlineFile(t.root, [base, duplicate]);
+    const result = await t.run(LATER, { textDeadlines: false });
+    assert.equal(result.deadlines.length, 1);
+    assert.equal(result.deadlines[0]!.id, base.id);
+    assert.ok(result.deadlines[0]!.sources.some((source) => source.url === duplicate.sources[0]!.url));
+  } finally { await t.cleanup(); }
+});
+
+test("sync protects reviewed dates, notes, completion and untouched or failed courses from folding or repair", async () => {
+  const t = await setup();
+  try {
+    const base = (await t.run()).deadlines[0]!;
+    const noted = { ...legacyText(base, "noted"), userNote: "My work" };
+    const done = { ...legacyText(base, "done"), done: true };
+    const verified: Deadline = { ...legacyText(base, "verified", base.due), status: "user-verified" };
+    const failed = { ...legacyText(base, "failed", base.due), module: "TST202U" };
+    const untouched = { ...legacyText(base, "untouched", base.due), module: "OTHER" };
+    await writeDeadlineFile(t.root, [base, noted, done, verified, failed, untouched]);
+    t.vle.failing.add(2);
+    const result = await t.run(LATER, { textDeadlines: false });
+    for (const prior of [noted, done, verified, failed, untouched]) {
+      assert.deepEqual(result.deadlines.find((d) => d.id === prior.id), prior);
+    }
+  } finally { await t.cleanup(); }
+});
+
+
+test("repair falling back to a supported date retains notification evidence", async () => {
+  const t = await setup();
+  try {
+    const base = (await t.run()).deadlines[0]!;
+    const legacy = legacyText(base, "mixed", base.due);
+    legacy.title = "Separate project";
+    const supported = { iso: "2026-12-21T10:00:00.000Z", allDay: false, tz: "Europe/London" as const };
+    legacy.sources.push({ ...legacy.sources[0]!, url: `${CREDENTIALS.site}/supported`, quote: "The separate project is due on 21 December 2026 at 10:00.", date: supported });
+    await writeDeadlineFile(t.root, [base, legacy]);
+    const result = await t.run(LATER, { textDeadlines: false });
+    assert.deepEqual(result.deadlines.find((d) => d.id === legacy.id)!.due, supported);
+    assert.ok(result.notifications.some((n) => n.kind === "date-changed" && n.deadlineId === legacy.id));
+  } finally { await t.cleanup(); }
+});

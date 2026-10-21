@@ -380,7 +380,7 @@ test("schedule shows freshness and due status and persists --every", async () =>
     assert.equal(await runCli(["schedule"], t.env), 0);
     assert.match(t.out.pop()!, /never synced; sync due; every 3/);
     await mkdir(join(root, ".crawler"), { recursive: true });
-    await writeFile(join(root, ".crawler", "state.json"), JSON.stringify({ lastSync: "2026-10-14T09:00:00Z" }));
+    await writeFile(join(root, ".crawler", "state.json"), JSON.stringify({ version: 1, courses: {}, lastSync: "2026-10-14T09:00:00Z" }));
     assert.equal(await runCli(["schedule", "--root", root], t.env), 0);
     assert.match(t.out.pop()!, /last synced 2 days ago; sync not due/);
     assert.equal(await runCli(["schedule", "--every", "1"], t.env), 0);

@@ -402,7 +402,7 @@ test("the week map follows the course's semester", () => {
   const map = (startdate: string, enddate: string | null) =>
     weekMapForCourse("qmul", { ...COURSE, startdate: unix(startdate), enddate: enddate === null ? null : unix(enddate) }, PLACEMENT);
   assert.equal(map("2026-09-21T00:00:00Z", "2027-01-29T00:00:00Z")?.termStart, "2026-09-21");
-  assert.equal(map("2027-01-25T00:00:00Z", "2027-05-28T00:00:00Z")?.termStart, "2027-01-25");
+  assert.equal(map("2027-01-25T00:00:00Z", "2027-05-28T00:00:00Z"), null);
   assert.equal(map("2026-09-21T00:00:00Z", "2027-06-30T00:00:00Z"), null, "year-long");
   assert.equal(map("2026-09-21T00:00:00Z", null), null, "unknown end");
   assert.equal(weekMapForCourse("qmul", { ...COURSE, startdate: null }, PLACEMENT), null);
@@ -670,7 +670,7 @@ test("semester boundaries exclude year-long and unknown courses and leave week q
   const t = await setup();
   try {
     const course = (start: string, end: string | null): Course => ({ ...COURSE, startdate: unix(start), enddate: end === null ? null : unix(end) });
-    assert.ok(weekMapForCourse("qmul", course("2027-01-25", "2027-07-31T23:59:59Z"), PLACEMENT));
+    assert.equal(weekMapForCourse("qmul", course("2027-01-25", "2027-07-31T23:59:59Z"), PLACEMENT), null);
     assert.ok(weekMapForCourse("qmul", course("2026-09-21", "2027-01-31T23:59:59Z"), PLACEMENT));
     for (const c of [
       course("2027-01-25", "2027-08-01"),

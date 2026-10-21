@@ -26,13 +26,14 @@ import { readDeadlineFile, withDeadlineLock, withSyncLock, writeDeadlineFile } f
 import type { DeadlineFileOps } from "./deadline-store.ts";
 import { parseAssessmentOverview } from "./assessments.ts";
 import type { AssessmentComponent } from "./assessments.ts";
+import { repairAutomaticWeekDates } from "./revalidate-week-dates.ts";
 import { toIcs } from "./ics.ts";
 import { selectForumPosts } from "./forum.ts";
 import type { ForumHighlight } from "./forum.ts";
 import { placeCourse, sanitizeSegment } from "./naming.ts";
 import { eventsFromDiff, filesSummary } from "./notifications.ts";
 import type { NotificationEvent } from "./notifications.ts";
-import { mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
+import { foldIntoDated, mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
 import type { ExtractionIssue, TextCounts } from "./pipeline.ts";
 import type { TermWeekMap } from "./extraction-types.ts";
 import { planFiles } from "./sorter.ts";
@@ -287,10 +288,10 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
           report.textError = error instanceof Error ? error.message : String(error);
         }
       }
-      freshDeadlines.push(...deadlines);
-      syncedKeys.add(`${placement.year}|${placement.code ?? course.shortname}`);
       report.deadlines = deadlines.length;
       await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
+      freshDeadlines.push(...deadlines);
+      syncedKeys.add(`${placement.year}|${placement.code ?? course.shortname}`);
       emit({ type: "course-done", course: course.shortname });
       try {
         const components = new Map<string, AssessmentComponent>();
@@ -328,13 +329,22 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
     const previousDeadlines = await readDeadlineFile(root, options.storage);
     const previousSynced = previousDeadlines.filter(inSync);
     const untouched = previousDeadlines.filter((d) => !inSync(d));
-    const merged = mergeDeadlines(previousSynced, freshDeadlines, now, (source, deadline) => {
+    const repaired = previousSynced.map((deadline) => {
+      const next = repairAutomaticWeekDates(deadline, weekMaps.get(`${deadline.year}|${deadline.module}`) ?? null);
+      if (next === deadline) return deadline;
+      // Compare against the original latest read for both history and notifications.
+      const history = [...deadline.history];
+      if (deadline.due?.iso !== next.due?.iso) history.push({ at: startedAt, field: "due", from: deadline.due?.iso ?? null, to: next.due?.iso ?? null });
+      if (deadline.status !== next.status) history.push({ at: startedAt, field: "status", from: deadline.status, to: next.status });
+      return { ...next, history };
+    });
+    const merged = mergeDeadlines(repaired, freshDeadlines, now, (source, deadline) => {
       const refreshed = textRefresh.get(`${deadline.year}|${deadline.module}`);
       if (!refreshed) return false; // Text disabled or failed: retain previous evidence.
       if (!refreshed.current.has(source.url)) return true; // Removed from the VLE.
       return (source.origin === "ai" ? refreshed.ai : refreshed.rule).has(source.url);
     });
-    const placed = mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null)));
+    const placed = foldIntoDated(mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null))));
     const deadlines = sortAll([...untouched, ...placed]);
     const deadlineLines = changeLines(previousSynced, placed);
 
