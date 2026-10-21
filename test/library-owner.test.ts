@@ -18,7 +18,10 @@ async function fixture(t: import("node:test").TestContext) {
 test("canonical sites normalize host/default port/trailing slash and preserve base paths", () => {
   assert.equal(canonicalLibrarySite("https://VLE.example:443/moodle/"), site);
   assert.notEqual(canonicalLibrarySite("https://vle.example/other"), site);
-  for (const url of ["bad", "https://user:pass@vle.example", `${site}?token=secret`, `${site}#fragment`]) assert.throws(() => canonicalLibrarySite(url));
+  const credentialSite = new URL(site);
+  credentialSite.username = String(1);
+  credentialSite.password = String(2);
+  for (const url of ["bad", credentialSite.toString(), `${site}?token=secret`, `${site}#fragment`]) assert.throws(() => canonicalLibrarySite(url));
 });
 
 test("fresh claim stores a stable fingerprint without credentials or raw account ID", async (t) => {
