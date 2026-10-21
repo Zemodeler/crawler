@@ -328,6 +328,29 @@ test("calendar sync prints counts, edited summaries and skips by reason", async 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("sync reports documents it could not check without exposing authenticated URLs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "crawler-cli-coverage-"));
+  const site = "https://qmplus.qmul.ac.uk";
+  try {
+    const fetchFake = (async (_url: unknown, init?: RequestInit) => {
+      const params = init?.body instanceof URLSearchParams ? init.body : null;
+      if (!params) return new Response("not an Office archive");
+      const method = params.get("wsfunction");
+      let payload: unknown = [];
+      if (method === "core_webservice_get_site_info") payload = { userid: 7 };
+      if (method === "core_enrol_get_users_courses") payload = [{ id: 1, shortname: "TST101U 2026/27", fullname: "TST101U Testing Basics 2026/27", startdate: 1790000000, enddate: 1800000000 }];
+      if (method === "core_course_get_contents") payload = [{ id: 1, name: "Materials", modules: [{ id: 10, modname: "resource", name: "Brief", url: `${site}/mod/resource/view.php?id=10`, contents: [{ type: "file", filename: "Brief.docx", fileurl: `${site}/pluginfile.php/10/Brief.docx`, filesize: 21, timemodified: 1790000000 }] }] }];
+      return new Response(JSON.stringify(payload));
+    }) as typeof fetch;
+    const t = env({ fetch: fetchFake, now: () => new Date("2026-10-16T09:00:00Z") });
+    t.saved.set(site, { site, token: "must-not-appear", privateToken: null });
+    assert.equal(await runCli(["sync", "--root", root], t.env), 0);
+    assert.match(t.out.join("\n"), /Not checked for deadlines: Brief.docx - No text could be extracted/);
+    assert.ok(!t.out.join("\n").includes("must-not-appear"));
+    assert.ok(!t.out.join("\n").includes("pluginfile.php"));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("successful sync automatically syncs calendar; revoked access only warns", async () => {
   const root = await mkdtemp(join(tmpdir(), "crawler-auto-calendar-"));
   try {

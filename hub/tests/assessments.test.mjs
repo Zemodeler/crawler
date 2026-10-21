@@ -15,6 +15,26 @@ async function fixture(t) {
 }
 const input = { module: "ECS529U", year: "2026-27", title: "Weekly lab marking", kind: "lab", date: "2026-11-04" };
 
+test("concurrent UI writes preserve every addition and completion flag", async (t) => {
+  const root = await fixture(t);
+  const created = await Promise.all(Array.from({ length: 5 }, (_, i) => addDeadline(root, { ...input, title: `Lab ${i}` })));
+  assert.equal((await readDeadlines(root)).length, 5);
+  await Promise.all(created.map(({ deadline }) => setDeadlineDone(root, { id: deadline.id, done: true })));
+  assert.ok((await readDeadlines(root)).every((d) => d.done));
+});
+
+test("UI writes refuse corrupt deadline files and leave their bytes intact", async (t) => {
+  const root = await fixture(t);
+  for (const content of ["{broken", "{}", "[null]"]) {
+    await writeFile(join(root, "Deadlines.json"), content);
+    await assert.rejects(addDeadline(root, input), /Cannot read/);
+    assert.equal(await readFile(join(root, "Deadlines.json"), "utf8"), content);
+  }
+  // A failed write transaction must not leave the library locked.
+  await writeFile(join(root, "Deadlines.json"), "[]");
+  assert.ok((await addDeadline(root, input)).deadline);
+});
+
 test("reads assessment breakdowns with and without Assessments.json", async (t) => {
   const root = await fixture(t);
   assert.deepEqual(await readAssessments(root), []);

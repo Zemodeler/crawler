@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import {
   addDeadline, fetchAssessments, fetchDeadlines, fetchTree, moduleCode, moduleColor,
   removeDeadline, setDeadlineDone, type Assessment, type Deadline, type LibraryYear,
@@ -98,9 +99,9 @@ export default function AssessmentsPage() {
 
   return <div className="calendar-page assessments-page">
     <header className="topbar">
-      <a className="back-link" href="/">Study Hub</a>
+      <Link className="back-link" href="/">Study Hub</Link>
       <div><p className="eyebrow">{year?.year || "Study Hub"}</p><h2>What you are assessed on</h2></div>
-      <a className="text-link" href="/calendar">Calendar</a>
+      <Link className="text-link" href="/calendar">Calendar</Link>
     </header>
     <main className="calendar-main">
       {state === "loading" && <p className="calendar-message">Reading your assessments...</p>}

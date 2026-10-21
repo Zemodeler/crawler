@@ -27,6 +27,7 @@ export type SyncRun = {
     rejected: number;
     aiRuns: number;
     aiMs: number;
+    extractionIssues?: { module: string; file: string; reason: string; message: string }[];
   } | null;
 };
 

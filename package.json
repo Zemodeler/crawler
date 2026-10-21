@@ -2,6 +2,7 @@
   "name": "crawler",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@12.11.2",
   "description": "Syncs a university VLE into a Study Hub folder: files sorted by module, deadlines with their sources.",
   "type": "module",
   "engines": {
@@ -13,6 +14,7 @@
     "./weeks": "./src/weeks.ts"
   },
   "scripts": {
+    "check": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm --dir hub check",
     "typecheck": "tsc --noEmit -p .",
     "test": "node --test \"test/**/*.test.ts\"",
     "crawler": "electron bin/crawler.mjs"

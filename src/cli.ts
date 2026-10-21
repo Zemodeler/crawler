@@ -243,6 +243,8 @@ function summarize(env: CliEnv, result: SyncResult, root: string): void {
       f.videosSkipped && `${f.videosSkipped} videos skipped`,
     ].filter(Boolean);
     env.out(`${c.status === "failed" ? "✗" : "✓"} ${c.shortname}: ${c.status === "failed" ? c.error : parts.join(", ") || "nothing to do"}; ${c.deadlines} deadlines`);
+    if (c.textError) env.out("  Deadline text checking did not finish; earlier evidence was retained.");
+    for (const issue of c.extractionIssues ?? []) env.out(`  Not checked for deadlines: ${issue.file} - ${issue.message}`);
   }
   const skipped = result.courses.filter((c) => c.status === "skipped").length;
   if (skipped) env.out(`${skipped} other course(s) not synced — see: crawler courses`);

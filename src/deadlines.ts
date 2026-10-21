@@ -383,7 +383,7 @@ export function mergeDeadlines(previous: Deadline[], fresh: Deadline[], now: Dat
   // into it (same assessment, same teaching week): it goes without a removal.
   const freshQuotes = new Set(fresh.flatMap((d) => d.sources.map(quoteKey)));
   const mergedAway = (p: Deadline) =>
-    p.id.includes(":text:") && p.status !== "user-verified" && p.sources.length > 0 && p.sources.every((s) => freshQuotes.has(quoteKey(s)));
+    p.id.includes(":text:") && p.status !== "user-verified" && p.done === undefined && p.userNote === undefined && p.sources.length > 0 && p.sources.every((s) => freshQuotes.has(quoteKey(s)));
 
   for (const p of previous) {
     if (freshIds.has(p.id) || mergedAway(p)) continue;

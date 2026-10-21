@@ -44,6 +44,12 @@ week map:
 A date derived this way records both the "week N" quote and the week-map
 source, so the student can see the reasoning.
 
+Week references to feedback, announcements or teaching materials do not place
+an assessment in that week. Release weeks stay undated; when a quote also gives
+an explicit duration, Crawler can show a due window shifted by that many London
+calendar days. Automatic windows on undated text deadlines are recomputed on
+sync; confirmed dates and records with student choices are preserved.
+
 ## Text extraction
 
 Done locally in Node, never by the AI:
@@ -56,6 +62,13 @@ Done locally in Node, never by the AI:
 
 Extracted text is cached in `.crawler/text/<sha256>.<format>.json` (file hash
 plus detected format) so re-syncs don't re-parse unchanged files.
+
+Empty results are retried instead of cached indefinitely: an empty result can
+mean a blank or scanned document, damaged content, or a parser failure. Course
+reports identify unsupported formats, files over 50 MiB, empty extractions and
+read failures. The CLI and desktop sync summaries show the filenames and
+reasons without authenticated URLs. These files are not marked successfully
+refreshed, so earlier deadline evidence survives an incomplete read.
 
 ## Calling the CLI
 

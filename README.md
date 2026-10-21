@@ -13,9 +13,11 @@ for revision.
 - **Optional AI** runs through the `claude` or `codex` CLI you already have.
 - **Windows and macOS**: one desktop app that re-syncs every 3 days.
 
-Status: **early**. The command-line sync works against Queen Mary's QMplus
-(Moodle). The desktop app, calendar sync and Study Hub integration are next;
-see the [roadmap](docs/ROADMAP.md). After that: Surrey (SurreyLearn).
+Status: **early, not release-ready**. QMplus sync, the Study Hub desktop app
+in `hub/`, calendar integration, document deadline extraction and transcript
+sync are implemented. SurreyLearn has a CLI adapter and login probe; live
+verification and desktop university selection remain unfinished. See the
+[repair plan and roadmap](docs/ROADMAP.md) for validation and release gaps.
 
 ## Try it (Windows, Node 22.18+)
 
@@ -38,6 +40,19 @@ module. It leaves hand-edited indexes alone. Topic packs and flashcards are
 built separately in Study Hub after you review the proposed topics.
 
 ## Docs
+
+Run `corepack pnpm check` from this folder to typecheck and test Crawler, then typecheck,
+lint, test and build Study Hub. Both projects need their dependencies installed
+(`pnpm install` here and `pnpm --dir hub install`). This command does not run
+live university, Google Calendar, or desktop subscription self-tests.
+
+Deadline updates use a shared `.crawler/deadlines.lock` directory, and sync
+re-reads the saved deadlines before committing. A separate `.crawler/sync.lock`
+rejects overlapping full syncs before they touch manifests or temporary files.
+Invalid or unreadable deadline
+data blocks writes rather than being replaced with an empty list. If an app
+crashes while holding the lock, close all Crawler and Study Hub processes before
+removing the affected lock directory; never remove it while a writer is running.
 
 - [Vision](docs/VISION.md)
 - [Roadmap](docs/ROADMAP.md)

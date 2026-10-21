@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { currentAcademicYear, safeJoin, sync, VleError } from "../src/index.ts";
+import { readDeadlineFile, withDeadlineLock, writeDeadlineFile } from "../src/deadline-store.ts";
 import type { AssessmentComponent, AiRunner, Course, Credentials, Deadline, UniversityAdapter, VleFile, VleItem } from "../src/index.ts";
 
 const CREDENTIALS: Credentials = { site: "https://moodle.example.ac.uk", token: "x", privateToken: null };
@@ -114,6 +115,86 @@ async function setup() {
 const exists = (p: string) => stat(p).then(() => true, () => false);
 const read = (p: string) => readFile(p, "utf8");
 
+test("overlapping syncs are rejected before touching files and a failed sync releases its lock", async () => {
+  const t = await setup();
+  try {
+    const listCourses = t.vle.listCourses.bind(t.vle);
+    t.vle.listCourses = async () => {
+      await assert.rejects(t.run(), /already running/);
+      return listCourses();
+    };
+    await t.run(NOW, { textDeadlines: false });
+    t.vle.listCourses = async () => { throw new Error("temporary outage"); };
+    await assert.rejects(t.run(), /temporary outage/);
+    t.vle.listCourses = listCourses;
+    await t.run(LATER, { textDeadlines: false });
+  } finally { await t.cleanup(); }
+});
+
+test("sync preserves edits and manual additions made while course downloads are running", async () => {
+  const t = await setup();
+  try {
+    await t.run(NOW, { textDeadlines: false });
+    const listItems = t.vle.listItems.bind(t.vle);
+    let edited = false;
+    t.vle.listItems = async (credentials, c) => {
+      if (!edited) {
+        edited = true;
+        await withDeadlineLock(t.root, async () => {
+          const deadlines = await readDeadlineFile(t.root);
+          deadlines[0]!.done = true;
+          deadlines[0]!.status = "user-verified";
+          deadlines[0]!.due = { iso: "2026-12-20T12:00:00.000Z", allDay: false, tz: "Europe/London" };
+          deadlines.push({ ...deadlines[0]!, id: "user:added-during-sync", title: "Manual deadline" });
+          await writeDeadlineFile(t.root, deadlines);
+        });
+      }
+      return listItems(credentials, c);
+    };
+    const result = await t.run(LATER, { textDeadlines: false });
+    assert.equal(result.deadlines.length, 2);
+    assert.ok(result.deadlines.every((d) => d.done && d.status === "user-verified" && d.due?.iso === "2026-12-20T12:00:00.000Z"));
+    assert.ok(result.deadlines.some((d) => d.id === "user:added-during-sync"));
+    assert.deepEqual(await readDeadlineFile(t.root), result.deadlines);
+  } finally { await t.cleanup(); }
+});
+
+test("sync refuses corrupt deadline data before querying the VLE", async () => {
+  const t = await setup();
+  try {
+    await writeFile(t.path("Deadlines.json"), "{broken");
+    t.vle.listCourses = async () => { throw new Error("VLE must not be queried"); };
+    await assert.rejects(t.run(), /invalid JSON/);
+    assert.equal(await read(t.path("Deadlines.json")), "{broken");
+  } finally { await t.cleanup(); }
+});
+
+test("sync refuses deadline corruption introduced during downloads", async () => {
+  const t = await setup();
+  try {
+    const listItems = t.vle.listItems.bind(t.vle);
+    t.vle.listItems = async (credentials, c) => {
+      await writeFile(t.path("Deadlines.json"), "{broken-during-sync");
+      return listItems(credentials, c);
+    };
+    await assert.rejects(t.run(NOW, { textDeadlines: false }), /invalid JSON/);
+    assert.equal(await read(t.path("Deadlines.json")), "{broken-during-sync");
+  } finally { await t.cleanup(); }
+});
+
+test("sync reports corrupt assessments without replacing them or failing deadline sync", async () => {
+  const t = await setup();
+  try {
+    for (const content of ["{broken", "{}"] ) {
+      await writeFile(t.path("Assessments.json"), content);
+      const result = await t.run(NOW, { textDeadlines: false });
+      assert.ok(result.assessmentsError);
+      assert.equal(await read(t.path("Assessments.json")), content);
+      assert.equal((await readDeadlineFile(t.root)).length, 1);
+    }
+  } finally { await t.cleanup(); }
+});
+
 test("writes assessments from pages and assignment intros, replacing synced modules even without components", async () => {
   const t = await setup();
   try {
@@ -157,7 +238,7 @@ test("an assessments write failure still saves deadlines, calendar and sync stat
   } finally { await t.cleanup(); }
 });
 
-test("invalid previous assessments JSON is treated as an empty list", async () => {
+test("invalid previous assessments JSON is reported and preserved even when new components exist", async () => {
   const t = await setup();
   try {
     await writeFile(t.path("Assessments.json"), "{invalid JSON");
@@ -170,9 +251,8 @@ test("invalid previous assessments JSON is treated as an empty list", async () =
       return items;
     };
     const result = await t.run(NOW, { textDeadlines: false });
-    assert.equal(result.assessmentsError, undefined);
-    const saved = JSON.parse(await read(t.path("Assessments.json"))) as AssessmentComponent[];
-    assert.deepEqual(saved.map((entry) => [entry.module, entry.description]), [["TST101U", "Exam"]]);
+    assert.ok(result.assessmentsError);
+    assert.equal(await read(t.path("Assessments.json")), "{invalid JSON");
     assert.match(await read(t.path("Deadlines.ics")), /BEGIN:VEVENT/);
     assert.equal(JSON.parse(await read(t.path(".crawler", "state.json"))).lastSync, NOW.toISOString());
   } finally { await t.cleanup(); }

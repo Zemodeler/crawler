@@ -13,7 +13,7 @@ import { detectFormat, extractText } from "./index.ts";
 
 function isDocument(value: unknown, sha256: string, format: string): value is ExtractedDocument {
   const doc = value as ExtractedDocument | null;
-  return typeof doc === "object" && doc !== null && doc.sha256 === sha256 && doc.format === format && Array.isArray(doc.pages);
+  return typeof doc === "object" && doc !== null && doc.sha256 === sha256 && doc.format === format && Array.isArray(doc.pages) && doc.pages.some((p) => typeof p?.text === "string" && p.text.trim().length > 0);
 }
 
 /** Text for `bytes`: from the cache on a hash hit, otherwise extracted and stored. */
@@ -36,6 +36,9 @@ export async function cachedExtract(
     // No entry or an unreadable one: extract again and overwrite it.
   }
   const document = await extractText(bytes, filename, mimetype);
+  // Empty output can represent a transient parser failure, not just a blank
+  // document. Retry it next sync instead of caching a permanent blind spot.
+  if (!document.pages.some((page) => page.text.trim().length > 0)) return document;
   // Write then rename, so a crash never leaves half a JSON file under the real
   // name; the temporary name is unique, so concurrent writes never share one.
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;

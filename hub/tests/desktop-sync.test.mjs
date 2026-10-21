@@ -41,6 +41,22 @@ test("a credential-load failure releases the sync claim so the next sync can sta
   assert.equal((await setup.status()).sync.state, "done");
 });
 
+test("finished sync summaries expose incomplete document coverage without failing the sync", async (t) => {
+  const issue = { file: "Brief.docx", reason: "no-text", message: "No text could be extracted." };
+  const setup = await setupSync(t, {
+    sync: async () => ({ ...syncResult, courses: [{ shortname: "TST101U", status: "skipped", extractionIssues: [issue] }] }),
+  });
+  await setup.startSync();
+  let status;
+  for (let i = 0; i < 100; i++) {
+    status = await setup.status();
+    if (status.sync.state !== "running") break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(status.sync.state, "done");
+  assert.deepEqual(status.sync.summary.extractionIssues, [{ module: "TST101U", ...issue }]);
+});
+
 test("calendar credential errors do not turn a completed course sync into a failure", async (t) => {
   let loads = 0;
   const setup = await setupSync(t, {

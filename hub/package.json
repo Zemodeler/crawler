@@ -2,10 +2,13 @@
   "name": "universal-study-hub",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@12.11.2",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
+    "typecheck": "tsc --noEmit --incremental false",
+    "check": "corepack pnpm typecheck && corepack pnpm lint && corepack pnpm test && corepack pnpm build",
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",

@@ -51,7 +51,18 @@ export const START_BEFORE_RE =
 /** Words that make a teaching-session sentence a real deadline. */
 const DUE_RE = /\b(?:due|deadlines?|submit|submission|hand(?:ed)?[- ]in|takes?\s+place|will\s+be\s+held|sit)\b/i;
 const SESSION_RE = /\b(?:lectures?|seminars?|tutorials?|workshops?|lab\s+sessions?|classes)\b/i;
-const WEEK_SESSION_RE = /^\s*[:\-–]?\s*(?:lectures?|seminars?|tutorials?|workshops?|labs?\b(?!\s+tests?)|class(?:es)?|slides|recording)/i;
+/** Classify the role of one week reference before turning it into a deadline. */
+export function weekContext(text: string, index: number, length: number): "due" | "release" | "reference" {
+  let before = text.slice(Math.max(0, index - 120), index);
+  const after = text.slice(index + length);
+  if (/^(?:['’]s)?\s*[:\-–]?\s*(?:announcements?|posts?|emails?|news|feedback|lectures?|seminars?|tutorials?|workshops?|labs?\b(?!\s+(?:tests?|reports?|assessments?))|class(?:es)?|slides|recordings?|notes|materials|sessions?)\b/i.test(after)) return "reference";
+  if (/\b(?:feedback|announcements?|posts?|emails?|lectures?|seminars?|slides|recordings?)\b[^.!?;:]{0,65}\b(?:in|by|on|from|for)\s*$/i.test(before)) return "reference";
+  // A weekday belongs to the same week reference: "released on Friday of week 7".
+  before = before.replace(/\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+of)?\s*$/i, "");
+  // Carry the release verb across "released week 7 and week 10".
+  before = before.replace(/(?:\bweek\s+\d{1,2}\s*(?:,|&|and)\s*)+$/i, "");
+  return START_BEFORE_RE.test(before) ? "release" : "due";
+}
 
 const CITATION_RE = /\b(?:accessed|retrieved|doi|isbn|proceedings|journal\s+of)\b|\b(?:et\s+al|pp|vol)\.|\(\d{4}[a-z]?\)/i;
 const REFERENCES_HEADING_RE = /^\s*(?:\d+(?:\.\d+)*\.?\s+)?(?:references|bibliography|reading\s+list|further\s+reading|works\s+cited|sources)\s*:?\s*$/i;
@@ -224,12 +235,13 @@ function findDates(seg: Segment, ctx: { year: string; weekMap?: TermWeekMap }): 
   WEEK_RE.lastIndex = 0;
   for (let m = WEEK_RE.exec(text); m; m = WEEK_RE.exec(text)) {
     // "Week 3 lecture" names a session, not a deadline.
-    if (WEEK_SESSION_RE.test(text.slice(m.index + m[0].length))) continue;
+    const context = weekContext(text, m.index, m[0].length);
+    if (context === "reference") continue;
     const weekNumber = Number(m[2]);
     if (weekNumber < 1 || weekNumber > 15) continue;
     if (out.some((f) => m.index < f.index + f.length && f.index < m.index + m[0].length)) continue;
     const found: Found = { index: m.index, length: m[0].length, date: null, weekNumber };
-    if (START_BEFORE_RE.test(text.slice(Math.max(0, m.index - 30), m.index))) {
+    if (context === "release") {
       found.tbcReason = `The quote says week ${weekNumber} is when this starts or opens, not its deadline.`;
       delete found.weekNumber;
       out.push(found);

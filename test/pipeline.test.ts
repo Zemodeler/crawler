@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines, placeCourse, textDeadlines, titleOverlap, weekMapForCourse } from "../src/index.ts";
-import { termFromText } from "../src/pipeline.ts";
+import { mergeSameWeek, placeInWeek, termFromText, weekRefs } from "../src/pipeline.ts";
+import { weekMapFor } from "../src/weeks.ts";
 import type { AiRunner, Course, Deadline, ManifestEntry, TextDeadlinesInput, VleItem } from "../src/index.ts";
 
 const NOW = new Date("2026-10-16T09:00:00Z");
@@ -86,6 +87,111 @@ function fakeRunner(answer: (prompt: string) => AiItem[], cli: "claude" | "codex
 
 const ORAL = "The oral presentation is worth 10% of the module mark. It happens in week 11 on Friday.";
 const ORAL_QUOTE = "It happens in week 11 on Friday.";
+
+test("week roles distinguish due dates from releases, feedback and source pointers", () => {
+  for (const quote of [
+    "The test is in-person. More details are in the week 4 announcement.",
+    "The quiz has feedback in week 13 on Friday.",
+    "The coursework feedback will be provided in week 8.",
+  ]) assert.deepEqual(weekRefs(quote), { due: [], release: [] }, quote);
+  assert.deepEqual(weekRefs("DB Concepts quiz in week 11; feedback in week 13"), { due: [11], release: [] });
+  assert.deepEqual(weekRefs("Coursework released week 7 &10"), { due: [], release: [7, 10] });
+  assert.deepEqual(weekRefs("Coursework released week 7 and week 10"), { due: [], release: [7, 10] });
+  assert.deepEqual(weekRefs("Coursework is due by the end of week 11"), { due: [11], release: [] });
+});
+
+test("inferred windows are recomputed from current evidence while student choices are preserved", () => {
+  const map = weekMapFor("qmul", "2026-27 Semester A")!;
+  const base: Deadline = {
+    id: "qmul:TST101U:text:window", module: "TST101U", year: "2026-27", title: "Coursework", kind: "coursework", status: "tbc", due: null, history: [], sources: [],
+    window: { from: { iso: "2026-10-12T00:00:00Z", allDay: true, tz: "Europe/London" }, to: { iso: "2026-10-16T00:00:00Z", allDay: true, tz: "Europe/London" } },
+  };
+  const quoted = (...quotes: string[]): Deadline => ({ ...base, sources: quotes.map((quote) => ({ type: "announcement", strength: "quoted", url: SITE, quote, date: null, seenAt: NOW.toISOString() })) });
+  const reference = quoted("More details on the coursework are in the week 4 announcement.");
+  assert.equal(placeInWeek(reference, map).window, undefined);
+  assert.equal(placeInWeek(quoted("Coursework is due in week 11."), map).window?.from.iso, "2026-11-30T00:00:00.000Z");
+  assert.equal(placeInWeek(quoted("Coursework due week 11.", "Coursework due week 12."), map).window, undefined);
+  assert.equal(placeInWeek(quoted("Coursework released week 7."), map).window, undefined);
+  assert.equal(placeInWeek(quoted("Coursework released week 7.", "Lab duration 3 days."), map).window, undefined);
+  const duration = placeInWeek(quoted("Coursework released week 5, duration 6 days."), map).window;
+  // Adding London calendar days crosses the October clock change correctly.
+  assert.equal(duration?.from.iso, "2026-10-24T23:00:00.000Z");
+  assert.equal(duration?.to.iso, "2026-10-29T00:00:00.000Z");
+  assert.equal(placeInWeek(quoted("Coursework due week 11."), null).window, undefined);
+  for (const choice of [{ done: true }, { done: false }, { userNote: "Keep my dates" }, { status: "user-verified" as const }]) {
+    assert.deepEqual(placeInWeek({ ...reference, ...choice }, map), { ...reference, ...choice });
+  }
+});
+
+test("neither rules nor AI turn a feedback or release week into a due date", async () => {
+  const t = await setup();
+  try {
+    for (const quote of ["The coursework feedback is in week 9 on Friday.", "The coursework is released on Friday of week 9."]) {
+      const ai = fakeRunner(() => [aiItem({ title: "Coursework", kind: "coursework", weight: null, date: "2026-11-20", weekNumber: 9, quote })]);
+      const result = await t.run([announcement(1, quote)], { ai });
+      assert.ok(result.deadlines.every((d) => d.due === null && d.window === undefined), quote);
+    }
+  } finally { await t.cleanup(); }
+});
+
+test("separate numbered coursework due on the same day stays separate", async () => {
+  const t = await setup();
+  try {
+    const { deadlines } = await t.run([
+      announcement(1, "Coursework 1 is due on 14 December 2026 at 10:00 for all students."),
+      announcement(2, "Coursework 2 is due on 14 December 2026 at 10:00 for all students."),
+    ]);
+    assert.equal(deadlines.length, 2);
+    assert.ok(deadlines.some((d) => /1/.test(d.title)));
+    assert.ok(deadlines.some((d) => /2/.test(d.title)));
+    assert.ok(deadlines.every((d) => d.sources.length === 1));
+  } finally { await t.cleanup(); }
+});
+
+test("identical coursework titles with different weights do not collapse through their generated IDs", async () => {
+  const t = await setup();
+  try {
+    const items = [
+      announcement(1, "The coursework is due on 14 December 2026 at 10:00 and counts for 10% of the module."),
+      announcement(2, "The coursework is due on 14 December 2026 at 10:00 and counts for 20% of the module."),
+    ];
+    const first = await t.run(items);
+    assert.equal(first.deadlines.length, 2);
+    assert.deepEqual(first.deadlines.map((d) => d.weight).sort(), [10, 20]);
+    const second = await t.run([...items].reverse());
+    assert.deepEqual(first.deadlines.map((d) => d.id).sort(), second.deadlines.map((d) => d.id).sort());
+  } finally { await t.cleanup(); }
+});
+
+test("same-week merging requires identity and preserves student choices and conflicting metadata", () => {
+  const base: Deadline = {
+    id: "qmul:TST101U:text:one", module: "TST101U", year: "2026-27", title: "SQL practice quiz", kind: "quiz", status: "tbc", due: null,
+    window: { from: { iso: "2026-10-26T00:00:00Z", allDay: true, tz: "Europe/London" }, to: { iso: "2026-10-30T00:00:00Z", allDay: true, tz: "Europe/London" } },
+    sources: [], history: [], weight: 10,
+  };
+  const other = (extra: Partial<Deadline>): Deadline => ({ ...base, id: "qmul:TST101U:text:two", ...extra });
+  assert.equal(mergeSameWeek([base, other({ title: "Practice quiz on SQL" })]).length, 1);
+  for (const extra of [
+    { title: "Database design quiz" }, { title: "Quiz" }, { weight: 20 }, { formative: true },
+    { done: true }, { done: false }, { userNote: "Keep this assessment" }, { userNote: "" },
+  ]) {
+    assert.equal(mergeSameWeek([base, other(extra)]).length, 2, JSON.stringify(extra));
+  }
+  assert.equal(mergeSameWeek([{ ...base, title: "Coursework 1" }, other({ title: "Coursework 2" })]).length, 2);
+  assert.equal(mergeSameWeek([{ ...base, title: "Coursework 1 part 2" }, other({ title: "Coursework 1 part 3" })]).length, 2);
+});
+
+test("a named assessment cannot attach to a different numbered VLE assessment on the same day", async () => {
+  const t = await setup();
+  try {
+    const { deadlines } = await t.run([
+      assignment("Coursework 1"),
+      announcement(1, "Coursework 2 is due on 14 December 2026 at 10:00 for all students."),
+    ]);
+    assert.equal(deadlines.length, 2);
+    assert.ok(deadlines.every((d) => d.sources.length === 1));
+  } finally { await t.cleanup(); }
+});
 
 test("AI rereads expire old quotes while unchanged and failed reads retain them", async () => {
   const t = await setup();
@@ -288,6 +394,7 @@ test("documents are read from the folder, in the cache, and big or non-text file
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "Brief.txt"), "The lab test is due on 3 December 2026 at 16:00 and counts for 10% of the module.");
     await writeFile(join(dir, "Picture.png"), "not text");
+    await writeFile(join(dir, "Broken.docx"), "not an Office archive");
     const big = await open(join(dir, "Huge.txt"), "w");
     await big.truncate(51 * 1024 * 1024);
     await big.close();
@@ -302,7 +409,10 @@ test("documents are read from the folder, in the cache, and big or non-text file
       sha256: "x",
       writtenAt: NOW.toISOString(),
     });
-    const { deadlines, counts } = await t.run([], { manifest: [entry("Brief.txt", 1), entry("Picture.png", 2), entry("Huge.txt", 3), entry("Missing.txt", 4)] });
+    const manifest = [entry("Brief.txt", 1), entry("Picture.png", 2), entry("Huge.txt", 3), entry("Missing.txt", 4), entry("Broken.docx", 5)];
+    const { deadlines, counts, issues } = await t.run([], { manifest });
+    assert.deepEqual(issues.map((i) => [i.file, i.reason]), [["Broken.docx", "no-text"], ["Huge.txt", "too-large"], ["Missing.txt", "read-failed"], ["Picture.png", "unsupported"]]);
+    assert.ok(issues.every((i) => !JSON.stringify(i).includes(SITE)), "diagnostics contain filenames, not authenticated source URLs");
     assert.equal(counts.sources, 1);
     assert.equal(deadlines.length, 1);
     const source = deadlines[0]!.sources[0]!;
@@ -311,6 +421,11 @@ test("documents are read from the folder, in the cache, and big or non-text file
     assert.equal(deadlines[0]!.weight, 10);
     assert.equal(deadlines[0]!.kind, "lab");
     assert.equal((await stat(join(t.root, ".crawler", "text"))).isDirectory(), true);
+    await rm(join(dir, "Brief.txt"));
+    const unreadable = await t.run([], { manifest });
+    assert.ok(unreadable.issues.some((i) => i.file === "Brief.txt" && i.reason === "read-failed"));
+    const merged = mergeDeadlines(deadlines, unreadable.deadlines, NOW, (s) => unreadable.refreshed.ruleUrls.includes(s.url));
+    assert.deepEqual(merged, deadlines, "a failed read retains earlier deadline evidence");
   } finally {
     await t.cleanup();
   }

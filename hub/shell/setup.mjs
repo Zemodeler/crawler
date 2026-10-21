@@ -153,6 +153,10 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       conflicts: result.deadlines.filter((d) => d.status === "conflict").length,
       needsCheck: result.deadlines.filter((d) => d.status === "needs-check").length,
       notifications: (result.notifications ?? []).length,
+        extractionIssues: result.courses.flatMap((c) => [
+          ...(c.extractionIssues ?? []).map((issue) => ({ module: c.shortname, ...issue })),
+          ...(c.textError ? [{ module: c.shortname, file: "Module text", reason: "read-failed", message: "Deadline text checking did not finish; earlier evidence was retained." }] : []),
+        ]),
       ...text,
     };
   }

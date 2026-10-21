@@ -11,7 +11,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 import { extractWithAi, planAiRuns, sourceHash } from "./ai-extract.ts";
-import { START_BEFORE_RE, findCandidates, looksLikeAssessmentText } from "./candidates.ts";
+import { findCandidates, looksLikeAssessmentText, weekContext } from "./candidates.ts";
 import { detectConflict, statusFor } from "./deadlines.ts";
 import { renameWithRetry } from "./fs-retry.ts";
 import { cachedExtract } from "./extract/cache.ts";
@@ -20,7 +20,7 @@ import type { DateCandidate, RejectedCandidate, TermWeekMap, TextSource } from "
 import { parseDatesInText, parseTimesInText, verifyCandidates } from "./quotes.ts";
 import type { WeekDateResolver } from "./quotes.ts";
 import type { AiRunner, Course, Deadline, ManifestEntry, ModulePlacement, Source, VleItem } from "./types.ts";
-import { resolveWeek, weekMapFor } from "./weeks.ts";
+import { londonInstant, resolveWeek, weekMapFor } from "./weeks.ts";
 
 const STATE_DIR = ".crawler";
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -61,12 +61,19 @@ export type TextDeadlinesInput = {
 };
 
 export type TextDeadlinesResult = {
+  issues: ExtractionIssue[];
   deadlines: Deadline[];
   counts: TextCounts;
   /** Successful reads, including reads which found no deadlines. */
   refreshed: { ruleUrls: string[]; aiUrls: string[] };
   /** The teaching-week calendar used for "week N", or null when the term is unknown. */
   weekMap: TermWeekMap | null;
+};
+
+export type ExtractionIssue = {
+  file: string;
+  reason: "unsupported" | "too-large" | "no-text" | "read-failed" | "unsafe-path";
+  message: string;
 };
 
 /* ------------------------------------------------------------- week map */
@@ -133,7 +140,7 @@ export function termFromPosts(universityId: string, year: string, items: VleItem
 
 const isPage = (text: string) => text.trim().length > 0;
 
-async function documentSources(root: string, entries: ManifestEntry[]): Promise<TextSource[]> {
+async function documentSources(root: string, entries: ManifestEntry[]): Promise<{ sources: TextSource[]; issues: ExtractionIssue[] }> {
   // The page body of a page activity comes from the VLE item, not the written file.
   const latest = new Map<string, ManifestEntry>();
   for (const entry of entries) {
@@ -143,22 +150,24 @@ async function documentSources(root: string, entries: ManifestEntry[]): Promise<
   }
   const base = resolve(root);
   const out: TextSource[] = [];
+  const issues: ExtractionIssue[] = [];
   for (const entry of [...latest.values()].sort((a, b) => a.localPath.localeCompare(b.localPath))) {
     const filename = entry.localPath.split("/").slice(-1)[0] ?? entry.localPath;
-    if (!detectFormat(filename).readable) continue;
+    const issue = (reason: ExtractionIssue["reason"], message: string) => issues.push({ file: filename, reason, message });
+    if (!detectFormat(filename).readable) { issue("unsupported", "This file format cannot be checked for deadlines."); continue; }
     const full = resolve(base, ...entry.localPath.split("/"));
-    if (!full.startsWith(base + sep)) continue;
+    if (!full.startsWith(base + sep)) { issue("unsafe-path", "The saved file path is outside the study folder."); continue; }
     try {
-      if ((await stat(full)).size > MAX_FILE_BYTES) continue;
+      if ((await stat(full)).size > MAX_FILE_BYTES) { issue("too-large", "The file exceeds the 50 MiB text extraction limit."); continue; }
       const bytes = await readFile(full);
       const doc = await cachedExtract(join(base, STATE_DIR), bytes, filename);
-      if (!doc.pages.some((p) => isPage(p.text))) continue;
+      if (!doc.pages.some((p) => isPage(p.text))) { issue("no-text", "No text could be extracted. The file may be blank, scanned or damaged."); continue; }
       out.push({ type: "document", title: filename, url: entry.sourceUrl, localPath: entry.localPath, pages: doc.pages });
     } catch {
-      // A file we cannot read has no text to offer; the course goes on.
+      issue("read-failed", "The file could not be read or extracted. It will be retried on the next sync.");
     }
   }
-  return out;
+  return { sources: out, issues };
 }
 
 function itemSources(items: VleItem[], manifest: ManifestEntry[]): TextSource[] {
@@ -187,11 +196,60 @@ function itemSources(items: VleItem[], manifest: ManifestEntry[]): TextSource[] 
 
 /* ------------------------------------------------------------- week-only quotes */
 
+export function weekRefs(quote: string): { due: number[]; release: number[]; durationDays?: number } {
+  const due = new Set<number>();
+  const release = new Set<number>();
+  for (const ref of parseDatesInText(quote)) {
+    if (ref.kind !== "week" || ref.week < 1 || ref.week > 15) continue;
+    const role = weekContext(quote, ref.index, ref.text.length);
+    if (role === "reference") continue;
+    const weeks = role === "release" ? release : due;
+    weeks.add(ref.week);
+    const more = /^\s*(?:&|and|,)\s*(?!week\b)(\d{1,2})(?!\d)/i.exec(quote.slice(ref.index + ref.text.length));
+    if (more && Number(more[1]) >= 1 && Number(more[1]) <= 15) weeks.add(Number(more[1]));
+  }
+  const durations = [...quote.matchAll(/\b(?:duration|lasts?|open\s+for)\s*:?\s*(\d{1,2})\s*days?\b/gi)].map((m) => Number(m[1]));
+  const unique = [...new Set(durations)];
+  return { due: [...due], release: [...release], ...(unique.length === 1 && unique[0]! > 0 ? { durationDays: unique[0] } : {}) };
+}
+
+function teachingWeek(map: TermWeekMap, week: number): Deadline["window"] | undefined {
+  try { return { from: resolveWeek(map, week, 1), to: resolveWeek(map, week, 5) }; }
+  catch { return undefined; }
+}
+
+function windowFromQuotes(quotes: string[], map: TermWeekMap): Deadline["window"] | undefined {
+  const refs = quotes.map(weekRefs);
+  const due = new Set(refs.flatMap((r) => r.due));
+  if (due.size === 1) return teachingWeek(map, [...due][0]!);
+  if (due.size > 1) return undefined;
+  // The release week and duration must be stated together, not assembled
+  // from unrelated quotes about different assessments.
+  const released = refs.filter((r) => r.release.length > 0);
+  if (released.length === 0 || released.some((r) => r.release.length !== 1 || r.durationDays === undefined)) return undefined;
+  const keys = new Set(released.map((r) => `${r.release[0]}:${r.durationDays}`));
+  if (keys.size !== 1) return undefined;
+  const ref = released[0]!;
+  const window = teachingWeek(map, ref.release[0]!);
+  if (!window) return undefined;
+  const addDays = (instant: NonNullable<Deadline["window"]>["from"]) => {
+    const [y, m, d] = londonDay(instant.iso).split("-").map(Number);
+    const shifted = new Date(Date.UTC(y!, m! - 1, d! + ref.durationDays!));
+    return londonInstant(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, shifted.getUTCDate());
+  };
+  return { from: addDays(window.from), to: addDays(window.to) };
+}
+
 /** Resolves "week N" quotes that name no date through the map, before verification. */
 function resolveWeekOnly(candidate: DateCandidate, map: TermWeekMap | null): DateCandidate {
-  if (!map || candidate.date !== null || candidate.weekNumber === undefined) return candidate;
+  if (candidate.weekNumber === undefined) return candidate;
   const refs = parseDatesInText(candidate.quote);
   if (refs.some((r) => r.kind === "date")) return candidate;
+  if (!weekRefs(candidate.quote).due.includes(candidate.weekNumber)) {
+    const { weekNumber: _week, weekMapSource: _map, ...rest } = candidate;
+    return { ...rest, date: null, tbcReason: "The week names a release, feedback or source reference, not the deadline." };
+  }
+  if (!map || candidate.date !== null) return candidate;
   if (!refs.some((r) => r.kind === "week" && r.week === candidate.weekNumber)) return candidate;
   const weekday = refs.find((r) => r.kind === "weekday");
   // "In week 9" without a day stays TBC: its Monday would be a guess.
@@ -212,13 +270,8 @@ function resolveWeekOnly(candidate: DateCandidate, map: TermWeekMap | null): Dat
  */
 export function weekWindow(candidate: DateCandidate, map: TermWeekMap | null): Deadline["window"] | undefined {
   if (!map || candidate.date !== null || candidate.weekNumber === undefined) return undefined;
-  const ref = parseDatesInText(candidate.quote).find((r) => r.kind === "week" && r.week === candidate.weekNumber);
-  if (!ref || START_BEFORE_RE.test(candidate.quote.slice(Math.max(0, ref.index - 30), ref.index))) return undefined;
-  try {
-    return { from: resolveWeek(map, candidate.weekNumber, 1), to: resolveWeek(map, candidate.weekNumber, 5) };
-  } catch {
-    return undefined;
-  }
+  if (!weekRefs(candidate.quote).due.includes(candidate.weekNumber)) return undefined;
+  return teachingWeek(map, candidate.weekNumber);
 }
 
 /**
@@ -226,42 +279,35 @@ export function weekWindow(candidate: DateCandidate, map: TermWeekMap | null): D
  * quotes agree on: one week number, named as a deadline and not a release.
  */
 export function placeInWeek(deadline: Deadline, map: TermWeekMap | null): Deadline {
-  if (!map || deadline.due !== null || deadline.window || deadline.status !== "tbc") return deadline;
-  const weeks = new Set<number>();
-  for (const s of deadline.sources) {
-    for (const ref of parseDatesInText(s.quote)) {
-      if (ref.kind !== "week" || START_BEFORE_RE.test(s.quote.slice(Math.max(0, ref.index - 30), ref.index))) continue;
-      weeks.add(ref.week);
-    }
-  }
-  if (weeks.size !== 1) return deadline;
-  const [week] = [...weeks];
-  try {
-    return { ...deadline, window: { from: resolveWeek(map, week!, 1), to: resolveWeek(map, week!, 5) } };
-  } catch {
-    return deadline;
-  }
+  if (deadline.due !== null || deadline.status !== "tbc" || deadline.done !== undefined || deadline.userNote !== undefined) return deadline;
+  if (deadline.window && !deadline.id.includes(":text:")) return deadline;
+  const window = map ? windowFromQuotes(deadline.sources.map((s) => s.quote), map) : undefined;
+  if (window) return { ...deadline, window };
+  if (!deadline.window) return deadline;
+  const { window: _window, ...rest } = deadline;
+  return rest;
 }
 
 /**
- * Text-found deadlines of the same module and kind, due in the same teaching
- * week with no day, are one assessment quoted in several places: the first
- * keeps its id and gathers the others' sources. Checked ones are left alone.
+ * Combine repeated named assessments in one teaching week. A shared week
+ * alone is insufficient; student choices and ambiguous matches stay separate.
  */
 export function mergeSameWeek(deadlines: Deadline[]): Deadline[] {
   const out: Deadline[] = [];
   for (const d of deadlines) {
-    const mergeable = (x: Deadline) => x.id.includes(":text:") && x.status === "tbc" && x.due === null && x.window !== undefined;
-    const into = mergeable(d)
-      ? out.findIndex(
-          (o) =>
+    const mergeable = (x: Deadline) => x.id.includes(":text:") && x.status === "tbc" && x.due === null && x.window !== undefined && x.done === undefined && x.userNote === undefined;
+    const matches = mergeable(d)
+      ? out.flatMap(
+          (o, i) =>
             mergeable(o) &&
             o.year === d.year &&
             o.module === d.module &&
             o.window!.from.iso === d.window!.from.iso &&
-            (o.kind === d.kind || o.kind === "other" || d.kind === "other"),
+            o.window!.to.iso === d.window!.to.iso &&
+            assessmentCompatible(o, d) && sameAssessmentTitle(o.title, d.title) ? [i] : [],
         )
-      : -1;
+      : [];
+    const into = matches.length === 1 ? matches[0]! : -1;
     if (into < 0) {
       out.push(d);
       continue;
@@ -313,6 +359,25 @@ export function titleOverlap(a: string, b: string): number {
   return shared / Math.min(ta.size, tb.size);
 }
 
+type AssessmentIdentity = Pick<Deadline, "title" | "kind" | "weight" | "formative">;
+const GENERIC_ASSESSMENT_WORDS = new Set(["coursework", "assignment", "assessment", "exam", "examination", "test", "quiz", "presentation", "lab", "deadline"]);
+const genericTitle = (title: string) => titleTokens(title).every((word) => GENERIC_ASSESSMENT_WORDS.has(word));
+
+function assessmentCompatible(a: AssessmentIdentity, b: AssessmentIdentity, allowKindMismatch = false): boolean {
+  if (!allowKindMismatch && a.kind !== b.kind && a.kind !== "other" && b.kind !== "other") return false;
+  if (a.weight !== undefined && b.weight !== undefined && a.weight !== b.weight) return false;
+  if (Boolean(a.formative) !== Boolean(b.formative)) return false;
+  const numbers = (title: string) => [...new Set(titleTokens(title).filter((word) => /^\d+$/.test(word)))].sort();
+  const na = numbers(a.title);
+  const nb = numbers(b.title);
+  return na.length === 0 || nb.length === 0 || na.join(",") === nb.join(",");
+}
+
+function sameAssessmentTitle(a: string, b: string): boolean {
+  const tokens = titleTokens(b);
+  return titleOverlap(a, b) >= OVERLAP && titleTokens(a).some((word) => !GENERIC_ASSESSMENT_WORDS.has(word) && tokens.includes(word));
+}
+
 function londonDay(iso: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
 }
@@ -323,6 +388,10 @@ function matchVle(candidate: DateCandidate, vle: Deadline[]): number {
   let bestScore = 0;
   let tied = false;
   vle.forEach((d, i) => {
+    // Moodle submission activities can call a named presentation coursework.
+    // A specific title may establish identity despite that platform label.
+    if (!assessmentCompatible(candidate, d, true)) return;
+    if (candidate.kind !== d.kind && !sameAssessmentTitle(candidate.title, d.title)) return;
     const score = titleOverlap(candidate.title, d.title);
     if (score < OVERLAP) return;
     if (score > bestScore) [best, bestScore, tied] = [i, score, false];
@@ -333,7 +402,8 @@ function matchVle(candidate: DateCandidate, vle: Deadline[]): number {
   if (tied) return -1;
   if (best >= 0 || !candidate.date) return best;
   const day = londonDay(candidate.date.iso);
-  const matches = vle.flatMap((d, i) => d.kind === candidate.kind && d.due !== null && londonDay(d.due.iso) === day ? [i] : []);
+  if (!genericTitle(candidate.title)) return -1;
+  const matches = vle.flatMap((d, i) => assessmentCompatible(candidate, d) && d.due !== null && londonDay(d.due.iso) === day ? [i] : []);
   return matches.length === 1 ? matches[0]! : -1;
 }
 
@@ -390,7 +460,8 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
   const seenAt = now.toISOString();
   const counts: TextCounts = { sources: 0, candidates: 0, verified: 0, rejected: 0, adjusted: 0, aiRuns: 0, aiMs: 0 };
 
-  const sources = [...(await documentSources(root, input.manifest)), ...itemSources(input.items, input.manifest)];
+  const documents = await documentSources(root, input.manifest);
+  const sources = [...documents.sources, ...itemSources(input.items, input.manifest)];
   counts.sources = sources.filter((s) => s.pages.some((p) => isPage(p.text))).length;
   const refreshed = { ruleUrls: sources.map((s) => s.url), aiUrls: [] as string[] };
   const term = weekMapForCourse(universityId, course, placement)
@@ -497,18 +568,33 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
       touched.add(hit);
       continue;
     }
-    // The same assessment quoted twice under different titles: same kind, same London day.
-    // A bare "the deadline is …" (kind other) is the named assessment due that day.
-    const sameKind = (d: Deadline) => d.kind === candidate.kind || d.kind === "other" || candidate.kind === "other";
-    const sameDay = candidate.date
-      ? [...fresh.values()].find((d) => sameKind(d) && d.due !== null && londonDay(d.due.iso) === londonDay(candidate.date!.iso))
+    // Named assessments need identity evidence; generic date references may
+    // attach only when there is one possible named assessment on that day.
+    const namedOnDay = candidate.date ? verified.filter((c) => c.date && londonDay(c.date.iso) === londonDay(candidate.date!.iso) && assessmentCompatible(c, candidate) && !genericTitle(c.title)) : [];
+    const uniqueNamedTitle = new Set(namedOnDay.map((c) => titleTokens(c.title).join(" "))).size <= 1;
+    const dayMatches = candidate.date
+      ? [...fresh.values()].filter((d) => assessmentCompatible(d, candidate) && d.due !== null && londonDay(d.due.iso) === londonDay(candidate.date!.iso) &&
+        (sameAssessmentTitle(d.title, candidate.title) || (uniqueNamedTitle && (genericTitle(d.title) || genericTitle(candidate.title)))))
+      : [];
+    const sameDay = dayMatches.length === 1 ? dayMatches[0]
       : undefined;
     // "Week 6: practice quiz" quoted in three places is one quiz: same kind, same teaching week.
     const window = weekWindow(candidate, map);
-    const sameWeek = window
-      ? [...fresh.values()].find((d) => sameKind(d) && d.due === null && d.window?.from.iso === window.from.iso)
-      : undefined;
-    const id = sameDay?.id ?? sameWeek?.id ?? textDeadlineId(universityId, module, candidate.title, candidate.kind);
+    const weekMatches = window
+      ? [...fresh.values()].filter((d) => assessmentCompatible(d, candidate) && sameAssessmentTitle(d.title, candidate.title) && d.due === null && d.window?.from.iso === window.from.iso)
+      : [];
+    const sameWeek = weekMatches.length === 1 ? weekMatches[0] : undefined;
+    let fallbackId = textDeadlineId(universityId, module, candidate.title, candidate.kind);
+    // Identical generic titles can describe different weighted/formative
+    // assessments. Avoid collapsing them through the title-derived ID after
+    // the matching guards correctly kept them separate.
+    const distinctMetadata = verified.some((c) =>
+      c.kind === candidate.kind && titleTokens(c.title).join(" ") === titleTokens(candidate.title).join(" ") && !assessmentCompatible(c, candidate));
+    if (distinctMetadata) {
+      const identity = JSON.stringify([candidate.weight ?? null, Boolean(candidate.formative)]);
+      fallbackId += `:${createHash("sha1").update(identity).digest("hex").slice(0, 12)}`;
+    }
+    const id = sameDay?.id ?? sameWeek?.id ?? fallbackId;
     const existing = fresh.get(id);
     if (existing) {
       const sources = addSource(existing.sources, source);
@@ -547,5 +633,5 @@ export async function textDeadlines(input: TextDeadlinesInput): Promise<TextDead
 
   const out = [...vle.map((d, i) => (touched.has(i) ? placeInWeek(detectConflict(d), map) : d)), ...[...fresh.values()].map(detectConflict)];
   if (updatedHashes) await writeJson(updatedHashes.path, updatedHashes.hashes);
-  return { deadlines: out, counts, refreshed, weekMap: map };
+  return { deadlines: out, counts, refreshed, weekMap: map, issues: documents.issues };
 }

@@ -19,7 +19,7 @@ Crawler, which fetches your modules
 from your university's course site into a `My Studies` folder in Documents.
 
 Until signed installers are published on the releases page, run it from a
-checkout (Crawler must be cloned next to this folder, as `../Crawler`):
+checkout, from this repository's `hub/` folder (Crawler is linked from `..`):
 
 ```bash
 pnpm install

@@ -52,6 +52,18 @@ function one(items: VleItem[], at = now): Deadline {
   return d;
 }
 
+test("deduplication never removes a text deadline carrying completion or a student note", () => {
+  const base = one([assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))]);
+  const source: Source = { ...base.sources[0]!, type: "document", strength: "quoted", quote: "Coursework 2 is due on 3 March 2027", url: "https://vle.example/brief" };
+  const previous: Deadline = { ...base, id: "qmul:ECS505U:text:old", sources: [source] };
+  const fresh: Deadline = { ...previous, id: "qmul:ECS505U:text:new" };
+  for (const choice of [{ done: true }, { done: false }, { userNote: "Check with tutor" }, { userNote: "" }]) {
+    const old = { ...previous, ...choice };
+    const result = mergeDeadlines([old], [fresh], later);
+    assert.ok(result.some((d) => d.id === old.id && d.done === old.done && d.userNote === old.userNote));
+  }
+});
+
 test("student completion survives normal and user-verified merges", () => {
   const base = one([assignment(1, "Coursework 2", unix("2027-03-03T12:00:00Z"))]);
   const fresh = one([assignment(1, "Coursework 2", unix("2027-03-10T12:00:00Z"))], later);

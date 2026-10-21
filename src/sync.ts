@@ -22,6 +22,7 @@ import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { once } from "node:events";
 
 import { changeLines, deadlinesFromItems, mergeDeadlines } from "./deadlines.ts";
+import { readDeadlineFile, withDeadlineLock, withSyncLock, writeDeadlineFile } from "./deadline-store.ts";
 import { parseAssessmentOverview } from "./assessments.ts";
 import type { AssessmentComponent } from "./assessments.ts";
 import { toIcs } from "./ics.ts";
@@ -31,7 +32,7 @@ import { placeCourse, sanitizeSegment } from "./naming.ts";
 import { eventsFromDiff, filesSummary } from "./notifications.ts";
 import type { NotificationEvent } from "./notifications.ts";
 import { mergeSameWeek, placeInWeek, textDeadlines } from "./pipeline.ts";
-import type { TextCounts } from "./pipeline.ts";
+import type { ExtractionIssue, TextCounts } from "./pipeline.ts";
 import type { TermWeekMap } from "./extraction-types.ts";
 import { planFiles } from "./sorter.ts";
 import type { FileJob } from "./sorter.ts";
@@ -96,6 +97,7 @@ export type CourseReport = {
   forumPosts?: number;
   /** Counts from the text step; absent when it did not run. */
   text?: TextCounts;
+  extractionIssues?: ExtractionIssue[];
   /** Set when the text step failed; the VLE deadlines were kept. */
   textError?: string;
   /** Set when assessment overview parsing failed; the rest of the course synced. */
@@ -150,6 +152,10 @@ export async function readState(root: string): Promise<SyncState> {
 /* ------------------------------------------------------------- the sync */
 
 export async function sync(options: SyncOptions): Promise<SyncResult> {
+  return withSyncLock(resolve(options.root), () => syncUnlocked(options));
+}
+
+async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const { adapter, credentials } = options;
   const now = options.now ?? new Date();
   const root = resolve(options.root);
@@ -163,7 +169,8 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
 
   const state = await readState(root);
   const manifest = new Map((await readJson<ManifestEntry[]>(join(root, STATE_DIR, "manifest.json"), [])).map((e) => [e.vleId, e]));
-  const previousDeadlines = await readJson<Deadline[]>(join(root, "Deadlines.json"), []);
+  // Fail before downloading if the student's saved deadlines cannot be read.
+  await readDeadlineFile(root);
   const freshAssessments = new Map<string, AssessmentComponent[]>();
 
   const courses = await adapter.listCourses(credentials);
@@ -252,6 +259,7 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
           deadlines = found.deadlines;
           weekMaps.set(`${placement.year}|${label}`, found.weekMap);
           report.text = found.counts;
+          if (found.issues.length) report.extractionIssues = found.issues;
           const current = new Set(plan.jobs.map((job) => job.file.url));
           for (const item of items) {
             if (item.kind === "announcement" || item.kind === "assignment" || item.kind === "forum-post") current.add(item.url);
@@ -298,23 +306,31 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   // Merge only the courses that synced: a failed or switched-off course keeps
   // its previous deadlines exactly as they were.
   const inSync = (d: Deadline) => syncedKeys.has(`${d.year}|${d.module}`);
-  const previousSynced = previousDeadlines.filter(inSync);
-  const untouched = previousDeadlines.filter((d) => !inSync(d));
-  const merged = mergeDeadlines(previousSynced, freshDeadlines, now, (source, deadline) => {
-    const refreshed = textRefresh.get(`${deadline.year}|${deadline.module}`);
-    if (!refreshed) return false; // Text disabled or failed: retain previous evidence.
-    if (!refreshed.current.has(source.url)) return true; // Removed from the VLE.
-    return (source.origin === "ai" ? refreshed.ai : refreshed.rule).has(source.url);
-  });
-  const placed = mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null)));
-  const deadlines = sortAll([...untouched, ...placed]);
-  const deadlineLines = changeLines(previousSynced, placed);
+  const { deadlines, placed, previousSynced, deadlineLines } = await withDeadlineLock(root, async () => {
+    // Read again at commit time: UI edits made during downloads must survive.
+    const previousDeadlines = await readDeadlineFile(root);
+    const previousSynced = previousDeadlines.filter(inSync);
+    const untouched = previousDeadlines.filter((d) => !inSync(d));
+    const merged = mergeDeadlines(previousSynced, freshDeadlines, now, (source, deadline) => {
+      const refreshed = textRefresh.get(`${deadline.year}|${deadline.module}`);
+      if (!refreshed) return false; // Text disabled or failed: retain previous evidence.
+      if (!refreshed.current.has(source.url)) return true; // Removed from the VLE.
+      return (source.origin === "ai" ? refreshed.ai : refreshed.rule).has(source.url);
+    });
+    const placed = mergeSameWeek(merged.map((d) => placeInWeek(d, weekMaps.get(`${d.year}|${d.module}`) ?? null)));
+    const deadlines = sortAll([...untouched, ...placed]);
+    const deadlineLines = changeLines(previousSynced, placed);
 
-  await writeJson(join(root, "Deadlines.json"), deadlines);
+    await writeDeadlineFile(root, deadlines);
+    // Keep the calendar export in order with other sync commits as well.
+    await writeText(join(root, "Deadlines.ics"), toIcs(deadlines, now));
+    return { deadlines, placed, previousSynced, deadlineLines };
+  });
   let assessmentsError: string | undefined;
   try {
     const previous = await readJson<AssessmentComponent[]>(join(root, "Assessments.json"), []);
-    const previousAssessments = Array.isArray(previous) ? previous : [];
+    if (!Array.isArray(previous)) throw new Error("Assessments.json must contain an array; repair it before syncing assessments.");
+    const previousAssessments = previous;
     const assessments = [
       ...previousAssessments.filter((entry) => !freshAssessments.has(`${entry.year}|${entry.module}`)),
       ...[...freshAssessments.values()].flat(),
@@ -323,7 +339,6 @@ export async function sync(options: SyncOptions): Promise<SyncResult> {
   } catch (error) {
     assessmentsError = error instanceof Error ? error.message : String(error);
   }
-  await writeText(join(root, "Deadlines.ics"), toIcs(deadlines, now));
 
   const changes = [...fileChanges.sort(), ...deadlineLines];
   if (changes.length) await prependChanges(root, now, changes);
@@ -567,8 +582,9 @@ async function runPool<T>(items: T[], size: number, work: (item: T) => Promise<v
 async function readJson<T>(path: string, fallback: T): Promise<T> {
   try {
     return JSON.parse(await readFile(path, "utf8")) as T;
-  } catch {
-    return fallback;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback;
+    throw error;
   }
 }
 

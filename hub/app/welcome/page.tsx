@@ -1,4 +1,5 @@
 "use client";
+import ExtractionWarnings from "../extraction-warnings.tsx";
 
 import { useEffect, useState } from "react";
 
@@ -207,8 +208,9 @@ export default function Welcome() {
                       {run.newFiles} new files from {run.coursesDone} module{run.coursesDone === 1 ? "" : "s"}.
                       {run.failedCourses.length ? ` ${run.failedCourses.join(", ")} could not be synced; Study Hub tries again on the next sync.` : ""}
                     </p>
-                    <div className="welcome-actions">
-                      <button className="primary large" onClick={finish}>Open Study Hub</button>
+                      <ExtractionWarnings summary={run.summary} />
+                      <div className="welcome-actions">
+                        <button className="primary large" onClick={finish}>Open Study Hub</button>
                     </div>
                   </>
                 )}

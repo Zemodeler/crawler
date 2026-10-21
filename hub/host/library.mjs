@@ -21,11 +21,20 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 // host can never allow a write the page would refuse, or the reverse.
 import { isSafeRelativePath, isWritablePath } from "../lib/course-format.ts";
 import { PROFILES } from "../lib/subject-profiles.ts";
+import { readDeadlineFile, withDeadlineLock, writeDeadlineFile } from "../../src/deadline-store.ts";
 
 const YEAR = /^\d{4}-\d{2}$/;
 const TEXT_EXTS = new Set(["md", "txt", "csv"]);
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_FILES = 20_000;
+
+function hasControlCharacters(value, allowWhitespace = false) {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    if (allowWhitespace && (code === 9 || code === 10 || code === 13)) return false;
+    return code <= 31 || code === 127;
+  });
+}
 
 export const RAW_MIME = {
   ".pdf": "application/pdf",
@@ -125,12 +134,7 @@ export async function readTexts(root, paths) {
 }
 
 export async function readDeadlines(root = libraryRoot()) {
-  try {
-    const parsed = JSON.parse(await readFile(join(root, "Deadlines.json"), "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return readDeadlineFile(root);
 }
 
 export async function readAssessments(root = libraryRoot()) {
@@ -144,10 +148,7 @@ export async function readAssessments(root = libraryRoot()) {
 }
 
 async function writeDeadlines(root, deadlines) {
-  const target = join(root, "Deadlines.json");
-  const temp = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await writeFile(temp, `${JSON.stringify(deadlines, null, 2)}\n`, "utf8");
-  await rename(temp, target);
+  await writeDeadlineFile(root, deadlines);
 }
 
 /** Match Crawler's Instants: London wall time, with all-day dates at London midnight. */
@@ -174,10 +175,10 @@ function londonInstant(date) {
   return { iso: new Date(utc).toISOString(), allDay, tz: "Europe/London" };
 }
 
-export async function addDeadline(root, body) {
+async function addDeadlineUnlocked(root, body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return { error: "Enter a deadline." };
   const { module, year, title, kind, date, weight, formative, note } = body;
-  const text = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+  const text = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !hasControlCharacters(v);
   if (!text(module, 100) || !/^[A-Za-z0-9_-]+$/.test(module)) return { error: "Choose a module." };
   if (typeof year !== "string" || !YEAR.test(year) || Number(year.slice(5)) !== (Number(year.slice(0, 4)) + 1) % 100) return { error: "Choose an academic year." };
   const tree = await listLibrary(root);
@@ -190,7 +191,7 @@ export async function addDeadline(root, body) {
   if (due.error) return due;
   if (weight !== undefined && (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > 100)) return { error: "Weight must be between 0 and 100." };
   if (formative !== undefined && typeof formative !== "boolean") return { error: "Formative must be true or false." };
-  if (note !== undefined && (typeof note !== "string" || note.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(note))) return { error: "Enter a note of up to 4000 characters." };
+  if (note !== undefined && (typeof note !== "string" || note.length > 4000 || hasControlCharacters(note, true))) return { error: "Enter a note of up to 4000 characters." };
   const deadline = {
     id: `user:${module}:${randomBytes(12).toString("hex")}`, module, year, title: title.trim(), kind,
     status: "user-verified", due, sources: [],
@@ -204,7 +205,7 @@ export async function addDeadline(root, body) {
   return { deadline };
 }
 
-export async function removeDeadline(root, body) {
+async function removeDeadlineUnlocked(root, body) {
   if (typeof body?.id !== "string" || !body.id.startsWith("user:")) return { error: "Only deadlines you added can be removed." };
   const deadlines = await readDeadlines(root);
   if (!deadlines.some((d) => d.id === body.id)) return { error: "No deadline with that id." };
@@ -212,7 +213,7 @@ export async function removeDeadline(root, body) {
   return { ok: true };
 }
 
-export async function setDeadlineDone(root, body) {
+async function setDeadlineDoneUnlocked(root, body) {
   if (typeof body?.id !== "string" || typeof body?.done !== "boolean") return { error: "Choose a deadline and whether it is done." };
   const deadlines = await readDeadlines(root);
   const deadline = deadlines.find((d) => d.id === body.id);
@@ -227,7 +228,7 @@ export async function setDeadlineDone(root, body) {
  * The student settles a deadline: either one of its sources' dates, or a date
  * they type. Written back as `user-verified`, which Crawler never overwrites.
  */
-export async function resolveDeadline(root, body) {
+async function resolveDeadlineUnlocked(root, body) {
   const deadlines = await readDeadlines(root);
   const item = deadlines.find((d) => d.id === body?.id);
   if (!item) return { error: "No deadline with that id." };
@@ -256,6 +257,11 @@ export async function resolveDeadline(root, body) {
   await writeDeadlines(root, deadlines);
   return { deadline: item };
 }
+
+export const addDeadline = (root, body) => withDeadlineLock(root, () => addDeadlineUnlocked(root, body));
+export const removeDeadline = (root, body) => withDeadlineLock(root, () => removeDeadlineUnlocked(root, body));
+export const setDeadlineDone = (root, body) => withDeadlineLock(root, () => setDeadlineDoneUnlocked(root, body));
+export const resolveDeadline = (root, body) => withDeadlineLock(root, () => resolveDeadlineUnlocked(root, body));
 
 export function rawStream(root, relative) {
   const full = resolveInside(root, relative);

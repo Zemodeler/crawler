@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -244,6 +244,19 @@ test("cachedExtract stores <stateDir>/text/<sha256>.<format>.json and returns it
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
+});
+
+test("empty extraction cache entries are retried and blank results are not cached", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "crawler-empty-cache-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const bytes = utf8("Coursework is due on 14 December 2026.");
+  await mkdir(join(stateDir, "text"));
+  const path = join(stateDir, "text", `${sha256(bytes)}.text.json`);
+  await writeFile(path, JSON.stringify({ sha256: sha256(bytes), format: "text", pages: [] }));
+  assert.equal((await cachedExtract(stateDir, bytes, "Brief.txt")).pages[0]?.text, "Coursework is due on 14 December 2026.");
+  const blank = utf8("");
+  assert.deepEqual((await cachedExtract(stateDir, blank, "Blank.txt")).pages, []);
+  await assert.rejects(readFile(join(stateDir, "text", `${sha256(blank)}.text.json`)), { code: "ENOENT" });
 });
 
 test("cachedExtract keys by format: the same bytes as .txt and as .html read differently", async () => {
