@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { discover, type HostHealth } from "../../lib/ai/host.ts";
 import { isHosted, loadSettings, saveSettings } from "../../lib/ai/settings.ts";
 import type { ProviderId } from "../../lib/ai/types.ts";
-import { markSetupDone, setupStatus, signIn, startSync, watchSync, type SetupStatus, type SyncRun } from "../../lib/setup.ts";
+import { markSetupDone, setupStatus, selectUniversity, signIn, startSync, watchSync, type SetupStatus, type SyncRun } from "../../lib/setup.ts";
 
 type Step = "sign-in" | "assistant" | "sync";
 const STEPS: { id: Step; label: string }[] = [
@@ -137,6 +137,25 @@ export default function Welcome() {
                   Your university&apos;s own sign-in page opens in a separate window. Study Hub never sees your password. It keeps
                   only a sign-in token, encrypted on this computer.
                 </p>
+                <label htmlFor="university">University</label>
+                <select id="university" value={status?.university.id ?? "qmul"}
+                  disabled={busy || !status || status.signingIn || status.sync.state === "running"}
+                  onChange={async (event) => {
+                    const university = event.target.value;
+                    setBusy(true);
+                    setError("");
+                    try {
+                      await selectUniversity(university);
+                      setStatus(await setupStatus());
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}>
+                  {status?.universities.map((u) => <option key={u.id} value={u.id}>{u.name}{u.experimental ? " (experimental)" : ""}</option>)}
+                </select>
+                {status?.university.id === "surrey" && <p>Surrey support is experimental. Check your synced modules and deadlines.</p>}
                 <div className="welcome-actions">
                   <button className="primary large" onClick={doSignIn} disabled={busy || !status}>
                     {busy ? "Waiting for you to sign in…" : "Sign in"}

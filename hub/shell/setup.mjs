@@ -13,11 +13,11 @@
  * must pass Crawler's quote check before it reaches the calendar.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
-  UNIVERSITIES,
+  ALL_UNIVERSITIES,
   VleError,
   connectCalendar,
   describeFreshness,
@@ -40,8 +40,9 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   const tokens = dependencies.tokens ?? createTokenStore({ safeStorage, dir: join(userData, "tokens") });
   const calendarTokens = dependencies.calendarTokens ?? createCalendarTokenStore({ safeStorage, dir: join(userData, "tokens") });
   const loginBrowser = createLoginBrowser({ BrowserWindow, session, parent });
-  const university = UNIVERSITIES[0];
-  const adapter = dependencies.adapter ?? getUniversity(university.id);
+  const universities = ALL_UNIVERSITIES.filter((u) => ["qmul", "surrey"].includes(u.id));
+  const selected = () => universities.find((u) => u.id === prefs().university) ?? universities.find((u) => u.id === "qmul");
+  const adapterFor = (university) => dependencies.adapter ?? (dependencies.getUniversity ?? getUniversity)(university.id);
   const runSync = dependencies.sync ?? sync;
   const prefsFile = join(userData, "sync-prefs.json");
 
@@ -67,6 +68,54 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     writeFileSync(prefsFile, `${JSON.stringify({ ...prefs(), ...next }, null, 2)}\n`);
   }
 
+  // Core state has only lastSync/courses and is rewritten by sync. Keep ownership
+  // separately in the library, so changing desktop preferences cannot relabel it.
+  function libraryOwner(root) {
+    const file = join(root, ".crawler", "university.json");
+    if (existsSync(file)) {
+      const owner = JSON.parse(readFileSync(file, "utf8"));
+      if (owner.version !== 1 || !universities.some((u) => u.id === owner.university))
+        throw new Error("Library university metadata is invalid. Use a separate empty library to change university.");
+      return owner.university;
+    }
+    // Unmarked content predates university selection. Preserve it as QMUL,
+    // including partial syncs and unreadable state; never infer that it is empty.
+    if (!existsSync(root)) return null;
+    const content = readdirSync(root).filter((name) => name !== ".crawler");
+    const metadata = existsSync(join(root, ".crawler"))
+      ? readdirSync(join(root, ".crawler")).filter((name) => !["schedule.json", "reminders.json"].includes(name)) : [];
+    if (!content.length && !metadata.length) return null;
+    claimLibrary(root, "qmul");
+    return "qmul";
+  }
+
+  function claimLibrary(root, university) {
+    mkdirSync(join(root, ".crawler"), { recursive: true });
+    writeFileSync(join(root, ".crawler", "university.json"), `${JSON.stringify({ version: 1, university })}\n`, { flag: "wx" });
+  }
+
+  function checkLibrary(university, claim = false) {
+    const root = libraryRoot();
+    const owner = libraryOwner(root);
+    if (owner && owner !== university.id)
+      throw new Error(`This library belongs to ${universities.find((u) => u.id === owner).displayName}. Use a separate empty library to switch universities; existing files will not be moved or deleted.`);
+    if (!owner && claim) claimLibrary(root, university.id);
+  }
+
+  async function selectUniversity(body = {}) {
+    if (signingIn || run.state === "running") return { error: "Wait for sign-in or sync to finish before switching university." };
+    const university = universities.find((u) => u.id === body.university);
+    if (!university) return { error: "Choose a supported university." };
+    try {
+      checkLibrary(university);
+      savePrefs({ university: university.id });
+      run = emptyRun("idle");
+      return { ok: true };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
   function calendarEnv() {
     return {
       tokens: calendarTokens,
@@ -76,12 +125,15 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   }
 
   async function status() {
+    const university = selected();
+    const adapter = adapterFor(university);
     const credentials = await tokens.load(adapter.site);
     const root = libraryRoot();
     const lastSync = (await readState(root)).lastSync;
     const env = calendarEnv();
     return {
       university: { id: university.id, name: university.displayName },
+      universities: universities.map((u) => ({ id: u.id, name: u.displayName, experimental: u.id === "surrey" })),
       signedIn: Boolean(credentials),
       signingIn,
       sync: run,
@@ -98,9 +150,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   }
 
   async function signIn() {
+    if (run.state === "running") return { error: "Wait for sync to finish before signing in." };
     if (signingIn) return { error: "The sign-in window is already open." };
     signingIn = true;
+    const university = selected();
+    const adapter = adapterFor(university);
     try {
+      checkLibrary(university);
       const credentials = await adapter.login(loginBrowser);
       await adapter.whoAmI(credentials);
       await tokens.save(credentials);
@@ -191,7 +247,10 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   }
 
   async function begin(origin) {
+    if (signingIn) return { error: "Wait for sign-in to finish before syncing." };
     if (run.state === "running") return { ok: true };
+    const university = selected();
+    const adapter = adapterFor(university);
     const previous = run;
     run = emptyRun("running"); // claimed before any await, so two callers cannot both start
     let credentials;
@@ -201,6 +260,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       credentials = await tokens.load(adapter.site);
       assistant = prefs().assistant ?? null;
       root = libraryRoot();
+      checkLibrary(university);
     } catch (error) {
       run = previous;
       return { error: error instanceof Error ? error.message : String(error) };
@@ -210,7 +270,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       return { error: `Sign in to ${university.displayName} first.` };
     }
 
-    runSync({
+    try {
+      checkLibrary(university, true);
+    } catch (error) {
+      run = previous;
+      return { error: error.message };
+    }
+    Promise.resolve().then(() => runSync({
       adapter,
       credentials,
       root,
@@ -226,7 +292,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
           if (event.result === "new") run.newFiles++;
         }
       },
-    })
+    }))
       .then(async (result) => {
         try {
           await formatLibrary(root, result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
@@ -292,6 +358,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
 
   return {
     status,
+    selectUniversity,
     signIn,
     startSync,
     startBackgroundSync,
