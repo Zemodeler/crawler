@@ -426,22 +426,48 @@ function addSource(sources: Source[], source: Source): Source[] {
   return sources.some((s) => sameSource(s, source)) ? sources : [...sources, source];
 }
 
-/** Fold an unreviewed, undated text record into its one specifically named dated assessment. */
+/** Quizzes and tests are both timed, invigilated assessments: one family. */
+const family = (kind: Deadline["kind"]) => (kind === "quiz" ? "exam" : kind);
+const sameFamily = (a: Deadline, b: Deadline) => a.kind === "other" || b.kind === "other" || family(a.kind) === family(b.kind);
+
+/**
+ * Fold an unreviewed, undated text record into the one dated assessment it
+ * speaks for: the one specifically named the same, else the one of the same
+ * family due inside the teaching week it names ("the week 11 quiz" and a
+ * term test dated in week 11), else, for a bare "Coursework" or "Test", the
+ * module's only assessment of that kind.
+ */
 export function foldIntoDated(deadlines: Deadline[]): Deadline[] {
   const foldable = (d: Deadline) => d.id.includes(":text:") && d.due === null && d.status === "tbc" && d.done === undefined && d.userNote === undefined;
   const dated = deadlines.filter((d) => d.due !== null && (d.status === "confirmed" || d.status === "conflict" || d.status === "user-verified"));
   const additions = new Map<string, Source[]>();
   const folded = new Set<Deadline>();
+  const inWeek = (d: Deadline, window: NonNullable<Deadline["window"]>) => {
+    const due = londonDay(d.due!.iso);
+    return due >= londonDay(window.from.iso) && due <= londonDay(window.to.iso);
+  };
   for (const text of deadlines) {
     if (!foldable(text)) continue;
-    const matches = dated.filter((d) =>
-      d.year === text.year && d.module === text.module &&
+    const sameModule = (d: Deadline) => d !== text && d.year === text.year && d.module === text.module;
+    let matches = dated.filter((d) =>
+      sameModule(d) &&
       assessmentCompatible(text, d, true) && sameAssessmentTitle(text.title, d.title) &&
       (text.kind === d.kind || text.kind === "other" || d.kind === "other" || !genericTitle(text.title)),
     );
+    if (matches.length === 0 && text.window) {
+      const window = text.window;
+      const weekly = dated.filter((d) => sameModule(d) && sameFamily(text, d) && inWeek(d, window));
+      const fits = weekly.filter((d) => assessmentCompatible({ ...text, formative: d.formative }, d, true) &&
+        (Boolean(text.formative) === Boolean(d.formative) || sameAssessmentTitle(text.title, d.title)));
+      if (weekly.length === 1) matches = fits;
+    }
+    if (matches.length === 0 && !text.window && genericTitle(text.title)) {
+      const others = deadlines.filter((d) => sameModule(d) && !folded.has(d) && d.status !== "cancelled" && d.kind === text.kind);
+      if (others.length === 1 && assessmentCompatible(text, others[0]!)) matches = others;
+    }
     if (matches.length !== 1) continue;
     const target = matches[0]!;
-    additions.set(target.id, text.sources.reduce(addSource, additions.get(target.id) ?? target.sources));
+    additions.set(target.id, (additions.get(text.id) ?? text.sources).reduce(addSource, additions.get(target.id) ?? target.sources));
     folded.add(text);
   }
   return deadlines.filter((d) => !folded.has(d)).map((d) => {

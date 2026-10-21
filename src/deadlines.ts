@@ -73,6 +73,23 @@ function firstYear(year: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/**
+ * The same London day and time moved into the academic year starting 1 Aug
+ * `first`, for a date copied forward from an older year. Null when that day
+ * doesn't exist (29 Feb).
+ */
+function sameDayInYear(date: Date, first: number): Date | null {
+  const p = new Intl.DateTimeFormat("en-GB", {
+    timeZone: TZ, year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type: string) => Number(p.find((part) => part.type === type)?.value);
+  const [month, day] = [get("month"), get("day")];
+  const year = month >= 8 ? first : first + 1;
+  const midnight = londonMidnight(year, month, day);
+  if (new Date(midnight + 12 * 60 * 60 * 1000).getUTCDate() !== day) return null;
+  return new Date(midnight + (get("hour") * 60 + get("minute")) * 60 * 1000);
+}
+
 /* ------------------------------------------------------------- title parsing */
 
 /** "mySkills Task 3 - Submission Link (3%)" -> 3. */
@@ -105,11 +122,13 @@ export function statusFor(
     const from = londonMidnight(first, 8, 1);
     const to = londonMidnight(first + 1, 10, 1); // exclusive: end of 30 Sep
     if (due.getTime() < from || due.getTime() >= to) {
+      const guess = sameDayInYear(due, first);
       return {
         status: "needs-check",
         checkReason:
           `The date ${when} is outside the ${year} academic year ` +
-          `(1 Aug ${first} to 30 Sep ${first + 1}), so it may be a placeholder.`,
+          `(1 Aug ${first} to 30 Sep ${first + 1}), so it may be a placeholder.` +
+          (guess ? ` If only the year is wrong, it is ${formatLondon(guess)}.` : ""),
       };
     }
   }

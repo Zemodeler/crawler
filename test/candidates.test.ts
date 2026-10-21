@@ -241,3 +241,39 @@ test("the real in-term test announcement keeps its date and time", () => {
   const c = only("Please note that the in-term test has now been scheduled for Tuesday, 3 November, from 11:00 to 13:00.", ctx);
   assert.equal(c.date?.iso, "2026-11-03T11:00:00.000Z");
 });
+
+test("an assessment table row: its description is the title and only the submission date is a deadline", () => {
+  const rows = [
+    "Seq Type Description Weight Submission Deadline Feedback Deadline",
+    "001 EXN Term Test: Main DB Concepts 40% Monday 30/11/2026 Monday 14/12/2026",
+    "002 EXN In-term test 40% Week 7 (TBC) 1 week after",
+  ].join("\n");
+  const found = findCandidates(source(rows, "page"), ctx);
+  const dated = found.filter((c) => c.date);
+  assert.deepEqual(dated.map((c) => [c.title, c.date!.iso, c.weight]), [["Term Test: Main DB Concepts", "2026-11-30T00:00:00.000Z", 40]]);
+  // A row is never the heading of the row below it.
+  assert.ok(found.every((c) => c.title !== "Term Test: Main DB Concepts" || c.date), JSON.stringify(found.map((c) => c.title)));
+  assert.ok(found.some((c) => c.title === "In-term test" && !c.date));
+});
+
+test("'CW (Part) 1' and 'CW part 2' are Coursework 1 and Coursework 2", () => {
+  const one = findCandidates(source("CW (Part) 1\nThis Assessment is Worth 15% of your final grade.\nSubmission Deadline: 11.11.2026", "page"), ctx);
+  assert.deepEqual(one.map((c) => [c.title, c.date?.iso]), [["Coursework 1", "2026-11-11T00:00:00.000Z"]]);
+  const two = findCandidates(source("CW part 2: released on week 10, QMplus submission, due 2 December 2026."), ctx);
+  assert.equal(two[0]?.title, "Coursework 2");
+});
+
+test("a list item above is not the heading of the next one, and 'rules' headings name nothing", () => {
+  const list = findCandidates(source("Week 6: SQL Practice quiz: formative feedback in week 8\nWeek 11: DB Concepts quiz: summative feedback in week 13", "page"), { ...ctx, weekMap: semA });
+  const week11 = list.find((c) => c.weekNumber === 11);
+  assert.ok(week11, JSON.stringify(list));
+  assert.notEqual(week11.title, "Week 6: SQL Practice quiz: formative feedback in week 8");
+  const rules = findCandidates(source("Exam/assessment rules:\nThe practice quiz closes on 30 October 2026."), ctx);
+  assert.equal(rules[0]?.title, "Practice quiz");
+});
+
+test("'examination period' and 'exam board' neither title nor classify coursework", () => {
+  const c = only("Coursework\nSubmission Deadline: Thursday 14/01/2027 (first week of Jan examination period), EECS exam board.");
+  assert.equal(c.title, "Coursework");
+  assert.equal(c.kind, "coursework");
+});

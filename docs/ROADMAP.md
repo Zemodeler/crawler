@@ -134,6 +134,46 @@ separate, while positive tests combine repeated evidence for one assessment.
 Cover numbering, conflicting weights, formative versus summative work,
 ambiguous titles, release durations, stale windows and repeat-sync stability.
 
+**Deadline accuracy pass (2026-10-21).** A live QMUL sync of four modules
+was captured with `tools/eval/capture.mjs` and replayed offline with
+`tools/eval/replay.mjs`. It was scored by `tools/eval/score.mjs` against 16
+hand-labelled assessments, 13 of them required. The capture and gold set are
+private course data and stay under the ignored `out/replay/`.
+
+| | before | after |
+|---|---|---|
+| required assessments right | 9 | 13 |
+| wrong (false conflict) | 2 | 0 |
+| missing | 1 | 0 |
+| duplicates of a real assessment | 6 | 3 |
+| junk entries | 1 | 1 |
+| deadlines total | 24 | 18 |
+
+Fixes:
+- In assessment-overview table rows, the description is the title and only
+  the submission date counts. The feedback date no longer causes a conflict.
+- A row is never the heading of the next row.
+- "CW (Part) 1" now reads as Coursework 1. Before, two coursework parts
+  merged into one record with conflicting dates.
+- A heading that carries its own week or date, or a "rules" or "guidance"
+  heading, is not used as a title. Phrases such as "examination period" and
+  "exam board" no longer name or classify coursework.
+- Undated mentions now fold into a dated assessment in two cases:
+  - When a teaching week holds exactly one assessment of the same family
+    (quiz or test), the mention folds into it.
+  - A bare "Coursework" or "Test" folds into the module's only assessment of
+    that kind.
+- Out-of-year VLE dates stay needs-check, and their reason now gives the
+  same day in the current academic year.
+
+Remaining gaps:
+- In ECS529U, the "Coursework", "In-person test" and "Test" mentions for the
+  week 12 test stay separate. Same-week merging of a generic title with a
+  named one remains deliberately off.
+- The VLE `test_quiz` with no close date can't be identified.
+- ECS505U keeps a "coursework released week 7 & 10" mention.
+- Re-capture and re-score after QMplus changes. Surrey has no gold set yet.
+
 ### 4. Make extraction coverage visible (P1, implemented; local checks passing)
 
 **Scope:** extraction/pipeline counts and reports, CLI output, desktop sync

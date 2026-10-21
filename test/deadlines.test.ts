@@ -144,6 +144,17 @@ test("the ECS505U 2028 placeholder is needs-check with a reason", () => {
   assert.equal(d.status, "needs-check");
   assert.match(d.checkReason ?? "", /Thu 1 Jun 2028, 12:00/);
   assert.match(d.checkReason ?? "", /1 Aug 2026 to 30 Sep 2027/);
+  assert.match(d.checkReason ?? "", /If only the year is wrong, it is Tue 1 Jun 2027, 12:00\./);
+});
+
+test("a date copied forward from an older year suggests the same day this academic year", () => {
+  // QMplus ECS505U: "Sequence diagram submission link (formative)", due Sun 22 Oct 2028.
+  const d = one([assignment(4, "Sequence diagram submission link (formative)", unix("2028-10-22T11:00:00Z"))]);
+  assert.equal(d.status, "needs-check");
+  assert.equal(d.due?.iso, "2028-10-22T11:00:00.000Z", "the VLE date itself is kept");
+  assert.match(d.checkReason ?? "", /it is Thu 22 Oct 2026, 12:00\./);
+  const leap = one([assignment(5, "Leap day task", unix("2028-02-29T12:00:00Z"))]);
+  assert.doesNotMatch(leap.checkReason ?? "", /If only the year/, "29 Feb 2027 doesn't exist");
 });
 
 test("academic-year window edges use London time", () => {

@@ -68,7 +68,21 @@ const CITATION_RE = /\b(?:accessed|retrieved|doi|isbn|proceedings|journal\s+of)\
 const REFERENCES_HEADING_RE = /^\s*(?:\d+(?:\.\d+)*\.?\s+)?(?:references|bibliography|reading\s+list|further\s+reading|works\s+cited|sources)\s*:?\s*$/i;
 
 const TITLE_RE =
-  /\b(?:(?:mid-?term|final|class|in-class|online|group|individual|written|practical|programming|lab)\s+)?(?:coursework|assignment|lab\s+test|lab\s+report|test|quiz|exam(?:ination)?|presentation|project|essay|report|viva)(?:\s+(?:\d+|[A-Z])\b)?/gi;
+  /\b(?:(?:mid-?term|in-term|end-term|term|final|class|in-class|in-person|in-lab|practice|online|group|individual|written|practical|programming|lab)\s+)?(?:coursework|assignment|lab\s+test|lab\s+report|test|quiz|exam(?:ination)?|presentation|project|essay|report|viva)(?:\s+(?:\d+|[A-Z])\b)?|\bCW\s*(?:\(?\s*part\s*\)?\s*)?\d+\b/gi;
+
+/** "CW (Part) 1", "CW part 2", "CW1": QMUL's shorthand for Coursework N. */
+const CW_RE = /^CW\s*(?:\(?\s*part\s*\)?\s*)?(\d+)$/i;
+
+/**
+ * A row of an assessment overview table, flattened to one line:
+ * "001 EXN Term Test: Main DB Concepts 40% Monday 30/11/2026 Monday 14/12/2026".
+ * Its columns are seq, type, description, weight, submission deadline and
+ * feedback deadline, so only the first date is a deadline.
+ */
+const TABLE_ROW_RE = /^\s*(\d{3})\s+([A-Z]{2,4})\s+(.+?)\s+(\d{1,3}(?:\.\d+)?)\s*%/;
+
+/** Headings that introduce rules or guidance about assessments, not one assessment. */
+const NOT_TITLE_RE = /\b(?:rules|regulations|polic(?:y|ies)|guidance|guidelines|information|overview|instructions|criteria|rubrics?|support|resources|feedback)\b/i;
 
 /* ------------------------------------------------------------- segments */
 
@@ -76,7 +90,7 @@ type Segment = { start: number; end: number; text: string; heading?: string };
 
 function isHeading(line: string): boolean {
   const t = line.trim();
-  if (!t || /[.!?,;]$/.test(t)) return false;
+  if (!t || /[.!?,;]$/.test(t) || TABLE_ROW_RE.test(t)) return false;
   if (t.split(/\s+/).length > 10) return false;
   return /^[A-Z0-9]/.test(t);
 }
@@ -263,15 +277,26 @@ function findDates(seg: Segment, ctx: { year: string; weekMap?: TermWeekMap }): 
     }
     out.push(found);
   }
-  return out.sort((a, b) => a.index - b.index);
+  out.sort((a, b) => a.index - b.index);
+  if (!TABLE_ROW_RE.test(text)) return out;
+  // Dates after the submission column are feedback deadlines.
+  const first = out.findIndex((f) => f.weekNumber === undefined && f.date !== null);
+  return first < 0 ? out : out.slice(0, first + 1);
 }
 
 /* ------------------------------------------------------------- titles, kinds, quotes */
 
 function titlePhrases(text: string): Array<{ index: number; phrase: string }> {
   const out: Array<{ index: number; phrase: string }> = [];
+  // "Jan examination period" and "exam board" name no assessment.
+  const skip: Array<[number, number]> = [];
+  NOT_ASSESS_RE.lastIndex = 0;
+  for (let m = NOT_ASSESS_RE.exec(text); m; m = NOT_ASSESS_RE.exec(text)) skip.push([m.index, m.index + m[0].length]);
   TITLE_RE.lastIndex = 0;
-  for (let m = TITLE_RE.exec(text); m; m = TITLE_RE.exec(text)) out.push({ index: m.index, phrase: m[0] });
+  for (let m = TITLE_RE.exec(text); m; m = TITLE_RE.exec(text)) {
+    if (skip.some(([a, b]) => m.index < b && a < m.index + m[0].length)) continue;
+    out.push({ index: m.index, phrase: m[0] });
+  }
   return out;
 }
 
@@ -293,25 +318,44 @@ function usableTitle(text: string | undefined): string | undefined {
   if (!text) return undefined;
   const trimmed = text.trim().replace(/\s+/g, " ");
   if (trimmed.length > 80 || /[.!?]\s+\S/.test(trimmed) || /\b(?:the|a|an|and|of|to)$/i.test(trimmed)) return undefined;
+  if (NOT_TITLE_RE.test(trimmed)) return undefined;
   return titlePhrases(trimmed).length > 0 ? trimmed : undefined;
 }
 
+/** A heading that gives its own week or date is a sibling list item ("Week 6: practice quiz"), not a heading. */
+function headingTitle(heading: string | undefined): string | undefined {
+  if (!heading) return undefined;
+  DATE_RE.lastIndex = 0;
+  WEEK_RE.lastIndex = 0;
+  if (DATE_RE.test(heading) || WEEK_RE.test(heading)) return undefined;
+  return usableTitle(heading);
+}
+
+function cleanPhrase(phrase: string): string {
+  const cw = CW_RE.exec(phrase.trim());
+  return cw ? `Coursework ${cw[1]}` : capitalise(phrase.replace(/\s+/g, " "));
+}
+
 function chooseTitle(seg: Segment, at: number, fallback: string): string {
+  const row = TABLE_ROW_RE.exec(seg.text);
+  if (row) return row[3]!.trim();
   const phrases = titlePhrases(seg.text);
   const distinct = new Set(phrases.map((p) => p.phrase.toLowerCase()));
-  const heading = usableTitle(seg.heading);
-  if (heading && distinct.size < 2) return heading;
+  const heading = headingTitle(seg.heading);
+  if (heading && distinct.size < 2) return CW_RE.test(heading) ? cleanPhrase(heading) : heading;
   if (phrases.length > 0) {
     // The phrase before the date, else the first after it.
     const before = phrases.filter((p) => p.index <= at);
     const pick = before.length > 0 ? before[before.length - 1]! : phrases[0]!;
-    return capitalise(pick.phrase.replace(/\s+/g, " "));
+    return cleanPhrase(pick.phrase);
   }
   // Never a sentence fragment: a named heading or source title, else the kind.
   return heading ?? usableTitle(fallback) ?? KIND_TITLE[inferKind(seg.text)];
 }
 
 export function inferKind(text: string): Deadline["kind"] {
+  // "EECS exam board" and "exam period" don't make coursework an exam.
+  text = text.replace(NOT_ASSESS_RE, " ");
   if (/\blab(?:oratory)?\s+(?:tests?|reports?|exams?|assessments?)\b/i.test(text)) return "lab";
   if (/\bquiz(?:zes)?\b/i.test(text)) return "quiz";
   if (/\b(?:exam(?:ination)?s?|tests?)\b/i.test(text)) return "exam";

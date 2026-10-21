@@ -199,6 +199,33 @@ test("undated text folds into a uniquely named dated assessment without losing i
   }
 });
 
+test("an undated mention of a teaching week folds into the one assessment of its family due that week", () => {
+  const window: Deadline["window"] = { from: { iso: "2026-11-30T00:00:00.000Z", allDay: true, tz: "Europe/London" }, to: { iso: "2026-12-04T00:00:00.000Z", allDay: true, tz: "Europe/London" } };
+  const test11: Deadline = {
+    id: "qmul:TST101U:text:term", module: "TST101U", year: "2026-27", title: "Term Test: Main DB Concepts", kind: "exam", weight: 40,
+    status: "confirmed", due: { iso: "2026-11-30T00:00:00.000Z", allDay: true, tz: "Europe/London" }, sources: [], history: [],
+  };
+  const quote = { type: "announcement" as const, strength: "quoted" as const, url: `${SITE}/n`, quote: "the in-term quiz in week 11", date: null, seenAt: NOW.toISOString() };
+  const quiz: Deadline = { id: "qmul:TST101U:text:quiz", module: "TST101U", year: "2026-27", title: "In-term quiz", kind: "quiz", status: "tbc", due: null, window, sources: [quote], history: [] };
+  const folded = foldIntoDated([test11, quiz]);
+  assert.deepEqual(folded.map((d) => [d.id, d.sources.length]), [[test11.id, 1]]);
+  // Two candidates that week, a formative mention of a summative test, or another family: kept apart.
+  const second = { ...test11, id: "qmul:TST101U:text:other", title: "Lab test" };
+  assert.equal(foldIntoDated([test11, second, quiz]).length, 3);
+  assert.equal(foldIntoDated([test11, { ...quiz, formative: true }]).length, 2);
+  assert.equal(foldIntoDated([test11, { ...quiz, kind: "coursework", title: "Coursework" }]).length, 2);
+});
+
+test("a bare 'Coursework' with no date or week folds into the module's only coursework", () => {
+  const cw: Deadline = {
+    id: "qmul:TST101U:text:cw", module: "TST101U", year: "2026-27", title: "Coursework: Create and Query Your Database", kind: "coursework",
+    status: "confirmed", due: { iso: "2027-01-14T15:00:00.000Z", allDay: false, tz: "Europe/London" }, sources: [], history: [],
+  };
+  const bare: Deadline = { id: "qmul:TST101U:text:bare", module: "TST101U", year: "2026-27", title: "Coursework", kind: "coursework", status: "tbc", due: null, sources: [], history: [] };
+  assert.equal(foldIntoDated([bare, cw]).length, 1);
+  assert.equal(foldIntoDated([bare, cw, { ...cw, id: "qmul:TST101U:text:cw2", title: "Coursework 2" }]).length, 3);
+});
+
 test("undated text remains separate when identity is generic, ambiguous or conflicts", () => {
   const first = deadlinesFromItems([assignment("Database design quiz 1 (20%)")], COURSE, PLACEMENT, NOW)[0]!;
   const second: Deadline = { ...first, id: "another:dated", title: "Database design quiz 1 resit" };
@@ -764,7 +791,9 @@ test("a bare 'the deadline is …' on the same day as a named coursework is one 
     assert.equal(onDay.length, 1, JSON.stringify(deadlines.map((d) => [d.title, d.kind, d.due?.iso])));
     assert.equal(onDay[0]!.kind, "coursework");
     assert.equal(onDay[0]!.due?.iso, "2027-01-14T15:00:00.000Z");
-    assert.equal(onDay[0]!.sources.length, 2);
+    assert.equal(onDay[0]!.sources.length, 3, "the dated quotes and the bare release quote");
+    assert.ok(onDay[0]!.sources.some((s) => s.quote.includes("submit from week 12")));
+    assert.equal(deadlines.length, 1, "the release mention folds into the only coursework");
   } finally {
     await t.cleanup();
   }
