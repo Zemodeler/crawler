@@ -89,11 +89,13 @@ using a subscription needs the desktop app.
   in a new tab; clicking a CSV jumps into the flashcards.
 - **All files view.** Every file grouped by what it is: guides, topic packs,
   flashcards, past papers, seminars, source materials.
-- **Ask about this.** With an AI connection set up, ask a question about
-  whatever you currently have open — a topic pack, a guide, a lecture you
-  opened directly — and get an answer grounded in that item's own text and its
-  linked source files. Internet access is available too, but off by default:
-  you turn it on per conversation, and it's never quietly assumed.
+- **Study assistant.** In the desktop app, the round button in the bottom-right
+  corner of every page opens a chat docked along the right edge. It answers
+  from the module you have open (its study packs and notes first, then up to a
+  dozen slide decks and PDFs) and from your saved deadlines, so "what's due next
+  week?" works. It runs through your AI connection, normally the Claude or
+  Codex command line on this computer, and never has internet access. Answers
+  cite the file they came from, and each quote is checked against your files.
 
 ### Flashcards
 

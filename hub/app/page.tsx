@@ -3,7 +3,6 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { SubjectControl, useModuleSubject } from "./subject-control.tsx";
-import ChatPanel from "./chat/ChatPanel.tsx";
 import { FormatCheckBanner, FormatCheckDialog } from "./format-check-dialog.tsx";
 import { Markdown } from "./markdown.tsx";
 import { hasAnyConnection, isHosted } from "../lib/ai/settings.ts";
@@ -137,7 +136,6 @@ export default function Home() {
   );
   const [aiReady, setAiReady] = useState(false);
   const [manifest, setManifest] = useState<Manifest | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
   const fallbackRef = useRef<HTMLInputElement>(null);
   /** Set when the desktop app serves My Studies; null for a picked folder. */
   const [library, setLibrary] = useState<LibraryTree | null>(null);
@@ -905,13 +903,6 @@ export default function Home() {
                 ))}
             </div>
             <div className="reader-paper">
-              {selectedFile?.text && (
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
-                  <button className="chat-launch" onClick={() => setChatOpen(true)}>
-                    Ask about this
-                  </button>
-                </div>
-              )}
               {selectedFile?.text ? (
                 selectedFile.ext === "md" ? (
                   <Markdown
@@ -981,15 +972,6 @@ export default function Home() {
         onChange={fallbackImport}
         {...({ webkitdirectory: "" } as object)}
       />
-      {chatOpen && selectedFile && (
-        <ChatPanel
-          onClose={() => setChatOpen(false)}
-          files={files}
-          selected={selected}
-          manifest={manifest}
-          aiReady={aiReady}
-        />
-      )}
     </div>
   );
 }

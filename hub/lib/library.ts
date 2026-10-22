@@ -157,6 +157,8 @@ export function currentAcademicYear(now = new Date()): string {
 /* ------------------------------------------------------------ active module */
 
 const ACTIVE_KEY = "studyhub:library:active";
+/** Fired on `window` with the new `<year>/<module>` key whenever the open module changes. */
+export const ACTIVE_MODULE_EVENT = "studyhub:active-module";
 
 /** `<year>/<module>`: the key progress and flashcard data are stored under. */
 export function savedActiveModule(): string {
@@ -168,6 +170,7 @@ export function savedActiveModule(): string {
 }
 
 export function saveActiveModule(key: string) {
+  window.dispatchEvent(new CustomEvent(ACTIVE_MODULE_EVENT, { detail: key }));
   try {
     localStorage.setItem(ACTIVE_KEY, key);
   } catch {

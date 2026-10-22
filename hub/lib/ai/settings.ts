@@ -145,19 +145,3 @@ export async function hasAnyConnection(): Promise<boolean> {
 export function isHosted(): boolean {
   return browser() && /(?:^|;\s*)studyhub_host=1(?:;|$)/.test(document.cookie);
 }
-
-/* -------------------------------------------------------------------- chat */
-
-const CHAT_INTERNET_KEY = "studyhub:chat:internet";
-
-/**
- * Default-off, per-tab, never a durable setting: internet access for the chat
- * assistant is deliberately something you opt into again each session, not
- * something that quietly stays on.
- */
-export function loadChatInternet(): boolean {
-  return browser() ? sessionStorage.getItem(CHAT_INTERNET_KEY) === "1" : false;
-}
-export function saveChatInternet(value: boolean): void {
-  if (browser()) sessionStorage.setItem(CHAT_INTERNET_KEY, value ? "1" : "0");
-}

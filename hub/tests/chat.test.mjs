@@ -192,3 +192,51 @@ test("sendChatMessage never requests web search from a client whose chatCapabili
   assert.equal(requestedWebSearch, false, "the client's own capability must win, not the caller's toggle");
   assert.equal(result.turn.ungrounded, true, "a reply with no citation footer must be flagged");
 });
+
+const deadlinesText = await import("../lib/ai/chat-deadlines.ts");
+
+const deadline = (overrides) => ({
+  id: "qmul:x",
+  module: "ECS505U",
+  year: "2026-27",
+  title: "Coursework 1",
+  kind: "coursework",
+  status: "confirmed",
+  due: { iso: "2026-10-29T12:00:00.000Z", allDay: false, tz: "Europe/London" },
+  sources: [],
+  ...overrides,
+});
+
+test("deadlinesBlock lists live deadlines in date order with London times and flags", () => {
+  const now = new Date("2026-10-22T09:00:00.000Z");
+  const text = deadlinesText.deadlinesBlock(
+    [
+      deadline({ id: "b", title: "Lab report", kind: "lab", weight: 15 }),
+      deadline({ id: "a", title: "Quiz 2", kind: "quiz", due: { iso: "2026-10-20T00:00:00.000Z", allDay: true, tz: "Europe/London" } }),
+      deadline({ id: "c", title: "Dropped", status: "cancelled" }),
+      deadline({ id: "d", title: "Essay", due: null, status: "tbc" }),
+      deadline({ id: "e", title: "Week task", due: null, status: "tbc",
+        window: { from: { iso: "2026-11-02T00:00:00.000Z", allDay: true, tz: "Europe/London" }, to: { iso: "2026-11-06T00:00:00.000Z", allDay: true, tz: "Europe/London" } } }),
+    ],
+    now,
+  );
+  const lines = text.split("\n");
+  assert.deepEqual(lines.map((l) => l.match(/\] (.+?) \|/)[1]), ["Quiz 2", "Lab report", "Week task", "Essay"]);
+  assert.match(lines[0], /Tue,? 20 Oct 2026 \| date has passed/);
+  assert.match(lines[1], /Thu,? 29 Oct 2026, 12:00 \| 15% of the module/);
+  assert.match(lines[2], /day not stated/);
+  assert.doesNotMatch(lines[2], /date uncertain/, "a week-only date is not flagged as uncertain");
+  assert.match(lines[3], /date not confirmed .*date uncertain \(tbc\)/);
+  assert.doesNotMatch(text, /Dropped/);
+});
+
+test("deadlinesBlock says so when nothing is saved, and describeToday names the London date", () => {
+  assert.equal(deadlinesText.deadlinesBlock([], new Date()), "No deadlines are saved yet.");
+  assert.match(deadlinesText.describeToday(new Date("2026-10-22T23:30:00.000Z")), /^Friday,? 23 October 2026 \(Europe\/London\)$/);
+});
+
+test("the no-internet prompt forbids filling gaps from general knowledge", () => {
+  const prompt = chat.buildChatSystemPrompt("their module", "ECS505U", "Today is Thursday.", false);
+  assert.match(prompt, /Answer only from the material below/);
+  assert.doesNotMatch(prompt, /your own general knowledge/);
+});

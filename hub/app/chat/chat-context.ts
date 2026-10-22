@@ -2,23 +2,22 @@
  * Deterministic context scoping for the chat assistant.
  *
  * There is no vector store or search index anywhere in this app, and this
- * module does not add one — "about this specific content" is a lookup, not a
- * search, built entirely from data the conversion pipeline already produces.
+ * module does not add one: the scope is a lookup, not a search, built from the
+ * open module's own files and the saved deadline list.
  */
 
-import { canonicalTopicKey } from "../../lib/course-format.ts";
-import { topicExcerpts, type PlanTopic } from "../../lib/ai-conversion.ts";
+import { deadlinesBlock, describeToday } from "../../lib/ai/chat-deadlines.ts";
+import { fenceUntrusted } from "../../lib/ai/structured.ts";
+import type { Deadline } from "../../lib/library.ts";
 import { extractFile, type Extract } from "../../lib/source-extract.ts";
-import type { LocalFile, Manifest } from "../../lib/course-fs.ts";
-
-const CHAT_EXCERPT_BUDGET = 45_000;
+import type { LocalFile } from "../../lib/course-fs.ts";
 
 export type ChatScope = {
-  /** Named in the system prompt, e.g. "the topic pack for Economic Duress". */
+  /** Named in the system prompt, e.g. `their module "ECS505U - Software Engineering"`. */
   scopeLabel: string;
   contextLabel: string;
   contextBlock: string;
-  /** Every file whose text was actually included, for the cost/token estimate. */
+  /** Every file whose text was actually included, for the "in scope" count. */
   linkedFiles: string[];
   /** The extracts + concatenated text actually in scope — checkChatGrounding
    *  verifies a citation against exactly this, never the whole course, so a
@@ -27,85 +26,78 @@ export type ChatScope = {
   allText: string;
 };
 
-/**
- * `Manifest.plan` is stored as `unknown` — it is a plain JSON file a user
- * could hand-edit, or one written by an older schema version — so it is
- * validated defensively here rather than trusted.
- */
-function planTopics(manifest: Manifest | null): PlanTopic[] {
-  const plan = manifest?.plan as { topics?: unknown } | undefined;
-  if (!plan || !Array.isArray(plan.topics)) return [];
-  return plan.topics.filter(
-    (t): t is PlanTopic =>
-      Boolean(t) &&
-      typeof (t as PlanTopic).name === "string" &&
-      Array.isArray((t as PlanTopic).sourceFiles),
-  );
-}
+const MODULE_TEXT_BUDGET = 130_000;
+const FILE_CAP = 26_000;
+/** Slides and PDFs are fetched and read on demand, so they are bounded harder than text. */
+const MAX_BINARY_FILES = 12;
+const MAX_BINARY_BYTES = 15 * 1024 * 1024;
 
-/** Extracts (with on-disk caching, via `extractFile`) only the files a topic
- *  actually names, mirroring `topicExcerpts()`'s own filename matching. */
-async function extractsForTopic(topic: PlanTopic, files: LocalFile[]): Promise<Map<string, Extract>> {
-  const matched = topic.sourceFiles
-    .map((name) => files.find((file) => file.path.toLowerCase().endsWith(name.toLowerCase())))
-    .filter((file): file is LocalFile => Boolean(file));
-  const map = new Map<string, Extract>();
-  await Promise.all(
-    matched.map(async (file) => {
-      map.set(file.path, await extractFile(file));
-    }),
-  );
-  return map;
+/** Hand-written study material first, then raw course documents. */
+function readingOrder(file: LocalFile): number {
+  if (file.category === "Study packs") return 0;
+  if (file.ext === "md") return 1;
+  if (file.ext === "txt" || file.ext === "csv") return 2;
+  return 3;
 }
 
 /**
- * Builds the scoped context for whatever the user currently has open.
- *
- * A topic pack or one of its flashcard decks resolves to its topic (via the
- * same `canonicalTopicKey` join the rest of the app uses) and pulls in that
- * topic's linked source files through `topicExcerpts()` — the exact function
- * the generator itself uses. Anything else — a guide, a lecture opened
- * directly, or a folder that was never converted at all — is scoped to just
- * that one file's own text. This is deliberately the narrower option: the
- * product decision was "about this specific content," not "about the course."
+ * The scope for the always-available assistant: the whole module the student
+ * has open, plus their saved deadline list. Deadlines are exposed to the model
+ * as a pseudo-file named "Deadlines" so an answer can cite them exactly like a
+ * course file and go through the same verbatim-quote check.
  */
-export async function buildChatScope(
-  selectedPath: string,
+export async function buildModuleScope(
+  module: string,
   files: LocalFile[],
-  manifest: Manifest | null,
+  deadlines: Deadline[],
+  now: Date,
 ): Promise<ChatScope> {
-  const file = files.find((f) => f.path === selectedPath);
-  if (!file)
-    return { scopeLabel: "nothing open", contextLabel: "(none)", contextBlock: "", linkedFiles: [], extracts: new Map(), allText: "" };
+  const deadlineText = [`Today is ${describeToday(now)}.`, "", deadlinesBlock(deadlines, now)].join("\n");
+  const extracts = new Map<string, Extract>([["Deadlines", { path: "Deadlines", text: deadlineText, chunks: [] }]]);
+  const linkedFiles: string[] = [];
+  const blocks: string[] = [
+    "### FILE: Deadlines (the student's saved deadline list across all their modules)",
+    fenceUntrusted("Deadlines", deadlineText),
+  ];
 
-  const name = file.name.replace(/\.(md|csv|txt)$/i, "");
-  const isPackOrDeck = file.category === "Study packs" || file.ext === "csv";
-  const topic = isPackOrDeck
-    ? planTopics(manifest).find((t) => canonicalTopicKey(t.name) === canonicalTopicKey(file.path))
-    : undefined;
-
-  if (topic) {
-    const extracts = await extractsForTopic(topic, files);
-    const excerpts = topicExcerpts(topic, files, extracts, CHAT_EXCERPT_BUDGET);
-    const ownText = file.text || "";
-    const allText = [ownText, ...[...extracts.values()].map((e) => e.text)].filter(Boolean).join("\n\n");
-    return {
-      scopeLabel: `the topic pack for "${topic.name}", and its linked source files`,
-      contextLabel: name,
-      contextBlock: [ownText, excerpts.text].filter(Boolean).join("\n\n"),
-      linkedFiles: [file.path, ...excerpts.used],
-      extracts,
-      allText,
-    };
+  let left = MODULE_TEXT_BUDGET;
+  let binaries = 0;
+  const unread: string[] = [];
+  const ordered = [...files].sort(
+    (a, b) => readingOrder(a) - readingOrder(b) || a.path.localeCompare(b.path, undefined, { numeric: true }),
+  );
+  for (const file of ordered) {
+    const binary = file.text === undefined;
+    if (left < 2_000 || (binary && (binaries >= MAX_BINARY_FILES || file.file.size > MAX_BINARY_BYTES))) {
+      unread.push(file.path);
+      continue;
+    }
+    if (binary) binaries++;
+    const extract = await extractFile(file).catch(() => null);
+    if (!extract?.text.trim()) {
+      unread.push(file.path);
+      continue;
+    }
+    // Citations are checked against exactly what the model was shown.
+    const cap = Math.min(FILE_CAP, left);
+    const text = extract.text.length > cap ? extract.text.slice(0, cap) : extract.text;
+    extracts.set(file.path, { ...extract, text });
+    linkedFiles.push(file.path);
+    const shown = text.length < extract.text.length ? `${text}\n[...truncated...]` : text;
+    blocks.push(`### FILE: ${file.name}`, fenceUntrusted(file.path, shown));
+    left -= text.length;
   }
+  if (unread.length)
+    blocks.push(
+      `### Course files not read into this chat (too many, too large, or no text):\n${unread.slice(0, 80).join("\n")}`,
+    );
 
-  const extract = await extractFile(file);
   return {
-    scopeLabel: `the file "${name}"`,
-    contextLabel: file.name,
-    contextBlock: extract.text,
-    linkedFiles: [file.path],
-    extracts: new Map([[file.path, extract]]),
-    allText: extract.text,
+    scopeLabel: `their module "${module}" and their saved deadline list`,
+    contextLabel: module,
+    contextBlock: blocks.join("\n\n"),
+    linkedFiles,
+    extracts,
+    allText: [...extracts.values()].map((e) => e.text).join("\n\n"),
   };
 }
