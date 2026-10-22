@@ -70,3 +70,19 @@ export function repairAutomaticWeekDates(deadline: Deadline, map: TermWeekMap | 
   if (status !== "needs-check") delete repaired.checkReason;
   return repaired;
 }
+
+/** AI dates accepted before the identity and week fixes of 2026-10-21 were never rechecked. */
+export const LEGACY_AI_CUTOFF = "2026-10-21T14:00:00.000Z";
+
+/** Ask the student to review a confirmed date that rests only on pre-fix AI quotes. */
+export function flagLegacyAiDate(deadline: Deadline, cutoff = LEGACY_AI_CUTOFF): Deadline {
+  if (deadline.status !== "confirmed" || !deadline.due) return deadline;
+  const support = deadline.sources.filter((source) => source.date?.iso === deadline.due?.iso);
+  const legacy = (source: Source) => source.origin === "ai" && source.seenAt < cutoff;
+  if (support.length === 0 || !support.every(legacy)) return deadline;
+  return {
+    ...deadline,
+    status: "needs-check",
+    checkReason: "This date came from an older AI reading. Check it against the quoted source or refresh the module's documents.",
+  };
+}

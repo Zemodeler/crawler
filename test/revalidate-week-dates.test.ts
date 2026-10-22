@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { repairAutomaticWeekDates } from "../src/revalidate-week-dates.ts";
+import { flagLegacyAiDate, repairAutomaticWeekDates } from "../src/revalidate-week-dates.ts";
 import type { Deadline, Instant, Source } from "../src/types.ts";
 import { weekMapFor } from "../src/weeks.ts";
 
@@ -92,4 +92,21 @@ test("retains conflicting valid evidence and leaves user choices untouched", () 
   assert.equal(fixed.due, right);
   const verified = { ...old, status: "user-verified" as const };
   assert.strictEqual(repairAutomaticWeekDates(verified, map), verified);
+});
+
+test("flags confirmed dates resting only on pre-fix AI quotes for review", () => {
+  const quote = "Submit the report by 30 November 2026.";
+  const old = deadline([source(quote, right, "ai")], right);
+  const flagged = flagLegacyAiDate(old);
+  assert.equal(flagged.status, "needs-check");
+  assert.match(flagged.checkReason ?? "", /older AI reading/);
+  assert.equal(flagged.due, right);
+  assert.equal(flagged.userNote, "Check the brief");
+
+  const reread = deadline([{ ...source(quote, right, "ai"), seenAt: "2026-10-22T00:00:00.000Z" }], right);
+  assert.equal(flagLegacyAiDate(reread), reread);
+  const ruleBacked = deadline([source(quote, right, "ai"), source(quote, right, "rule")], right);
+  assert.equal(flagLegacyAiDate(ruleBacked), ruleBacked);
+  const verified = { ...old, status: "user-verified" as const };
+  assert.equal(flagLegacyAiDate(verified), verified);
 });

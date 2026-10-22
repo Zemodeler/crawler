@@ -954,7 +954,7 @@ test("repair falling back to a supported date retains notification evidence", as
     const legacy = legacyText(base, "mixed", base.due);
     legacy.title = "Separate project";
     const supported = { iso: "2026-12-21T10:00:00.000Z", allDay: false, tz: "Europe/London" as const };
-    legacy.sources.push({ ...legacy.sources[0]!, url: `${CREDENTIALS.site}/supported`, quote: "The separate project is due on 21 December 2026 at 10:00.", date: supported });
+    legacy.sources.push({ ...legacy.sources[0]!, url: `${CREDENTIALS.site}/supported`, quote: "The separate project is due on 21 December 2026 at 10:00.", date: supported, origin: "rule" });
     await writeDeadlineFile(t.root, [base, legacy]);
     const result = await t.run(LATER, { textDeadlines: false });
     assert.deepEqual(result.deadlines.find((d) => d.id === legacy.id)!.due, supported);

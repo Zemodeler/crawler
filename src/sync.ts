@@ -27,7 +27,7 @@ import { readDeadlineFile, withDeadlineLock, withSyncLock, writeDeadlineFile } f
 import type { DeadlineFileOps } from "./deadline-store.ts";
 import { parseAssessmentOverview } from "./assessments.ts";
 import type { AssessmentComponent } from "./assessments.ts";
-import { repairAutomaticWeekDates } from "./revalidate-week-dates.ts";
+import { flagLegacyAiDate, repairAutomaticWeekDates } from "./revalidate-week-dates.ts";
 import { toIcs } from "./ics.ts";
 import { selectForumPosts } from "./forum.ts";
 import type { ForumHighlight } from "./forum.ts";
@@ -333,7 +333,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
     const previousSynced = previousDeadlines.filter(inSync);
     const untouched = previousDeadlines.filter((d) => !inSync(d));
     const repaired = previousSynced.map((deadline) => {
-      const next = repairAutomaticWeekDates(deadline, weekMaps.get(`${deadline.year}|${deadline.module}`) ?? null);
+      const next = flagLegacyAiDate(repairAutomaticWeekDates(deadline, weekMaps.get(`${deadline.year}|${deadline.module}`) ?? null));
       if (next === deadline) return deadline;
       // Compare against the original latest read for both history and notifications.
       const history = [...deadline.history];
