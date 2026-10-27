@@ -18,6 +18,7 @@ import { hasAnyConnection, isHosted, loadSettings } from "../../lib/ai/settings.
 import type { AiClient, AiError } from "../../lib/ai/types.ts";
 import { ACTIVE_MODULE_EVENT, fetchDeadlines, fetchTree, loadModule, pickModule } from "../../lib/library.ts";
 import { buildModuleScope, type ChatScope } from "./chat-context.ts";
+import { CHAT_STATE_EVENT, CHAT_TOGGLE_EVENT } from "../shell/AppShell.tsx";
 
 const OPEN_KEY = "studyhub:chat:open";
 const SUGGESTIONS = ["What's due in the next two weeks?", "What topics does this module cover?", "What should I revise first?"];
@@ -122,9 +123,21 @@ export default function ChatDock() {
   useEffect(() => {
     if (!available) return;
     document.body.classList.toggle("chat-docked", open);
+    window.dispatchEvent(new CustomEvent(CHAT_STATE_EVENT, { detail: open }));
     if (open) inputRef.current?.focus();
     return () => document.body.classList.remove("chat-docked");
   }, [open, available]);
+
+  // The rail's "Ask the assistant" opens and closes the panel.
+  useEffect(() => {
+    const onToggle = (event: Event) => {
+      const value = Boolean((event as CustomEvent<boolean>).detail);
+      setOpen(value);
+      rememberOpen(value);
+    };
+    window.addEventListener(CHAT_TOGGLE_EVENT, onToggle);
+    return () => window.removeEventListener(CHAT_TOGGLE_EVENT, onToggle);
+  }, []);
 
   useEffect(() => {
     messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight });

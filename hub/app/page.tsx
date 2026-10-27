@@ -7,13 +7,12 @@ import { FormatCheckBanner, FormatCheckDialog } from "./format-check-dialog.tsx"
 import { Markdown } from "./markdown.tsx";
 import { hasAnyConnection, isHosted } from "../lib/ai/settings.ts";
 import {
-  currentAcademicYear,
+  ACTIVE_MODULE_EVENT,
   fetchDeadlines,
   fetchTree,
   getModuleProfile,
   loadModule,
   migrateModuleKeys,
-  moduleColor,
   pickModule,
   saveActiveModule,
   suggestModuleProfile,
@@ -21,8 +20,8 @@ import {
   type LibraryTree,
 } from "../lib/library.ts";
 import { NextSevenDays } from "./calendar/deadline-ui.tsx";
-import SyncButton from "./sync-button.tsx";
 import ModuleOverview from "./module-overview.tsx";
+import { LIBRARY_CHANGED_EVENT, NAVIGATE_EVENT, ShellOff, homeView, navigateHome } from "./shell/AppShell.tsx";
 import {
   SUPPORTED_EXTS,
   TEXT_EXTS,
@@ -141,7 +140,15 @@ export default function Home() {
   const [library, setLibrary] = useState<LibraryTree | null>(null);
   const [libraryState, setLibraryState] = useState<"off" | "loading" | "empty" | "ready" | "error">("off");
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
-  const [pastOpen, setPastOpen] = useState(false);
+  /** The module being opened, so the switch event it fires is not handled twice. */
+  const openingRef = useRef("");
+  const courseRef = useRef("");
+  useEffect(() => {
+    courseRef.current = course;
+  }, [course]);
+
+  /** The rail and the URL own the view; this only asks for one. */
+  const show = (next: typeof view) => navigateHome(next === "dashboard" ? (isHosted() ? "today" : "overview") : next);
 
   const [subjectTarget, setSubjectTarget] = useState<string | DirectoryHandle | null>(null);
   const subject = useModuleSubject(subjectTarget, files, course);
@@ -153,6 +160,7 @@ export default function Home() {
 
   const openModule = async (tree: LibraryTree, year: string, module: string) => {
     const key = `${year}/${module}`;
+    openingRef.current = key;
     migrateModuleKeys(key);
     saveActiveModule(key);
     setQuery("");
@@ -186,12 +194,6 @@ export default function Home() {
       restored.selected && imported.some((f) => f.path === restored.selected)
         ? restored.selected
         : start?.path || "",
-    );
-    const savedView = localStorage.getItem(`studyhub:view:${name}`);
-    setView(
-      savedView === "reader" || savedView === "files"
-        ? savedView
-        : "dashboard",
     );
     setNotice(`${imported.length} study files found. Nothing was uploaded.`);
     if (handle) {
@@ -265,9 +267,46 @@ export default function Home() {
     if (course)
       localStorage.setItem(`studyhub:${course}`, JSON.stringify(progress));
   }, [progress, course]);
+  // The view follows the URL: the rail, Back and Forward all change it.
   useEffect(() => {
-    if (course) localStorage.setItem(`studyhub:view:${course}`, view);
-  }, [course, view]);
+    const follow = () => {
+      const next = homeView(window.location.search, isHosted());
+      setView(next === "reader" || next === "files" ? next : "dashboard");
+    };
+    follow();
+    window.addEventListener(NAVIGATE_EVENT, follow);
+    window.addEventListener("popstate", follow);
+    return () => {
+      window.removeEventListener(NAVIGATE_EVENT, follow);
+      window.removeEventListener("popstate", follow);
+    };
+  }, []);
+  // A module picked in the rail opens here, without reloading the page.
+  useEffect(() => {
+    if (!library) return;
+    const onSwitch = (event: Event) => {
+      const key = (event as CustomEvent<string>).detail;
+      if (!key || key === openingRef.current || key === courseRef.current) return;
+      const year = key.split("/")[0];
+      const folder = key.slice(year.length + 1);
+      if (library.years.some((y) => y.year === year && y.modules.includes(folder))) void openModule(library, year, folder);
+    };
+    const onSynced = () =>
+      fetchTree()
+        .then((tree) => {
+          setLibrary(tree);
+          return fetchDeadlines().then(setDeadlines);
+        })
+        .catch(() => {});
+    window.addEventListener(ACTIVE_MODULE_EVENT, onSwitch);
+    window.addEventListener(LIBRARY_CHANGED_EVENT, onSynced);
+    return () => {
+      window.removeEventListener(ACTIVE_MODULE_EVENT, onSwitch);
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, onSynced);
+    };
+    // openModule is recreated every render; the library is what matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [library]);
   useEffect(() => {
     if (!course) return;
     const refresh = () => {
@@ -433,7 +472,7 @@ export default function Home() {
     }));
     if (f.ext === "md" || f.ext === "txt") {
       setSelected(path);
-      setView("reader");
+      show("reader");
     } else if (f.ext === "csv") {
       window.location.assign("/flashcards?mode=smart");
     } else if (f.url) {
@@ -465,8 +504,6 @@ export default function Home() {
   const [activeYear, activeModule] = library ? [course.split("/")[0], course.slice(course.indexOf("/") + 1)] : ["", course];
   const yearModules = library?.years.find((y) => y.year === activeYear)?.modules || [];
   const allModules = library?.years.flatMap((y) => y.modules) || [];
-  const thisYear = library?.years.find((y) => y.year === currentAcademicYear()) ? currentAcademicYear() : library?.years[0]?.year;
-  const pastYears = library?.years.filter((y) => y.year !== thisYear && y.modules.length) || [];
   const searchResults = query.trim()
     ? files
         .filter((f) =>
@@ -494,6 +531,7 @@ export default function Home() {
   if (!course && libraryState !== "off")
     return (
       <main className="welcome">
+        {libraryState !== "loading" && <ShellOff />}
         <section className="welcome-card">
           <div className="mark">SH</div>
           <p className="eyebrow">My Studies</p>
@@ -520,6 +558,7 @@ export default function Home() {
   if (!course)
     return (
       <main className="welcome">
+        <ShellOff />
         <div className="privacy-pill">
           Private • read-only • stays on your device
         </div>
@@ -564,119 +603,28 @@ export default function Home() {
     );
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">SH</span>
-          <div>
-            <strong>Study Hub</strong>
-            <small>Local-first workspace</small>
-          </div>
-        </div>
-        <nav>
-          {[
-            ["dashboard", "Overview"],
-            ["reader", "Reading"],
-            ["files", "All files"],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              className={view === id ? "active" : ""}
-              onClick={() => setView(id as typeof view)}
-            >
-              {label}
-            </button>
-          ))}
-          <a className="flashcards-link" href="/flashcards?mode=smart">Flashcards</a>
-          {library && <a className="flashcards-link" href="/calendar">Calendar</a>}
-          {library && <a className="flashcards-link" href="/assessments">Assessments</a>}
-        </nav>
-        {library && (
-          <div className="side-section module-list">
-            {library.years
-              .filter((y) => y.year === thisYear || (pastOpen && y.modules.length))
-              .map((y) => (
-                <div key={y.year}>
-                  <p>{y.year === thisYear ? `${y.year} modules` : y.year}</p>
-                  {y.modules.map((m) => (
-                    <button
-                      key={m}
-                      className={`${y.year}/${m}` === course ? "active" : ""}
-                      aria-current={`${y.year}/${m}` === course ? "page" : undefined}
-                      title={m}
-                      onClick={() => openModule(library, y.year, m)}
-                    >
-                      <span className="module-dot" style={{ background: moduleColor(allModules, m) }} aria-hidden="true" />
-                      <span className="module-name">{m}</span>
-                    </button>
-                  ))}
-                </div>
-              ))}
-            {pastYears.length > 0 && (
-              <button className="past-toggle" aria-expanded={pastOpen} onClick={() => setPastOpen((o) => !o)}>
-                {pastOpen ? "Hide past years" : "Past years"}
-              </button>
-            )}
-          </div>
-        )}
-        <div className="side-section">
-          <p>Topics</p>
-          {topics.slice(0, 18).map((topic) => (
-            <button
-              key={topic}
-              onClick={() => {
-                const key = canonicalTopicKey(topic);
-                const f = files.find(
-                  (x) => canonicalTopicKey(x.path) === key && x.ext === "md",
-                );
-                if (f) openFile(f.path);
-                else {
-                  setQuery(topic);
-                  setView("files");
-                }
-              }}
-            >
-              {topic}
-            </button>
-          ))}
-        </div>
-        <div className="side-bottom">
-          <span className="privacy-dot" />
-          Files remain on this device
-          {library && (
-            <SyncButton
-              onSynced={() =>
-                fetchTree()
-                  .then((tree) => {
-                    setLibrary(tree);
-                    return fetchDeadlines().then(setDeadlines);
-                  })
-                  .catch(() => {})
-              }
-            />
-          )}
-          {!library && (
-            <button className="switch" onClick={chooseFolder}>
-              Switch course folder
-            </button>
-          )}
-        </div>
-      </aside>
+    <>
       <main className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">{library ? `${activeYear} module` : "Active course"}</p>
+            <p className="eyebrow">{library ? `${activeYear} module` : "Course"}</p>
             <h2>{activeModule}</h2>
           </div>
-          <div className="search">
-            <span>⌕</span>
+          <label className="search">
+            <span aria-hidden="true">⌕</span>
+            <span className="visually-hidden">Search this module</span>
             <input
+              type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={profile.id === "law" ? "Search notes, cases and cards…" : `Search notes, ${profile.terms.authorities} and cards…`}
             />
-          </div>
-          <div className="top-actions"><a className="ai-button" href="/connect">AI settings</a><span className="save-state">Saved locally</span></div>
+          </label>
+          {!library && (
+            <button className="secondary" onClick={chooseFolder}>
+              Switch course folder
+            </button>
+          )}
         </header>
         {course && <section className="hub-card"><SubjectControl key={course} target={subjectTarget} subject={subject} /></section>}
         {notice && (
@@ -972,6 +920,6 @@ export default function Home() {
         onChange={fallbackImport}
         {...({ webkitdirectory: "" } as object)}
       />
-    </div>
+    </>
   );
 }

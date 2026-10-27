@@ -1,0 +1,50 @@
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:25px}
+.section-title{display:flex;align-items:center;justify-content:space-between}
+.section-title h1,.section-title h3{margin:0;font-family:var(--font-serif)}
+.empty{display:grid;place-content:center;min-height:250px;color:var(--text-muted)}
+.section-title>button{border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-sm);padding:8px 12px}
+.btn{border:0;border-radius:var(--radius-md);padding:11px 16px;font-size:var(--text-sm);line-height:1;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+.btn-primary{background:var(--accent);color:var(--on-accent)}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-ghost{background:transparent;color:var(--accent-hover);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--accent-soft)}
+.btn-danger{background:transparent;color:var(--danger);border:1px solid var(--border)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+.badge{display:inline-flex;align-items:center;gap:6px;border-radius:var(--radius-full);padding:4px 11px;font-size:var(--text-xs);font-weight:600}
+.badge-ok{background:var(--ok-bg);color:var(--ok)}
+.badge-warn{background:var(--warn-bg);color:var(--warn)}
+.badge-err{background:var(--danger-bg);color:var(--danger)}
+.badge-idle{background:var(--surface-3);color:var(--text-muted)}
+.callout{border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 var(--radius-md) var(--radius-md) 0;padding:13px 15px;margin:16px 0;font-size:var(--text-xs);line-height:1.6;color:var(--accent-text)}
+.callout-warn{border-left-color:var(--warn-border);background:var(--warn-bg);color:var(--warn)}
+.callout b{display:block;margin-bottom:4px}
+/* ---- M2: library modules, deadlines and calendar ---- */
+.module-dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;vertical-align:middle;margin-right:8px}
+.text-link{background:none;border:0;padding:0;color:var(--accent);font-weight:600;font-size:var(--text-sm);text-decoration:none;cursor:pointer}
+.text-link:hover{text-decoration:underline}
+.quiet{color:var(--text-muted);font-size:var(--text-sm);margin:10px 0 0}
+.deadline-rows{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:6px}
+.deadline-row{display:flex;align-items:center;gap:10px;width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;text-align:left;color:var(--text);text-decoration:none;font-size:var(--text-sm)}
+.deadline-row:hover,.deadline-row.selected{border-color:var(--accent)}
+.deadline-row .module-dot{margin:0}
+.deadline-when{width:118px;flex:none;font-weight:600;font-variant-numeric:tabular-nums}
+.deadline-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.deadline-title small{color:var(--text-muted);margin-left:6px}
+.weight{font-size:var(--text-xs);color:var(--text-muted);font-variant-numeric:tabular-nums}
+.deadline-rows.past .deadline-row{opacity:.7}
+.status-pill{font-size:var(--text-xs);font-weight:600;letter-spacing:.04em;padding:3px 8px;border-radius:var(--radius-full);white-space:nowrap;background:var(--accent-soft);color:var(--accent-hover)}
+.status-needs-check,.status-tbc{background:var(--warn-bg);color:var(--warn)}
+.status-conflict{background:var(--danger-bg);color:var(--danger)}
+.status-week{background:var(--info-bg);color:var(--info)}
+.status-cancelled{background:var(--surface-3);color:var(--text-muted);text-decoration:line-through}
+.back-link{background:none;border:0;padding:0;color:var(--accent);font-weight:600;font-size:var(--text-sm);text-decoration:none}
+.segmented{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;background:var(--surface)}
+.segmented button{border:0;background:transparent;padding:8px 13px;font-size:var(--text-xs);font-weight:600;color:var(--text-muted)}
+.segmented button[aria-pressed=true]{background:var(--accent);color:var(--on-accent)}
+.icon-button{border:1px solid var(--border);background:var(--surface);border-radius:var(--radius-md);width:34px;height:34px;font-size:var(--text-xl);line-height:1;color:var(--text)}
+.small{padding:7px 11px;font-size:var(--text-xs)}
+@media (max-width:900px){
+  .deadline-when{width:auto}
+}
+.module-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

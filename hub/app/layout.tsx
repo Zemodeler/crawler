@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import ChatDock from "./chat/ChatDock.tsx";
+import AppShell from "./shell/AppShell.tsx";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -18,5 +19,5 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}<ChatDock /></body></html>;
+  return <html lang="en"><body><AppShell>{children}</AppShell><ChatDock /></body></html>;
 }

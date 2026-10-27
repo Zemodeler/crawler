@@ -98,11 +98,7 @@ export default function AssessmentsPage() {
 
   return <div className="calendar-page assessments-page">
     <header className="topbar">
-      {/* A full load: client navigation back to the hub does not render it. */}
-      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-      <a className="back-link" href="/">Study Hub</a>
       <div><p className="eyebrow">{year?.year || "Study Hub"}</p><h2>What you are assessed on</h2></div>
-      <a className="text-link" href="/calendar">Calendar</a>
     </header>
     <main className="calendar-main">
       {state === "loading" && <p className="calendar-message">Reading your assessments...</p>}

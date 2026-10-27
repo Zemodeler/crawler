@@ -1,0 +1,53 @@
+.recent-list button,.result-list button{display:flex;width:100%;align-items:center;gap:13px;border:0;border-top:1px solid var(--border-subtle);background:transparent;text-align:left;padding:13px 4px}
+.recent-list span:nth-child(2),.result-list span:nth-child(2){min-width:0;flex:1}
+.recent-list b,.recent-list small,.result-list b,.result-list small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recent-list b,.result-list b{font-size:var(--text-sm)}
+.recent-list small,.result-list small{font-size:var(--text-xs);color:var(--text-muted);margin-top:3px}
+.reader-layout{display:grid;grid-template-columns:270px minmax(0,860px);gap:25px;padding:28px;justify-content:center}
+.reader-menu{max-height:calc(100vh - 115px);overflow:auto;position:sticky;top:112px;align-self:start;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:18px}
+.reader-menu h4{font-size:var(--text-xs);color:var(--text-muted);letter-spacing:.13em;text-transform:uppercase;margin:18px 8px 6px}
+.reader-menu button{width:100%;border:0;background:transparent;text-align:left;font-size:var(--text-xs);padding:8px;border-radius:var(--radius-sm);color:var(--text-2)}
+.reader-menu button.selected,.reader-menu button:hover{background:var(--accent-soft);color:var(--accent-hover)}
+.reader-paper{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);min-height:calc(100vh - 143px);box-shadow:var(--shadow-sm);padding:45px 55px}
+.markdown{font:var(--text-lg)/1.72 var(--font-serif)}
+.markdown h1{font-size:var(--text-display);line-height:1.08;margin:0 0 26px}
+.markdown h2{font-size:var(--text-3xl);margin:42px 0 13px}
+.markdown h3{font-size:var(--text-xl);margin:32px 0 10px}
+.markdown h4{font-size:var(--text-lg)}
+.markdown p{margin:8px 0}
+.markdown .spacer{height:10px}
+.markdown blockquote{margin:20px 0;border-left:4px solid var(--accent);padding:15px 20px;background:var(--accent-soft);color:var(--accent-text)}
+.markdown code{background:var(--surface-3);padding:2px 5px;border-radius:var(--radius-sm);font:var(--text-sm) var(--font-mono)}
+.inline-link{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline;font-family:inherit}
+.bullet{display:flex;gap:9px;margin:6px 0 6px 14px}
+.numbered{display:block}
+.table-wrap{overflow:auto;margin:20px 0}
+.markdown table{border-collapse:collapse;width:100%;font:var(--text-sm)/1.4 var(--font-sans)}
+.markdown th{background:var(--accent-soft)}
+.markdown th,.markdown td{border:1px solid var(--border);text-align:left;padding:9px}
+.transcript h1{font-family:var(--font-serif)}
+.transcript pre{white-space:pre-wrap;font:var(--text-md)/1.65 var(--font-sans);color:var(--text-2)}
+.file-icon{width:42px;height:36px;display:grid;place-content:center;border-radius:var(--radius-sm);background:var(--accent-soft);color:var(--accent);font-size:var(--text-xs);font-weight:600;flex:none}
+.file-icon.pdf{background:var(--danger-bg);color:var(--danger)}
+.file-icon.docx,.file-icon.pptx{background:var(--info-bg);color:var(--info)}
+.file-group{margin-top:24px}
+.file-group h3{font:var(--text-xl) var(--font-serif)}
+.file-group>div{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden}
+.file-group button{display:flex;align-items:center;gap:13px;width:100%;padding:12px 15px;background:transparent;border:0;border-bottom:1px solid var(--border-subtle);text-align:left}
+.file-group button:last-child{border-bottom:0}
+.file-group button span:nth-child(2){min-width:0;flex:1}
+.file-group b,.file-group small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-group b{font-size:var(--text-xs)}
+.file-group small{font-size:var(--text-xs);color:var(--text-muted);margin-top:3px}
+.file-group i{font-style:normal;font-size:var(--text-xs);color:var(--accent)}
+.search-panel{position:relative}
+.result-list{margin-top:18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:8px 18px}
+@media(max-width:1050px){
+  .reader-layout{grid-template-columns:220px 1fr}
+  .reader-paper{padding:35px}
+}
+@media(max-width:760px){
+  .reader-layout{display:block;padding:14px}
+  .reader-menu{position:static;max-height:210px;margin-bottom:12px}
+  .reader-paper{padding:26px 20px}
+}

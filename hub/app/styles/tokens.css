@@ -1,0 +1,248 @@
+/*
+ * Design tokens. Every colour, size, radius and shadow in the app comes from
+ * here; see hub/DESIGN.md for the rules. Primitives are raw values, semantic
+ * tokens say what a value is for, and only semantic tokens are used in rules.
+ */
+
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/fonts/geist-latin-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/fonts/geist-latin-ext-wght-normal.woff2) format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Geist Mono Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url(/fonts/geist-mono-latin-wght-normal.woff2) format("woff2-variations");
+}
+@font-face {
+  font-family: "Source Serif 4 Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url(/fonts/source-serif-4-latin-opsz-normal.woff2) format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Source Serif 4 Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url(/fonts/source-serif-4-latin-ext-opsz-normal.woff2) format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Source Serif 4 Variable";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url(/fonts/source-serif-4-latin-opsz-italic.woff2) format("woff2-variations");
+}
+
+:root {
+  /* ---- primitives ---- */
+  --teal-50: #eef6f3;
+  --teal-100: #e3f0eb;
+  --teal-200: #d2e8e0;
+  --teal-300: #b7d6cd;
+  --teal-600: #0d756d;
+  --teal-700: #075a54;
+  --teal-900: #152a2d;
+  --teal-950: #0f2023;
+  --paper-50: #fffdfa;
+  --paper-100: #f4f1e9;
+  --stone-100: #f3f3ee;
+  --stone-200: #e9ece8;
+  --stone-300: #dfe3df;
+  --stone-600: #5d6b70;
+  --stone-700: #3c4b50;
+  --stone-900: #17242b;
+  --coral-500: #d9684d;
+
+  /* ---- surfaces and text ---- */
+  --bg: var(--paper-100);
+  --surface: var(--paper-50);
+  --surface-2: var(--stone-100);
+  --surface-3: var(--stone-200);
+  --border: var(--stone-300);
+  --border-subtle: #eaedea;
+  --border-strong: var(--teal-300);
+  --text: var(--stone-900);
+  --text-2: var(--stone-700);
+  --text-muted: var(--stone-600);
+  --text-faint: #98a3a6;
+
+  /* ---- the one accent ---- */
+  --accent: var(--teal-600);
+  --accent-hover: var(--teal-700);
+  --accent-soft: var(--teal-50);
+  --accent-soft-2: var(--teal-200);
+  --accent-text: var(--teal-700);
+  --on-accent: #fff;
+  /* Used sparingly: quotes and the flashcard label, never for buttons. */
+  --highlight: var(--coral-500);
+  --highlight-soft: #f6e7e0;
+  --highlight-line: #edd6cb;
+
+  /* ---- status ---- */
+  --ok: #1c6b43;
+  --ok-bg: #e0f0e7;
+  --warn: #7a5208;
+  --warn-bg: #fbf0d9;
+  --warn-line: #f0dcb4;
+  --warn-border: #c98a1e;
+  --danger: #9c3327;
+  --danger-bg: #f9e4e0;
+  --danger-border: #b3392b;
+  --info: #34558f;
+  --info-bg: #e6edf8;
+  --info-border: #4a78b0;
+
+  /* ---- the dark navigation rail (dark in both themes) ---- */
+  --nav-bg: var(--teal-900);
+  --nav-bg-2: #183b3e;
+  --nav-bg-3: #0f6a63;
+  --nav-text: #d2e0dd;
+  --nav-text-muted: #91aeab;
+  --nav-hover: rgba(255, 255, 255, 0.09);
+  --nav-line: rgba(255, 255, 255, 0.1);
+  --nav-live: #78d6a6;
+  --on-dark: #fff;
+
+  /* ---- depth ---- */
+  --scrim: rgba(23, 36, 43, 0.45);
+  --shadow-sm: 0 1px 2px rgba(25, 43, 44, 0.06);
+  --shadow: 0 12px 32px rgba(25, 43, 44, 0.12);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+
+  /* ---- type ---- */
+  --font-sans: "Geist Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-serif: "Source Serif 4 Variable", Georgia, serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-display: 40px;
+  --text-display-lg: 56px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ---- shape and space ---- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  color-scheme: light;
+}
+
+/* Dark theme: follows the system unless a page pins one with data-theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1517;
+    --surface: #152022;
+    --surface-2: #1a272a;
+    --surface-3: #233235;
+    --border: #2b3b3e;
+    --border-subtle: #213033;
+    --border-strong: #3f5a58;
+    --text: #e3eae8;
+    --text-2: #c3cfcd;
+    --text-muted: #98a8aa;
+    --text-faint: #66777a;
+    --accent: #3eb0a3;
+    --accent-hover: #5cc6b9;
+    --accent-soft: #15302d;
+    --accent-soft-2: #1d413c;
+    --accent-text: #85d6cb;
+    --on-accent: #04201c;
+    --highlight: #ec8a71;
+    --highlight-soft: #30201b;
+    --highlight-line: #4a2f27;
+    --ok: #82d1a0;
+    --ok-bg: #15301f;
+    --warn: #e8bb62;
+    --warn-bg: #33270f;
+    --warn-line: #5a4519;
+    --warn-border: #b78a2e;
+    --danger: #f29d8f;
+    --danger-bg: #3a1d19;
+    --danger-border: #c4574a;
+    --info: #9ab9e8;
+    --info-bg: #18263b;
+    --info-border: #5a86c2;
+    --nav-bg: #0a1113;
+    --nav-bg-2: #102526;
+    --nav-bg-3: #134e49;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1517;
+  --surface: #152022;
+  --surface-2: #1a272a;
+  --surface-3: #233235;
+  --border: #2b3b3e;
+  --border-subtle: #213033;
+  --border-strong: #3f5a58;
+  --text: #e3eae8;
+  --text-2: #c3cfcd;
+  --text-muted: #98a8aa;
+  --text-faint: #66777a;
+  --accent: #3eb0a3;
+  --accent-hover: #5cc6b9;
+  --accent-soft: #15302d;
+  --accent-soft-2: #1d413c;
+  --accent-text: #85d6cb;
+  --on-accent: #04201c;
+  --highlight: #ec8a71;
+  --highlight-soft: #30201b;
+  --highlight-line: #4a2f27;
+  --ok: #82d1a0;
+  --ok-bg: #15301f;
+  --warn: #e8bb62;
+  --warn-bg: #33270f;
+  --warn-line: #5a4519;
+  --warn-border: #b78a2e;
+  --danger: #f29d8f;
+  --danger-bg: #3a1d19;
+  --danger-border: #c4574a;
+  --info: #9ab9e8;
+  --info-bg: #18263b;
+  --info-border: #5a86c2;
+  --nav-bg: #0a1113;
+  --nav-bg-2: #102526;
+  --nav-bg-3: #134e49;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
