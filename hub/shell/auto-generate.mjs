@@ -17,6 +17,8 @@ const MODULE_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libraryRoot, prefs, log = console.log }) {
   let queue = Promise.resolve();
+  /** Forced rebuilds queued and not yet started, so asking twice does not run a module twice. */
+  const pending = new Set();
   let status = { state: "idle", module: null, results: [] };
 
   async function runOne(moduleKey, assistant, model, force = false) {
@@ -73,6 +75,18 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
     new Notification({ title: result.status === "done" ? `Study packs ready: ${name}` : `Study packs: ${name}`, body }).show();
   }
 
+  function queueRebuild(moduleKey) {
+    if (pending.has(moduleKey)) return queue;
+    pending.add(moduleKey);
+    queue = queue
+      .then(() => {
+        pending.delete(moduleKey);
+        return runAll([moduleKey], true);
+      })
+      .catch((error) => log(`Study packs: ${error.message}`));
+    return queue;
+  }
+
   return {
     /** Queues a run over these "year/module" folders after any run already going. */
     afterSync(folders) {
@@ -81,7 +95,11 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
     },
     /** Queues a forced rebuild of one "year/module": the assistant redoes its packs even when they are up to date. */
     rebuild(moduleKey) {
-      queue = queue.then(() => runAll([moduleKey], true)).catch((error) => log(`Study packs: ${error.message}`));
+      return queueRebuild(moduleKey);
+    },
+    /** Queues forced rebuilds of these modules, one at a time; ones already queued are skipped. */
+    rebuildAll(moduleKeys) {
+      for (const moduleKey of moduleKeys) queueRebuild(moduleKey);
       return queue;
     },
     status: () => status,

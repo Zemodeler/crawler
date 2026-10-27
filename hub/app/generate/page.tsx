@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { SubjectControl, useModuleSubject } from "../subject-control.tsx";
 
-import { fetchPacksStatus, fetchTree, rebuildPacks, hostModuleHandle, loadModule, pickModule } from "../../lib/library.ts";
+import { fetchPacksStatus, fetchTree, rebuildAllPacks, rebuildPacks, hostModuleHandle, loadModule, pickModule } from "../../lib/library.ts";
 
 import { Markdown } from "../markdown.tsx";
 import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
@@ -133,18 +133,39 @@ export default function Generate() {
     })();
   }, []);
 
+  /** The module the desktop app is building packs for right now, if any. */
+  const [packsModule, setPacksModule] = useState<string | null>(null);
+
   useEffect(() => {
     if (!moduleKey) return;
     const check = () =>
       fetchPacksStatus()
-        .then((status) => setAutoBuilding(status.state === "running" && status.module === moduleKey))
-        .catch(() => setAutoBuilding(false));
+        .then((status) => {
+          setPacksModule(status.state === "running" ? status.module : null);
+          setAutoBuilding(status.state === "running" && status.module === moduleKey);
+        })
+        .catch(() => {
+          setPacksModule(null);
+          setAutoBuilding(false);
+        });
     check();
     const timer = setInterval(check, 15_000);
     return () => clearInterval(timer);
   }, [moduleKey]);
 
   const [rebuilding, setRebuilding] = useState(false);
+  const startRebuild = (request: () => Promise<unknown>) => {
+    setRebuilding(true);
+    setMessage("");
+    request()
+      .then(() => fetchPacksStatus())
+      .then((status) => {
+        setPacksModule(status.state === "running" ? status.module : null);
+        setAutoBuilding(status.state === "running" && status.module === moduleKey);
+      })
+      .catch((error) => setMessage((error as Error).message))
+      .finally(() => setRebuilding(false));
+  };
 
   const fail = useCallback((error: unknown) => {
     const aiError = error as AiError;
@@ -317,22 +338,19 @@ export default function Generate() {
 
         {["intro", "error"].includes(phase) && moduleKey && (
           <div className="callout">
-            <b>Let the assistant redo the packs</b>
-            Rebuilds this module&apos;s study packs and flashcards in the background with your assistant, with no
-            review step. Files you edited are kept as they are.{" "}
-            <button
-              disabled={autoBuilding || rebuilding}
-              onClick={() => {
-                setRebuilding(true);
-                setMessage("");
-                rebuildPacks(moduleKey)
-                  .then(() => setAutoBuilding(true))
-                  .catch((error) => setMessage((error as Error).message))
-                  .finally(() => setRebuilding(false));
-              }}
-            >
-              {autoBuilding ? "Rebuilding…" : "Redo study packs"}
+            <b>Rebuild with the latest material</b>
+            Your assistant rebuilds the study packs and flashcards in the background, with no review step. It
+            reads new course files, your own files and notes in My Files, and starts from the current packs to
+            improve on them. Files you edited are kept as they are.{" "}
+            <button disabled={autoBuilding || rebuilding} onClick={() => startRebuild(() => rebuildPacks(moduleKey))}>
+              {autoBuilding ? "Rebuilding…" : "Rebuild this module"}
+            </button>{" "}
+            <button className="secondary" disabled={rebuilding} onClick={() => startRebuild(rebuildAllPacks)}>
+              Rebuild all modules
             </button>
+            {packsModule && (
+              <p>Building packs now: {packsModule.split("/").slice(1).join("/")}. Others wait their turn.</p>
+            )}
           </div>
         )}
 
