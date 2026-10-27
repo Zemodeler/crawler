@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { isHosted } from "../../lib/ai/settings.ts";
 import { currentAcademicYear, fetchDeadlines, fetchTree, moduleCode, type Deadline } from "../../lib/library.ts";
 import {
+  ChangeDate,
   DeadlinePanel,
   KIND_LABEL,
   ModuleDot,
@@ -101,8 +102,10 @@ export default function CalendarPage() {
     history.replaceState(null, "", id ? `#${encodeURIComponent(id)}` : window.location.pathname);
   };
 
+  const updateDeadline = (updated: Deadline) => setDeadlines((all) => all.map((d) => (d.id === updated.id ? updated : d)));
+
   const row = (d: Deadline) => (
-    <li key={d.id}>
+    <li key={d.id} className="deadline-item">
       <button className={`deadline-row${d.id === openId ? " selected" : ""}`} onClick={() => select(d.id)}>
         <span className="deadline-when">{d.due || weekOnly(d) ? formatDue(d, "short") : "TBC"}</span>
         <ModuleDot modules={modules} code={d.module} />
@@ -112,6 +115,7 @@ export default function CalendarPage() {
         {d.weight !== undefined && <span className="weight">{d.weight}%</span>}
         {d.status !== "confirmed" && <StatusPill status={d.status} deadline={d} />}
       </button>
+      <ChangeDate deadline={d} onResolved={updateDeadline} />
     </li>
   );
 
@@ -281,7 +285,7 @@ export default function CalendarPage() {
               deadline={open}
               modules={modules}
               onClose={() => select("")}
-              onResolved={(updated) => setDeadlines((all) => all.map((d) => (d.id === updated.id ? updated : d)))}
+              onResolved={updateDeadline}
             />
           )}
         </div>

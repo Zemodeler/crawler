@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { teachingWeekAt, type TeachingWeek } from "crawler/weeks";
 
@@ -187,6 +187,143 @@ function openSource(source: DeadlineSource) {
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
+/** `YYYY-MM-DD` and `HH:MM` of the due date in London wall time; empty for TBC or week-only. */
+function londonParts(d: Deadline): { date: string; time: string } {
+  if (!d.due) return { date: "", time: "" };
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(d.due.iso))
+      .map((p) => [p.type, p.value]),
+  );
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: d.due.allDay ? "" : `${parts.hour}:${parts.minute}` };
+}
+
+function GearIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+/**
+ * The cogwheel beside a deadline and the inline editor it opens. Renders the
+ * button and, when open, the editor as siblings so the parent can lay them out
+ * (the editor wraps onto its own line).
+ */
+export function ChangeDate({ deadline, onResolved }: { deadline: Deadline; onResolved: (updated: Deadline) => void }) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const cog = useRef<HTMLButtonElement>(null);
+  const dateInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    dateInput.current?.focus();
+    const form = dateInput.current?.form;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      setOpen(false);
+      setError("");
+      cog.current?.focus();
+    };
+    form?.addEventListener("keydown", onKey);
+    return () => form?.removeEventListener("keydown", onKey);
+  }, [open]);
+  const id = `change-${deadline.id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+
+  const close = () => {
+    setOpen(false);
+    setError("");
+    cog.current?.focus();
+  };
+  const toggle = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (open) return close();
+    const current = londonParts(deadline);
+    setDate(current.date);
+    setTime(current.time);
+    setError("");
+    setOpen(true);
+  };
+  const save = async () => {
+    if (!date) return;
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await resolveDeadline(deadline.id, { date: time ? `${date}T${time}` : date });
+      setOpen(false);
+      onResolved(updated);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        ref={cog}
+        type="button"
+        className="btn btn-ghost cog-button"
+        aria-label={`Change date of ${deadline.title}`}
+        title="Change date"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={toggle}
+      >
+        <GearIcon />
+      </button>
+      {open && (
+        <form
+          id={id}
+          className="change-date"
+          aria-label={`Change date of ${deadline.title}`}
+          onSubmit={(e) => {
+            e.preventDefault();
+            save();
+          }}
+        >
+          <div className="change-date-fields">
+            <label>
+              Date
+              <input type="date" value={date} ref={dateInput} required onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label>
+              Time <small>(optional)</small>
+              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+            </label>
+          </div>
+          <p className="quiet">Your date is kept: later syncs will not change it.</p>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <div className="change-date-actions">
+            <button type="submit" className="btn btn-primary" disabled={busy || !date}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={close}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </>
+  );
+}
+
 /** The side panel: every source with its quote, and settling a doubtful date. */
 export function DeadlinePanel({
   deadline,
@@ -233,7 +370,10 @@ export function DeadlinePanel({
       <dl className="facts">
         <div>
           <dt>Due</dt>
-          <dd>{formatDue(deadline)}</dd>
+          <dd className="due-with-cog">
+            <span>{formatDue(deadline)}</span>
+            <ChangeDate deadline={deadline} onResolved={onResolved} />
+          </dd>
         </div>
         <div>
           <dt>Status</dt>
