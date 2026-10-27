@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { listLibrary, readTexts, resolveDeadline, resolveInside } from "../host/library.mjs";
+import { listLibrary, readTexts, removeOwnFile, resolveDeadline, resolveInside, writeOwnFile, writeOwnNote } from "../host/library.mjs";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "studyhub-library-"));
@@ -98,4 +98,48 @@ test("the Converter may write only Study Hub's own files inside a module", async
   assert.ok((await writeModuleFile(root, "../outside/x", "0 - START HERE.md", "x")).error);
   assert.ok((await writeModuleFile(root, "2026-27/No Such Module", "0 - START HERE.md", "x")).error);
   assert.ok((await readModuleFile(root, moduleKey, "Course Materials/Week 1.pdf")).error);
+});
+
+const MODULE = "2026-27/ECS505U - Software Engineering";
+const OWN = join("2026-27", "ECS505U - Software Engineering", "Course Materials", "My Files");
+
+test("own files are written to My Files and never overwrite", async () => {
+  const root = fixture();
+  assert.deepEqual(await writeOwnFile(root, MODULE, "Notes.pdf", Buffer.from("one")), { ok: true, path: "Course Materials/My Files/Notes.pdf" });
+  assert.deepEqual(await writeOwnFile(root, MODULE, "Notes.pdf", Buffer.from("two")), { ok: true, path: "Course Materials/My Files/Notes (2).pdf" });
+  assert.equal(readFileSync(join(root, OWN, "Notes.pdf"), "utf8"), "one");
+  assert.equal(readFileSync(join(root, OWN, "Notes (2).pdf"), "utf8"), "two");
+});
+
+test("own files refuse other extensions, unsafe names and modules outside the library", async () => {
+  const root = fixture();
+  assert.ok((await writeOwnFile(root, MODULE, "run.exe", Buffer.from("x"))).error);
+  for (const name of ["../escape.pdf", "a/b.pdf", "a\b.pdf", ".hidden.pdf", "CON.pdf", "x\u0001.pdf", `${"a".repeat(151)}.pdf`])
+    assert.ok((await writeOwnFile(root, MODULE, name, Buffer.from("x"))).error, name);
+  for (const dir of ["../2026-27/ECS505U - Software Engineering", "2026-27/..", "2026-27", ".crawler/x", "2026-27/Missing"])
+    assert.ok((await writeOwnFile(root, dir, "ok.pdf", Buffer.from("x"))).error, dir);
+  assert.equal(existsSync(join(root, "escape.pdf")), false);
+});
+
+test("own notes are created and updated under My Files/Notes", async () => {
+  const root = fixture();
+  const created = await writeOwnNote(root, { module: MODULE, title: "Week 1: recap", text: "# Recap\n" });
+  assert.equal(created.path, "Course Materials/My Files/Notes/Week 1- recap.md");
+  const again = await writeOwnNote(root, { module: MODULE, title: "Week 1: recap", text: "other" });
+  assert.equal(again.path, "Course Materials/My Files/Notes/Week 1- recap (2).md");
+  assert.deepEqual(await writeOwnNote(root, { module: MODULE, title: "ignored", text: "updated", path: created.path }), { ok: true, path: created.path });
+  assert.equal(readFileSync(join(root, OWN, "Notes", "Week 1- recap.md"), "utf8"), "updated");
+  assert.ok((await writeOwnNote(root, { module: MODULE, title: "x", text: "y", path: "Start Here.md" })).error);
+  assert.ok((await writeOwnNote(root, { module: MODULE, title: "x", text: "y", path: "Course Materials/My Files/Notes/missing.md" })).error);
+  assert.ok((await writeOwnNote(root, { module: MODULE, title: "x", text: "y".repeat(2 * 1024 * 1024 + 1) })).error);
+});
+
+test("removing own files refuses anything outside My Files", async () => {
+  const root = fixture();
+  const { path } = await writeOwnFile(root, MODULE, "Mine.txt", Buffer.from("x"));
+  for (const outside of ["Course Materials/Week 1.pdf", "Start Here.md", "Course Materials/My Files/../Week 1.pdf", "../../secret.txt"])
+    assert.ok((await removeOwnFile(root, { module: MODULE, path: outside })).error, outside);
+  assert.ok(existsSync(join(root, "2026-27", "ECS505U - Software Engineering", "Course Materials", "Week 1.pdf")));
+  assert.deepEqual(await removeOwnFile(root, { module: MODULE, path }), { ok: true });
+  assert.equal(existsSync(join(root, OWN, "Mine.txt")), false);
 });

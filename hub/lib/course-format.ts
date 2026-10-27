@@ -108,6 +108,8 @@ export const SUPPORTED_EXTS = new Set([
   "xlsx",
   "xls",
 ]);
+/** Where a student's own files and notes live inside a module; Crawler's sync never touches it. */
+export const OWN_FILES_DIR = "Course Materials/My Files";
 /** Extensions the writer is ever allowed to create. */
 export const WRITABLE_EXTS = new Set(["md", "csv", "json"]);
 
@@ -128,6 +130,8 @@ export type Category = (typeof CATEGORIES)[number];
 export function inferCategory(path: string, ext: string): Category {
   const p = path.toLowerCase();
   if (ext === "csv") return "Flashcards";
+  // The student's own files are read as source material for the study packs.
+  if (/(^|\/)course materials\/my files\//.test(p)) return "Source materials";
   if (p.includes("topic pack") || p.includes("study pack")) return "Study packs";
   if (p.includes("guide") || p.includes("start here") || p.includes("index"))
     return "Guides & hubs";

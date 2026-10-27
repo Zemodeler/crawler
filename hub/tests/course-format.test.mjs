@@ -537,6 +537,9 @@ test("inferCategory matches the reader's classification, in order", () => {
   assert.equal(inferCategory("Course Materials/Past Papers/2024.pdf", "pdf"), "Past papers");
   assert.equal(inferCategory("Course Materials/Seminars/Week 1.docx", "docx"), "Seminars");
   assert.equal(inferCategory("Course Materials/Lectures/Week 1.pptx", "pptx"), "Source materials");
+  assert.equal(inferCategory("Course Materials/My Files/Exam guide.pdf", "pdf"), "Source materials");
+  assert.equal(inferCategory("Course Materials/My Files/Notes/Index.md", "md"), "Source materials");
+  assert.equal(inferCategory("Course Materials/My Files/Cards.csv", "csv"), "Flashcards");
   assert.equal(inferCategory("Course Materials/Reference/Cases.docx", "docx"), "Course materials");
 });
 
