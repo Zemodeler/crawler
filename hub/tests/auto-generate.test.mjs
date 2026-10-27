@@ -55,3 +55,27 @@ test("only generated revision files can be removed", async () => {
   assert.ok((await removeModuleFile(root, moduleKey, "Revision/../Course Materials/lecture.pdf")).error);
   assert.equal(existsSync(join(dir, "Course Materials", "lecture.pdf")), true);
 });
+
+const own = (name, size = 1) => ({ path: `Course Materials/My Files/${name}`, file: { size } });
+
+test("new or changed own files rebuild at once, even within the weekly wait", () => {
+  const recent = manifest({
+    completedAt: NOW - DAY,
+    sourceFingerprints: [lecture(1), lecture(2), { path: own("Notes/week 1.md").path }].map((f) => ({ path: f.path, size: 1 })),
+  });
+  const base = [lecture(1), lecture(2), own("Notes/week 1.md")];
+  assert.equal(needsRun(recent, "stem", base, NOW).run, false);
+  const added = needsRun(recent, "stem", [...base, own("summary.pdf"), own("Notes/week 2.md")], NOW);
+  assert.equal(added.run, true);
+  assert.match(added.reason, /2 of your own files are new/);
+  const edited = needsRun(recent, "stem", [lecture(1), lecture(2), own("Notes/week 1.md", 40)], NOW);
+  assert.equal(edited.run, true);
+  assert.match(edited.reason, /1 of your own files is new or changed/);
+});
+
+test("a lecture file whose size changed counts as new, under the weekly wait", () => {
+  const resized = [lecture(1), { ...lecture(2), file: { size: 99 } }];
+  assert.equal(needsRun(manifest(), "stem", resized, NOW).run, true);
+  assert.match(needsRun(manifest(), "stem", resized, NOW).reason, /1 lecture file new or changed/);
+  assert.equal(needsRun(manifest({ completedAt: NOW - DAY }), "stem", resized, NOW).run, false);
+});

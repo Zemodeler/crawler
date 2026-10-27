@@ -191,11 +191,21 @@ app.whenReady().then(async () => {
     },
   });
   setup.packsStatus = () => ({ state: packs.status().state, module: packs.status().module });
-  setup.packsRebuild = ({ module }) => {
-    if (typeof module !== "string" || !module.includes("/")) return { error: "No module given." };
+  // Every module of the newest year: the ones the startup run covers.
+  const newestModules = async () => {
+    const tree = await listLibrary(libraryRoot());
+    const year = tree.years[0]?.year; // newest first
+    return year ? tree.years[0].modules.map((m) => `${year}/${m}`) : [];
+  };
+  setup.packsRebuild = async ({ module, all }) => {
+    if (all !== true && (typeof module !== "string" || !module.includes("/"))) return { error: "No module given." };
     if (setup.prefs().autoGenerate === false || !["claude", "codex", "gemini"].includes(setup.prefs().assistant))
       return { error: "Choose “My subscription” in AI settings first, so Study Hub can use your assistant." };
-    void packs.rebuild(module);
+    if (all === true) {
+      const modules = await newestModules();
+      if (!modules.length) return { error: "There are no modules to rebuild yet." };
+      void packs.rebuildAll(modules);
+    } else void packs.rebuild(module);
     return { ok: true };
   };
   setup.onSynced = (result) => {
@@ -205,11 +215,8 @@ app.whenReady().then(async () => {
   background.start();
   if (SYNC_FLAG) void setup.startBackgroundSync("tray");
   // Modules synced before automatic packs existed get theirs now; up-to-date ones are skipped.
-  listLibrary(libraryRoot())
-    .then((tree) => {
-      const year = tree.years[0]?.year; // newest first
-      return year ? packs.afterSync(tree.years[0].modules.map((m) => `${year}/${m}`)) : [];
-    })
+  newestModules()
+    .then((modules) => (modules.length ? packs.afterSync(modules) : []))
     .catch((error) => console.error(`Study packs: ${error.message}`));
   const startedAtLogin = BACKGROUND_FLAG || (process.platform === "darwin" && app.getLoginItemSettings(LOGIN_ITEM).wasOpenedAtLogin);
   if (startedAtLogin) await window.loadURL(host.url);

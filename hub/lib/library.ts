@@ -62,6 +62,9 @@ export const fetchPacksStatus = () => call<{ state: "idle" | "running"; module: 
 /** Asks the desktop app's assistant to redo a module's study packs from scratch, in the background. */
 export const rebuildPacks = (module: string) =>
   call<{ ok: true }>("/api/setup/packs/rebuild", { method: "POST", body: JSON.stringify({ module }) });
+/** Asks the desktop app to rebuild every module of the newest year, one after another, in the background. */
+export const rebuildAllPacks = () =>
+  call<{ ok: true }>("/api/setup/packs/rebuild", { method: "POST", body: JSON.stringify({ all: true }) });
 export const fetchDeadlines = () => call<{ deadlines: Deadline[] }>("/api/library/deadlines").then((r) => r.deadlines);
 export const resolveDeadline = (id: string, choice: { sourceIndex: number } | { date: string }) =>
   call<{ deadline: Deadline }>("/api/library/deadlines/resolve", {

@@ -30,6 +30,8 @@ export const MIN_REBUILD_DAYS = 6;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LECTURES = /^Course Materials\/(?:Lectures|Transcripts)\//;
+/** The student's own files and notes: added on purpose, so they rebuild at once. */
+const OWN_FILES = /^Course Materials\/My Files\//;
 
 export type AutoDecision = { run: false; reason: string } | { run: true; reason: string };
 
@@ -50,13 +52,15 @@ export type AutoResult =
 
 /**
  * Whether a module needs an automatic run: no pack yet, a pack built for a
- * different subject (packs from before subject profiles were law), or lecture
- * files that the last run did not see and that run is old enough.
+ * different subject (packs from before subject profiles were law), the
+ * student's own files (Course Materials/My Files/) new or changed since the
+ * last run, or lecture files new or changed and that run old enough.
+ * A changed file is one whose size differs from the last run's fingerprint.
  */
 export function needsRun(
   manifest: Manifest | null,
   profile: SubjectId,
-  files: Pick<LocalFile, "path">[],
+  files: (Pick<LocalFile, "path"> & { file?: { size: number } })[],
   now = Date.now(),
 ): AutoDecision {
   const plan = manifest?.plan as { topics?: unknown[] } | undefined;
@@ -64,12 +68,23 @@ export function needsRun(
   const built = manifest.profile ?? "law";
   if (built !== profile)
     return { run: true, reason: `Its packs were built for ${getProfile(built).label}, not ${getProfile(profile).label}.` };
-  const seen = new Set(manifest.sourceFingerprints.map((f) => f.path));
-  const fresh = files.filter((f) => LECTURES.test(f.path) && !seen.has(f.path));
+  const seen = new Map(manifest.sourceFingerprints.map((f) => [f.path, f.size]));
+  const changed = (f: (typeof files)[number]) =>
+    !seen.has(f.path) || (f.file !== undefined && seen.get(f.path) !== f.file.size);
+  const own = files.filter((f) => OWN_FILES.test(f.path) && changed(f));
+  if (own.length)
+    return { run: true, reason: `${count(own.length, "of your own files")} ${own.length === 1 ? "is" : "are"} new or changed since the packs were built.` };
+  const fresh = files.filter((f) => LECTURES.test(f.path) && changed(f));
   if (!fresh.length) return { run: false, reason: "Its study packs are up to date." };
+  const what = count(fresh.length, "lecture file");
   if (now - manifest.completedAt < MIN_REBUILD_DAYS * DAY_MS)
-    return { run: false, reason: `${fresh.length} new lecture file(s); packs were rebuilt less than ${MIN_REBUILD_DAYS} days ago.` };
-  return { run: true, reason: `${fresh.length} new lecture file(s) since the packs were built.` };
+    return { run: false, reason: `${what} new or changed; packs were rebuilt less than ${MIN_REBUILD_DAYS} days ago.` };
+  return { run: true, reason: `${what} new or changed since the packs were built.` };
+}
+
+/** "1 lecture file", "2 lecture files"; "1 of your own files" stays plural. */
+function count(n: number, noun: string): string {
+  return noun.startsWith("of ") ? `${n} ${noun}` : `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
 /** The saved subject, else the one the module code or title suggests (not the old law files). */
