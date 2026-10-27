@@ -353,3 +353,129 @@ export async function writeModuleFile(root, module, path, content) {
   await rename(temp, full);
   return { ok: true };
 }
+
+/* ------------------------------------------------------- the student's own files */
+
+// Kept in step with OWN_FILES_DIR in lib/course-format.ts. Crawler's sync only
+// writes files it downloaded and never deletes unknown ones, so this is safe.
+const OWN_FILES_DIR = "Course Materials/My Files";
+const OWN_NOTES_DIR = `${OWN_FILES_DIR}/Notes`;
+const OWN_FILE_EXTS = new Set([".pdf", ".docx", ".pptx", ".xlsx", ".md", ".txt", ".csv", ".png", ".jpg", ".jpeg", ".gif"]);
+export const MAX_OWN_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_NAME = 150;
+const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com\d|lpt\d)$/i;
+
+/** A file name the student gave, cleaned up, or null when it cannot be one. */
+export function ownFileName(name) {
+  if (typeof name !== "string") return null;
+  const clean = name.trim().replace(/[. ]+$/, "");
+  if (!clean || clean.length > MAX_NAME || clean.startsWith(".") || hasControlCharacters(clean)) return null;
+  if (/[\\/:*?"<>|]/.test(clean)) return null;
+  if (WINDOWS_RESERVED.test(clean.split(".")[0])) return null;
+  return clean;
+}
+
+/** The real module folder, or null; the same junction check writeModuleFile makes. */
+function realModuleDir(root, module) {
+  const dir = moduleDir(root, module);
+  if (!dir) return null;
+  try {
+    const real = realpathSync(dir);
+    const realRoot = realpathSync(root);
+    return real.startsWith(realRoot + sep) ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Makes `<module>/<relativeDir>` and checks it did not resolve outside the module. */
+async function ownDir(dir, relativeDir) {
+  const full = resolve(dir, ...relativeDir.split("/"));
+  await mkdir(full, { recursive: true });
+  const realDir = realpathSync(dir);
+  const real = realpathSync(full);
+  return real.startsWith(realDir + sep) ? full : null;
+}
+
+/** `name`, or `name (2)`, `name (3)`… whichever does not exist yet in `dir`. */
+function freeName(dir, name) {
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 1; n < 1000; n++) {
+    const candidate = n === 1 ? name : `${stem} (${n})${ext}`;
+    if (!existsSync(join(dir, candidate))) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Writes a file the student added (a Buffer, or an async iterable of chunks) to
+ * the module's My Files folder. Never overwrites: a clash gets " (2)".
+ */
+export async function writeOwnFile(root, module, name, body) {
+  const dir = realModuleDir(root, module);
+  if (!dir) return { error: "That module is not in your library." };
+  const clean = ownFileName(name);
+  if (!clean) return { error: "That file name cannot be used." };
+  if (!OWN_FILE_EXTS.has(extname(clean).toLowerCase())) return { error: "Study Hub cannot open that kind of file." };
+  const target = await ownDir(dir, OWN_FILES_DIR);
+  if (!target) return { error: "That folder is outside this module." };
+  const temp = join(target, `.upload-${randomBytes(6).toString("hex")}.tmp`);
+  try {
+    let size = 0;
+    const chunks = [];
+    for await (const chunk of Buffer.isBuffer(body) ? [body] : body) {
+      size += chunk.length;
+      if (size > MAX_OWN_FILE_BYTES) return { error: "That file is larger than 50 MB." };
+      chunks.push(chunk);
+    }
+    await writeFile(temp, Buffer.concat(chunks), { flag: "wx" });
+    const final = freeName(target, clean);
+    if (!final) return { error: "Too many files with that name." };
+    await rename(temp, join(target, final));
+    return { ok: true, path: `${OWN_FILES_DIR}/${final}` };
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+
+/** Creates a Markdown note, or updates one when `path` is an existing note under My Files/Notes. */
+export async function writeOwnNote(root, body) {
+  const { module, title, text, path } = body ?? {};
+  const dir = realModuleDir(root, module);
+  if (!dir) return { error: "That module is not in your library." };
+  if (typeof text !== "string" || Buffer.byteLength(text) > MAX_TEXT_BYTES) return { error: "That note is too large." };
+  const notes = await ownDir(dir, OWN_NOTES_DIR);
+  if (!notes) return { error: "That folder is outside this module." };
+  let name;
+  if (path !== undefined && path !== null && path !== "") {
+    if (typeof path !== "string" || !path.startsWith(`${OWN_NOTES_DIR}/`)) return { error: "Only your own notes can be changed." };
+    name = ownFileName(path.slice(OWN_NOTES_DIR.length + 1));
+    if (!name || extname(name).toLowerCase() !== ".md" || !existsSync(join(notes, name))) return { error: "That note no longer exists." };
+  } else {
+    const clean = ownFileName(typeof title === "string" ? title.replace(/[\\/:*?"<>|]/g, "-") : "");
+    if (!clean) return { error: "Give the note a title." };
+    name = freeName(notes, `${clean.slice(0, MAX_NAME - 8)}.md`);
+    if (!name) return { error: "Too many notes with that title." };
+  }
+  const full = join(notes, name);
+  const temp = `${full}.${process.pid}.tmp`;
+  await writeFile(temp, text, "utf8");
+  await rename(temp, full);
+  return { ok: true, path: `${OWN_NOTES_DIR}/${name}` };
+}
+
+/** Deletes one file the student added; nothing outside My Files. */
+export async function removeOwnFile(root, body) {
+  const { module, path } = body ?? {};
+  const dir = realModuleDir(root, module);
+  if (!dir) return { error: "That module is not in your library." };
+  if (typeof path !== "string" || !path.startsWith(`${OWN_FILES_DIR}/`) || !isSafeRelativePath(path)) return { error: "Only files you added can be removed." };
+  const full = resolveInside(root, `${module}/${path}`);
+  if (!full) return { ok: true }; // Already gone (or never there).
+  const realOwn = realpathSync(resolve(dir, ...OWN_FILES_DIR.split("/")));
+  if (!realpathSync(full).startsWith(realOwn + sep)) return { error: "Only files you added can be removed." };
+  if (!statSync(full).isFile()) return { error: "Only files you added can be removed." };
+  await rm(full);
+  return { ok: true };
+}

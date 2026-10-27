@@ -21,6 +21,7 @@ import {
 } from "../lib/library.ts";
 import { NextSevenDays } from "./calendar/deadline-ui.tsx";
 import ModuleOverview from "./module-overview.tsx";
+import { OwnFiles } from "./own-files.tsx";
 import { LIBRARY_CHANGED_EVENT, NAVIGATE_EVENT, ShellOff, homeView, navigateHome } from "./shell/AppShell.tsx";
 import {
   SUPPORTED_EXTS,
@@ -125,6 +126,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [progress, setProgress] = useState<CourseProgress>(EMPTY_PROGRESS);
   const [notice, setNotice] = useState("");
+  const [ownFilesOpen, setOwnFilesOpen] = useState(false);
   const [remembered, setRemembered] = useState<DirectoryHandle[]>([]);
   const [flashcardReviews, setFlashcardReviews] = useState<
     Record<string, FlashcardReview>
@@ -620,12 +622,31 @@ export default function Home() {
               placeholder={profile.id === "law" ? "Search notes, cases and cards…" : `Search notes, ${profile.terms.authorities} and cards…`}
             />
           </label>
+          {library && course && (
+            <button className="btn btn-ghost" onClick={() => setOwnFilesOpen((open) => !open)}>
+              Add your own
+            </button>
+          )}
           {!library && (
             <button className="secondary" onClick={chooseFolder}>
               Switch course folder
             </button>
           )}
         </header>
+        {library && course && ownFilesOpen && (
+          <OwnFiles
+            key={course}
+            module={course}
+            entries={library.files}
+            onClose={() => setOwnFilesOpen(false)}
+            // The same refresh a finished sync triggers, then the open module is re-read.
+            onChanged={async () => {
+              const tree = await fetchTree();
+              setLibrary(tree);
+              await openModule(tree, activeYear, activeModule);
+            }}
+          />
+        )}
         {course && <section className="hub-card"><SubjectControl key={course} target={subjectTarget} subject={subject} /></section>}
         {notice && (
           <div className="notice">

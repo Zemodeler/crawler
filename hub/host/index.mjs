@@ -29,7 +29,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { CLI_SETTINGS, findCli, runCli } from "./cli.mjs";
-import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, resolveDeadline, writeModuleFile } from "./library.mjs";
+import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, removeOwnFile, resolveDeadline, writeModuleFile, writeOwnFile, writeOwnNote, MAX_OWN_FILE_BYTES } from "./library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, "..", "dist");
@@ -286,6 +286,30 @@ async function handleAi(request, response, url) {
   }
 }
 
+/** A raw (non-JSON) request body, refused past `limit` bytes before it is all read. */
+function readRawBody(request, limit) {
+  return new Promise((resolveBody, reject) => {
+    if (Number(request.headers["content-length"]) > limit) {
+      reject(new Error("That file is larger than 50 MB."));
+      request.resume();
+      return;
+    }
+    let size = 0;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("That file is larger than 50 MB."));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolveBody(Buffer.concat(chunks)));
+    request.on("error", reject);
+  });
+}
+
 /* ------------------------------------------------------------- library API */
 
 async function handleLibrary(request, response, url) {
@@ -321,6 +345,28 @@ async function handleLibrary(request, response, url) {
   if (url.pathname === "/api/library/deadlines/resolve" && request.method === "POST") {
     const body = await readBody(request).catch(() => ({}));
     const result = await resolveDeadline(root, body);
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: "bad_request", message: result.error } : result);
+    return;
+  }
+  if (url.pathname === "/api/library/own-file" && request.method === "POST") {
+    let content;
+    try {
+      content = await readRawBody(request, MAX_OWN_FILE_BYTES);
+    } catch (error) {
+      sendJson(response, 413, { code: "too_large", message: error.message });
+      return;
+    }
+    const result = await writeOwnFile(root, url.searchParams.get("module"), url.searchParams.get("name"), content);
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: "bad_request", message: result.error } : result);
+    return;
+  }
+  const ownMutation = new Map([
+    ["PUT /api/library/own-note", writeOwnNote],
+    ["POST /api/library/own-file/remove", removeOwnFile],
+  ]).get(`${request.method} ${url.pathname}`);
+  if (ownMutation) {
+    const body = await readBody(request).catch(() => ({}));
+    const result = await ownMutation(root, body);
     sendJson(response, result.error ? 400 : 200, result.error ? { code: "bad_request", message: result.error } : result);
     return;
   }
