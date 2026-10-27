@@ -260,7 +260,7 @@ export function FormatCheckDialog({
                 disabled={!aiReady || !report.canConvert}
                 title={
                   !aiReady
-                    ? "Connect Claude or ChatGPT first"
+                    ? "Connect Claude, ChatGPT or Gemini first"
                     : !report.canConvert
                       ? "No source material to generate from"
                       : `Generates ${aiCount} files from your own materials`
@@ -268,7 +268,7 @@ export function FormatCheckDialog({
               >
                 {aiReady
                   ? `Build packs and flashcards (${aiCount} files)`
-                  : "Connect Claude or ChatGPT to generate"}
+                  : "Connect Claude, ChatGPT or Gemini to generate"}
               </button>
             </>
           )}

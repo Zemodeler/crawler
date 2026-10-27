@@ -7,15 +7,20 @@
  *                  |  API key                    |  Subscription
  *   Claude         |  api.anthropic.com direct   |  desktop app -> `claude` CLI
  *   ChatGPT        |  api.openai.com direct      |  desktop app -> `codex` CLI
+ *   Gemini         |  (not offered)              |  desktop app -> `gemini` CLI
  */
 
-export type ProviderId = "anthropic" | "openai";
+export type ProviderId = "anthropic" | "openai" | "google";
 export type TransportId = "apikey" | "subscription";
 
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
   anthropic: "Claude",
   openai: "ChatGPT",
+  google: "Gemini",
 };
+
+/** Gemini is offered only through the student's own `gemini` CLI sign-in. */
+export const API_KEY_PROVIDERS: ProviderId[] = ["anthropic", "openai"];
 
 /**
  * The JSON Schema subset that survives every cell.

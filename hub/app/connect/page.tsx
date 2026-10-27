@@ -27,7 +27,7 @@ import {
   saveSettings,
   type AiSettings,
 } from "../../lib/ai/settings.ts";
-import { PROVIDER_LABELS, type AiError, type ModelOption, type ProviderId, type TransportId } from "../../lib/ai/types.ts";
+import { API_KEY_PROVIDERS, PROVIDER_LABELS, type AiError, type ModelOption, type ProviderId, type TransportId } from "../../lib/ai/types.ts";
 
 type TestState =
   | { kind: "idle" }
@@ -35,7 +35,7 @@ type TestState =
   | { kind: "ok"; detail: string }
   | { kind: "fail"; message: string; hint?: string };
 
-const KEY_HELP: Record<ProviderId, { where: string; url: string; prefix: string }> = {
+const KEY_HELP: Partial<Record<ProviderId, { where: string; url: string; prefix: string }>> = {
   anthropic: {
     where: "Anthropic Console → API keys",
     url: "https://console.anthropic.com/settings/keys",
@@ -47,6 +47,7 @@ const KEY_HELP: Record<ProviderId, { where: string; url: string; prefix: string 
     prefix: "sk-",
   },
 };
+
 
 export default function Connect() {
   const [settings, setSettings] = useState<AiSettings>(DEFAULT_SETTINGS);
@@ -105,6 +106,8 @@ export default function Connect() {
     const next = { ...settings, ...patch };
     // Model ids do not transfer between providers.
     if (patch.provider && patch.provider !== settings.provider) next.model = "";
+    // Gemini has no API-key path here, only the gemini CLI.
+    if (!API_KEY_PROVIDERS.includes(next.provider)) next.transport = "subscription";
     setSettings(next);
     saveSettings(next);
   };
@@ -196,13 +199,13 @@ export default function Connect() {
         <h1>AI settings</h1>
         <p className="hub-lede">
           Study Hub can build topic packs and flashcards from your own course materials. To do that it
-          needs a connection to Claude or ChatGPT. This is the only sign-in the app has — your notes,
+          needs a connection to Claude, ChatGPT or Gemini. This is the only sign-in the app has — your notes,
           flashcards and progress live in this browser and never touch a Study Hub server.
         </p>
 
         <h3>1. Which assistant</h3>
         <div className="choice-grid">
-          {(["anthropic", "openai"] as ProviderId[]).map((provider) => (
+          {(["anthropic", "openai", "google"] as ProviderId[]).map((provider) => (
             <button
               key={provider}
               className="choice"
@@ -213,7 +216,9 @@ export default function Connect() {
               <small>
                 {provider === "anthropic"
                   ? "Anthropic. Claude Pro/Max subscription, or an API key."
-                  : "OpenAI. ChatGPT subscription, or an API key."}
+                  : provider === "openai"
+                    ? "OpenAI. ChatGPT subscription, or an API key."
+                    : "Google. Your Google sign-in in the Gemini CLI."}
               </small>
             </button>
           ))}
@@ -221,7 +226,7 @@ export default function Connect() {
 
         <h3>2. How it is paid for</h3>
         <div className="choice-grid">
-          {(["apikey", "subscription"] as TransportId[]).map((transport) => (
+          {(["apikey", "subscription"] as TransportId[]).filter((transport) => transport === "subscription" || API_KEY_PROVIDERS.includes(settings.provider)).map((transport) => (
             <button
               key={transport}
               className="choice"
@@ -381,7 +386,7 @@ function ApiKeySection({
   setModel: (value: string) => void;
   onRefreshModels: () => void;
 }) {
-  const help = KEY_HELP[provider];
+  const help = KEY_HELP[provider]!;
   return (
     <>
       <div className="field">
@@ -456,7 +461,7 @@ function SubscriptionSection({
   error,
   onRecheck,
 }: {
-  cli: "claude" | "codex";
+  cli: "claude" | "codex" | "gemini";
   hosted: boolean;
   host: HostHealth | null;
   checking: boolean;
@@ -467,7 +472,7 @@ function SubscriptionSection({
     return (
       <div className="callout callout-warn">
         <b>Only in the desktop app</b>
-        No public interface lets a website spend a Claude Pro or ChatGPT Plus subscription. The Study
+        No public interface lets a website spend a Claude, ChatGPT or Gemini subscription. The Study
         Hub desktop app runs the <span className="mono">{cli}</span> command-line tool you are already
         signed in to, on your own computer. Open Study Hub from the desktop app to use your
         subscription, or use an API key here.
@@ -502,7 +507,7 @@ function SubscriptionSection({
       {host && status && !status.present && (
         <div className="callout callout-warn">
           <b>{cli} is not installed</b>
-          Install the {cli === "claude" ? "Claude" : "ChatGPT Codex"} app or CLI and sign in once,
+          Install the {cli === "claude" ? "Claude" : cli === "codex" ? "ChatGPT Codex" : "Gemini"} app or CLI and sign in once,
           then press Check again.
         </div>
       )}

@@ -168,7 +168,7 @@ function serveStatic(response, file) {
  * Detection runs each candidate's `--version` synchronously; it is rare enough
  * that briefly blocking the server is acceptable.
  */
-const KINDS = ["claude", "codex"];
+const KINDS = ["claude", "codex", "gemini"];
 const REDETECT_MS = 5_000;
 let clis = {};
 const lastSearch = {};
@@ -212,11 +212,13 @@ async function handleAi(request, response, url) {
       clis: {
         claude: { present: Boolean(clis.claude.path), version: clis.claude.version },
         codex: { present: Boolean(clis.codex.path), version: clis.codex.version },
+        gemini: { present: Boolean(clis.gemini.path), version: clis.gemini.version },
       },
-      searched: [...new Set([...clis.claude.searched, ...clis.codex.searched])].slice(0, 16),
+      searched: [...new Set(KINDS.flatMap((kind) => clis[kind].searched))].slice(0, 24),
       capabilities: {
         claudeWeb: Boolean(CLI_SETTINGS.claude.webArgs),
         codexWeb: Boolean(CLI_SETTINGS.codex.webArgs),
+        geminiWeb: Boolean(CLI_SETTINGS.gemini.webArgs),
       },
     });
     return;
@@ -235,7 +237,7 @@ async function handleAi(request, response, url) {
     return;
   }
 
-  const kind = body.provider === "openai" ? "codex" : "claude";
+  const kind = body.provider === "openai" ? "codex" : body.provider === "google" ? "gemini" : "claude";
   const cli = currentCli(kind);
   if (body.probe) {
     if (!cli?.path) {

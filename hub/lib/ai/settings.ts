@@ -49,9 +49,9 @@ export function loadSettings(): AiSettings {
     if (!raw) return { ...DEFAULT_SETTINGS };
     const parsed = JSON.parse(raw) as Partial<AiSettings>;
     return {
-      provider: parsed.provider === "openai" ? "openai" : "anthropic",
+      provider: parsed.provider === "openai" || parsed.provider === "google" ? parsed.provider : "anthropic",
       // "bridge" is what subscription mode was called before the desktop app.
-      transport: (parsed.transport as string) === "bridge" || parsed.transport === "subscription" ? "subscription" : "apikey",
+      transport: (parsed.transport as string) === "bridge" || parsed.transport === "subscription" || parsed.provider === "google" ? "subscription" : "apikey",
       model: typeof parsed.model === "string" ? parsed.model : "",
       remember: parsed.remember === true,
     };

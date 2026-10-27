@@ -1,12 +1,12 @@
 /**
  * Crawler's AiRunner, backed by the host's guarded CLI runner (host/cli.mjs),
- * so deadline extraction during a sync uses the same `claude` / `codex` the
+ * so deadline extraction during a sync uses the same `claude` / `codex` / `gemini` the
  * student chose for Study Hub, with the same spawn guards and no API keys.
  */
 
 import { findCli, runCli } from "../host/cli.mjs";
 
-/** `kind` is "claude" or "codex"; anything else gives a runner with no CLI. */
+/** `kind` is "claude", "codex" or "gemini"; anything else gives a runner with no CLI. */
 export function createHostAiRunner(kind) {
   let cli = null;
   const current = () => {
@@ -15,7 +15,7 @@ export function createHostAiRunner(kind) {
   };
   return {
     async available() {
-      if (kind !== "claude" && kind !== "codex") return { cli: null };
+      if (!["claude", "codex", "gemini"].includes(kind)) return { cli: null };
       return { cli: current().path ? kind : null };
     },
     async structured({ system, prompt, schema }) {

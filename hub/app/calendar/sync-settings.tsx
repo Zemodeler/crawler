@@ -70,7 +70,7 @@ export default function SyncSettings() {
       </div>
       <p className="quiet">
         {status.assistant
-          ? `Documents and announcements are also read by ${status.assistant === "codex" ? "ChatGPT" : "Claude"} on your subscription; every date it finds is checked against the document's own words.`
+          ? `Documents and announcements are also read by ${status.assistant === "codex" ? "ChatGPT" : status.assistant === "gemini" ? "Gemini" : "Claude"} on your subscription; every date it finds is checked against the document's own words.`
           : "Documents and announcements are read with rules only. Choose “My subscription” in AI settings to let your assistant read them too."}
       </p>
 

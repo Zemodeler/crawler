@@ -46,7 +46,7 @@ export function createAutoGenerator({ BrowserWindow, Notification, hostUrl, libr
   async function runAll(folders, force = false) {
     const settings = prefs();
     const assistant = settings.assistant;
-    if (settings.autoGenerate === false || (assistant !== "claude" && assistant !== "codex")) return [];
+    if (settings.autoGenerate === false || !["claude", "codex", "gemini"].includes(assistant)) return [];
     const model = typeof settings.autoModel === "string" && settings.autoModel ? settings.autoModel : "";
     const results = [];
     status = { state: "running", module: null, results };

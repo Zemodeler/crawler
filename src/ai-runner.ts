@@ -11,8 +11,9 @@ const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const CLI_ARGS = {
   claude: ["--print", "--output-format", "text", "--disallowed-tools", "Bash,PowerShell,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task"],
   codex: ["exec", "--sandbox", "read-only", "--skip-git-repo-check"],
+  gemini: ["--output-format", "text", "--approval-mode", "default"],
 };
-type CliName = "claude" | "codex";
+type CliName = "claude" | "codex" | "gemini";
 export type FoundCli = {
   path: string | null; command: string | null; prefixArgs: string[];
   version: string | null; searched: string[];
@@ -173,6 +174,8 @@ function childEnv(extra: NodeJS.ProcessEnv = {}) {
   Object.assign(env, extra);
   delete env.ANTHROPIC_API_KEY;
   delete env.OPENAI_API_KEY;
+  delete env.GEMINI_API_KEY;
+  delete env.GOOGLE_API_KEY;
   return env;
 }
 
@@ -225,7 +228,7 @@ export function createCliAiRunner(opts: {
 } = {}): AiRunner {
   const discover = () => {
     const first = opts.prefer ?? "claude";
-    for (const kind of [first, first === "claude" ? "codex" : "claude"] as CliName[]) {
+    for (const kind of [first, ...(["claude", "codex", "gemini"] as CliName[]).filter((k) => k !== first)]) {
       const cli = (opts.find ?? findCli)(kind);
       if (cli.path && cli.command) return { kind, cli };
     }

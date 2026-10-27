@@ -36,7 +36,7 @@ app.whenReady().then(async () => {
   const argv = process.argv.slice(app.isPackaged ? 1 : 2);
   const code = await runCli(argv, {
     calendar,
-    ai: createCliAiRunner(process.env.CRAWLER_AI === "codex" ? { prefer: "codex" } : {}),
+    ai: createCliAiRunner(["codex", "gemini"].includes(process.env.CRAWLER_AI) ? { prefer: process.env.CRAWLER_AI } : {}),
     tokenStore,
     loginBrowser,
     defaultRoot: join(homedir(), "Documents", "My Studies"),

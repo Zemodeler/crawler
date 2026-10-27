@@ -2,7 +2,7 @@
 
 /**
  * The automatic study-pack run, opened by the desktop app in a hidden window
- * after a sync: /auto?module=<year/module>&assistant=claude|codex[&model=][&force=1].
+ * after a sync: /auto?module=<year/module>&assistant=claude|codex|gemini[&model=][&force=1].
  * The shell reads `window.__studyHubAuto` for progress and the result.
  */
 
@@ -25,7 +25,8 @@ export default function Auto() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const moduleKey = params.get("module") || "";
-    const assistant = params.get("assistant") === "codex" ? "codex" : "claude";
+    const requested = params.get("assistant");
+    const assistant = requested === "codex" || requested === "gemini" ? requested : "claude";
     const state: AutoState = { log: [], result: null };
     window.__studyHubAuto = state;
     const push = (line: string) => {

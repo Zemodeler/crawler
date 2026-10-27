@@ -61,7 +61,7 @@ export type SetupStatus = {
   freshness: string;
   schedule: { everyDays: 1 | 3 | 7 };
   /** The CLI the last sync used to read documents, if any. */
-  assistant: "claude" | "codex" | null;
+  assistant: "claude" | "codex" | "gemini" | null;
   calendar: CalendarStatus;
 };
 
@@ -90,10 +90,10 @@ export const disconnectCalendar = () => call<{ ok: true }>("/api/setup/calendar/
  * sync also uses to read documents for deadlines; "none" when they use an API
  * key or nothing, so the sync sticks to rules and the course site's own dates.
  */
-export function chosenAssistant(): "claude" | "codex" | "none" {
+export function chosenAssistant(): "claude" | "codex" | "gemini" | "none" {
   const settings = loadSettings();
   if (settings.transport !== "subscription") return "none";
-  return settings.provider === "openai" ? "codex" : "claude";
+  return settings.provider === "openai" ? "codex" : settings.provider === "google" ? "gemini" : "claude";
 }
 
 /** Calls `onUpdate` every second until the sync stops running. */

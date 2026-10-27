@@ -18,9 +18,11 @@ import { fetchTree, hostModuleHandle, loadModule, moduleCode, setModuleProfile }
 import { getProfile, inferProfile, PROFILES, type SubjectId } from "./subject-profiles.ts";
 
 /** The lighter model each assistant uses for automatic runs. */
-export const AUTO_MODELS: Record<"claude" | "codex", string> = {
+export const AUTO_MODELS: Record<"claude" | "codex" | "gemini", string> = {
   claude: "claude-sonnet-5-5",
   codex: "gpt-6-luna",
+  // Empty: the gemini CLI's own default model.
+  gemini: "",
 };
 
 /** New lecture files alone rebuild a module at most this often. */
@@ -88,7 +90,7 @@ async function subjectFor(moduleKey: string): Promise<SubjectId> {
 
 export async function autoGenerate(options: {
   moduleKey: string; // "2026-27/ECS505U - Software Engineering"
-  assistant: "claude" | "codex";
+  assistant: "claude" | "codex" | "gemini";
   model?: string;
   force?: boolean;
   onLog?: (line: string) => void;
@@ -108,7 +110,7 @@ export async function autoGenerate(options: {
 
     const profile = getProfile(profileId);
     const report = validateCourse(files, { courseName: handle.name, manifestPresent: Boolean(manifest) }, profile);
-    const provider: ProviderId = assistant === "claude" ? "anthropic" : "openai";
+    const provider: ProviderId = assistant === "claude" ? "anthropic" : assistant === "codex" ? "openai" : "google";
     const client = createHostClient(provider, options.model ?? AUTO_MODELS[assistant], { background: true });
     let lastLine: unknown = null;
     const run = ConversionRun.create(handle.name, "generate", {

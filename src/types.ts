@@ -238,6 +238,6 @@ export type Deadline = {
 /* ------------------------------------------------------------- AI (host-provided) */
 
 export interface AiRunner {
-  available(): Promise<{ cli: "claude" | "codex" | null }>;
+  available(): Promise<{ cli: "claude" | "codex" | "gemini" | null }>;
   structured<T>(request: { system: string; prompt: string; schema: object }): Promise<T>;
 }

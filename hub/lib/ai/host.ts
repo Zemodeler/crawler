@@ -32,14 +32,15 @@ export type CliStatus = { present: boolean; version: string | null; path?: strin
 export type HostHealth = {
   name: string;
   version: string;
-  clis: Record<"claude" | "codex", CliStatus>;
+  clis: Record<"claude" | "codex", CliStatus> & { gemini?: CliStatus };
   searched?: string[];
-  capabilities?: { claudeWeb: boolean; codexWeb: boolean };
+  capabilities?: { claudeWeb: boolean; codexWeb: boolean; geminiWeb?: boolean };
 };
 
-export const CLI_FOR: Record<ProviderId, "claude" | "codex"> = {
+export const CLI_FOR: Record<ProviderId, "claude" | "codex" | "gemini"> = {
   anthropic: "claude",
   openai: "codex",
+  google: "gemini",
 };
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {

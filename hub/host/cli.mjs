@@ -1,5 +1,5 @@
 /**
- * Finding and running the `claude` / `codex` CLI for the Study Hub host.
+ * Finding and running the `claude` / `codex` / `gemini` CLI for the Study Hub host.
  *
  * Ported from the old bridge (bridge/index.mjs, now removed): same spawn guards
  * (shell:false, argv array, prompt on stdin, empty temp cwd, scrubbed env,
@@ -42,7 +42,16 @@ export const CLI_SETTINGS = {
     webArgs: null,
     modelFlag: "--model",
   },
+  // Headless when stdin is not a terminal; the default approval mode refuses
+  // every tool that would need confirmation, so it cannot edit or run commands.
+  gemini: {
+    args: ["--output-format", "text", "--approval-mode", "default"],
+    webArgs: null,
+    modelFlag: "--model",
+  },
 };
+
+export const CLI_APPS = { claude: "Claude", codex: "Codex", gemini: "Gemini CLI" };
 
 /**
  * Node refuses to spawn a `.cmd` without a shell (CVE-2024-27980), and a shell
@@ -200,6 +209,8 @@ function childEnv(extra = {}) {
   Object.assign(env, extra);
   delete env.ANTHROPIC_API_KEY;
   delete env.OPENAI_API_KEY;
+  delete env.GEMINI_API_KEY;
+  delete env.GOOGLE_API_KEY;
   return env;
 }
 
@@ -274,7 +285,7 @@ export function runCli(cli, kind, prompt, model, webAccess) {
           code,
           message:
             code === "cli_not_authenticated"
-              ? `\`${kind}\` is not signed in. Open the ${kind === "claude" ? "Claude" : "Codex"} app and sign in, then retry.`
+              ? `\`${kind}\` is not signed in. Open ${CLI_APPS[kind] || kind} and sign in, then retry.`
               : `\`${kind}\` exited with code ${status}.`,
           detail: stderr.trim().slice(0, 900),
         });

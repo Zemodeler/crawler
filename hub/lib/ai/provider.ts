@@ -17,7 +17,7 @@ export type { AiClient } from "./types.ts";
 /** Build a client from explicit settings plus an already-loaded key. */
 export function createAiClient(settings: AiSettings, key: string): AiClient {
   const model = effectiveModel(settings);
-  if (settings.transport === "subscription") return createHostClient(settings.provider, settings.model);
+  if (settings.transport === "subscription" || settings.provider === "google") return createHostClient(settings.provider, settings.model);
   if (!key.trim())
     throw new AiError("no_credentials", `No ${settings.provider === "anthropic" ? "Anthropic" : "OpenAI"} API key set.`, {
       hint: "Add one on the AI settings page.",

@@ -15,9 +15,10 @@ const STEPS: { id: Step; label: string }[] = [
   { id: "sync", label: "Your modules" },
 ];
 
-const ASSISTANTS: { provider: ProviderId; cli: "claude" | "codex"; name: string; app: string }[] = [
+const ASSISTANTS: { provider: ProviderId; cli: "claude" | "codex" | "gemini"; name: string; app: string }[] = [
   { provider: "anthropic", cli: "claude", name: "Claude", app: "Claude" },
   { provider: "openai", cli: "codex", name: "ChatGPT", app: "Codex" },
+  { provider: "google", cli: "gemini", name: "Gemini", app: "Gemini CLI" },
 ];
 
 export default function Welcome() {
@@ -54,10 +55,10 @@ export default function Welcome() {
       .then((found) => {
         setHealth(found);
         const saved = loadSettings();
-        const preferred = ASSISTANTS.find((a) => saved.transport === "subscription" && a.provider === saved.provider && found.clis[a.cli].present);
-        setProvider((preferred || ASSISTANTS.find((a) => found.clis[a.cli].present))?.provider ?? null);
+        const preferred = ASSISTANTS.find((a) => saved.transport === "subscription" && a.provider === saved.provider && found.clis[a.cli]?.present);
+        setProvider((preferred || ASSISTANTS.find((a) => found.clis[a.cli]?.present))?.provider ?? null);
       })
-      .catch(() => setHealth({ name: "", version: "", clis: { claude: { present: false, version: null }, codex: { present: false, version: null } } }));
+      .catch(() => setHealth({ name: "", version: "", clis: { claude: { present: false, version: null }, codex: { present: false, version: null }, gemini: { present: false, version: null } } }));
   }, [step, health]);
 
   const doSignIn = async () => {

@@ -35,7 +35,7 @@ import { createHostAiRunner } from "./ai-runner.mjs";
 import { readSchedule, writeSchedule } from "./background.mjs";
 import { formatLibrary } from "../host/auto-format.mjs";
 
-const ASSISTANTS = new Set(["claude", "codex"]);
+const ASSISTANTS = new Set(["claude", "codex", "gemini"]);
 
 export function createSetup({ app, BrowserWindow, safeStorage, session, shell, dialog, libraryRoot, parent }, dependencies = {}) {
   const userData = app.getPath("userData");
@@ -147,7 +147,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
    */
   function confirmAiFor(origin, assistant) {
     if (origin !== "page" && origin !== "tray") return async () => false;
-    const name = assistant === "codex" ? "ChatGPT" : "Claude";
+    const name = { claude: "Claude", codex: "ChatGPT", gemini: "Gemini" }[assistant];
     return async (documents) => {
       const candidate = typeof parent === "function" ? parent() : parent;
       // A sheet on a hidden window never appears (macOS) and would block the sync.

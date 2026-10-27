@@ -22,7 +22,7 @@ const manifest = (over = {}) => ({
 });
 
 test("automatic runs use the lighter model of each assistant", () => {
-  assert.deepEqual(AUTO_MODELS, { claude: "claude-sonnet-5-5", codex: "gpt-6-luna" });
+  assert.deepEqual(AUTO_MODELS, { claude: "claude-sonnet-5-5", codex: "gpt-6-luna", gemini: "" });
 });
 
 test("a module without packs, or with packs for another subject, is built", () => {
