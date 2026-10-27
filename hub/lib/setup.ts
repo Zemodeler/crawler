@@ -16,6 +16,8 @@ export type SyncRun = {
   files: number;
   failedCourses: string[];
   error: string | null;
+  /** "legacy_library" when a sync Study Hub started on its own met a library with no owner record. */
+  code?: string | null;
   finishedAt: string | null;
   /** What the last finished sync found; null while running or before the first. */
   summary: {
@@ -56,6 +58,8 @@ export type SetupStatus = {
   signedIn: boolean;
   signingIn: boolean;
   sync: SyncRun;
+  /** `legacy`: the library predates account ownership records, so syncing waits for the student to claim it or start afresh. */
+  library: { root: string; legacy: boolean };
   lastSync: string | null;
   /** "last synced 2 days ago" */
   freshness: string;
@@ -72,7 +76,8 @@ async function call<T>(path: string, method: "GET" | "POST" = "GET", payload?: o
     ...(payload ? { body: JSON.stringify(payload) } : {}),
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.message || `Study Hub could not finish that (${response.status}).`);
+  if (!response.ok)
+    throw Object.assign(new Error(body.message || `Study Hub could not finish that (${response.status}).`), { code: body.code as string | undefined });
   return body as T;
 }
 
@@ -80,6 +85,9 @@ export const setupStatus = () => call<SetupStatus>("/api/setup/status");
 export const selectUniversity = (university: string) => call<{ ok: true }>("/api/setup/university", "POST", { university });
 export const signIn = () => call<{ ok: true }>("/api/setup/sign-in", "POST");
 export const startSync = () => call<{ ok: true }>("/api/setup/sync", "POST", { assistant: chosenAssistant() });
+export const claimLibrary = () => call<{ ok: true }>("/api/setup/library/claim", "POST", {});
+export const freshLibrary = () => call<{ ok: true; backup: string }>("/api/setup/library/fresh", "POST", {});
+export const LEGACY_LIBRARY = "legacy_library";
 export const setSchedule = (everyDays: 1 | 3 | 7) => call<{ ok: true }>("/api/setup/schedule", "POST", { everyDays });
 export const connectCalendar = () => call<{ ok: true }>("/api/setup/calendar/connect", "POST");
 export const syncCalendarNow = () => call<{ ok: true; report: CalendarReport | null }>("/api/setup/calendar/sync", "POST");

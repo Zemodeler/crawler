@@ -193,12 +193,20 @@ validated `whoAmI` numeric user ID scoped to that university and site. It contai
 no tokens or cookies; diagnostics omit account IDs and fingerprints. Token renewal
 for the same account preserves ownership. Locks are never stolen based on age.
 
-Only a fresh library can be claimed. Schedule/reminder metadata alone does not
-establish course data. Malformed ownership markers fail closed. Unmarked populated
-libraries and the old version 1 university-only markers have unknown account
-ownership and cannot be adopted automatically, including by the same university.
-Back up the old library and sync the verified account into a separate empty folder;
-retain the old library for reference and manually copy personal notes as needed.
-There is no verified in-place adoption workflow in this release. Do not remove a
-marker to migrate ownership. A rejection preserves existing course data and saved
-desktop credentials.
+Only a fresh library is claimed automatically. Schedule/reminder metadata alone does
+not establish course data. Malformed ownership markers fail closed. Unmarked
+populated libraries and the old version 1 university-only markers have unknown
+account ownership and are never adopted silently. Syncing them is refused (error
+code `legacy_library`) until the student chooses one of two ways out in Study Hub:
+
+- **Keep using this library** (`claimLegacyLibrary`): inside the sync lock, the
+  university's `whoAmI` confirms the signed-in account and a version 2 marker is
+  written for it. Only legacy data qualifies: an owned library, an invalid marker or
+  a version 1 marker of another university is refused, unchanged.
+- **Start a new library**: the folder is renamed to `My Studies (backup <date>)`
+  beside it, untouched, and an empty library is created and claimed by the next sync.
+
+A sync Study Hub starts on its own (schedule, first launch, tray) that is refused
+shows as a failed run with the same code, so the sidebar offers the choice. Do not
+remove a marker to migrate ownership. A rejection preserves existing course data and
+saved desktop credentials.

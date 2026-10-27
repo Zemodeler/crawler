@@ -13,12 +13,16 @@
  * must pass Crawler's quote check before it reaches the calendar.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdir, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
   ALL_UNIVERSITIES,
   checkLibraryOwner,
+  checkLibraryOwnerUnlocked,
+  claimLegacyLibrary,
+  LEGACY_LIBRARY,
   withLibraryOwner,
   VleError,
   connectCalendar,
@@ -103,6 +107,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     const root = libraryRoot();
     const lastSync = (await readState(root)).lastSync;
     const env = calendarEnv();
+    let legacyLibrary = false;
+    try {
+      // Read-only, no lock: the page only needs to know whether to offer the two ways out.
+      if (existsSync(join(root, ".crawler"))) await checkLibraryOwnerUnlocked(root, university.id, adapter.site);
+    } catch (error) {
+      legacyLibrary = error?.code === LEGACY_LIBRARY;
+    }
     return {
       university: { id: university.id, name: university.displayName },
       universities: universities.map((u) => ({ id: u.id, name: u.displayName, experimental: u.id === "surrey" })),
@@ -111,6 +122,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       sync: run,
       lastSync,
       freshness: describeFreshness(lastSync, new Date()),
+      library: { root, legacy: legacyLibrary },
       schedule: await readSchedule(root),
       assistant: prefs().assistant ?? null,
       calendar: {
@@ -217,7 +229,20 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     return begin(origin);
   }
 
+  /**
+   * A sync Study Hub or the tray started has no page waiting for its answer, so
+   * a refusal is kept as a failed run (the sidebar shows it) and logged.
+   */
   async function begin(origin) {
+    const result = await tryBegin(origin);
+    if (result.error && origin !== "page") {
+      console.error(`Sync (${origin}): ${result.error}`);
+      run = { ...emptyRun("failed"), error: result.error, code: result.code ?? null, finishedAt: new Date().toISOString() };
+    }
+    return result;
+  }
+
+  async function tryBegin(origin) {
     if (signingIn) return { error: "Wait for sign-in to finish before syncing." };
     if (run.state === "running") return { ok: true };
     const university = selected();
@@ -234,7 +259,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       await checkLibrary(university);
     } catch (error) {
       run = previous;
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: error instanceof Error ? error.message : String(error), ...(error?.code === LEGACY_LIBRARY ? { code: LEGACY_LIBRARY } : {}) };
     }
     if (!credentials) {
       run = previous;
@@ -245,7 +270,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       await withLibraryOwner(root, adapter, credentials, async () => {});
     } catch (error) {
       run = previous;
-      return { error: error.message };
+      return { error: error.message, ...(error?.code === LEGACY_LIBRARY ? { code: LEGACY_LIBRARY } : {}) };
     }
     Promise.resolve().then(() => runSync({
       adapter,
@@ -292,6 +317,59 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     return { ok: true };
   }
 
+  function libraryBusy() {
+    if (signingIn) return "Wait for sign-in to finish first.";
+    if (run.state === "running") return "Wait for the sync to finish first.";
+    if (api.packsStatus?.().state === "running") return "Wait for the study packs being built to finish first.";
+    return null;
+  }
+
+  /**
+   * Option 2 for a library from before ownership records: the signed-in
+   * account claims it as it is, after the university confirms who is signed in.
+   */
+  async function claimLibrary() {
+    const busy = libraryBusy();
+    if (busy) return { error: busy };
+    const university = selected();
+    const adapter = adapterFor(university);
+    const credentials = await tokens.load(adapter.site);
+    if (!credentials) return { error: `Sign in to ${university.displayName} first.` };
+    try {
+      await claimLegacyLibrary(libraryRoot(), adapter, credentials);
+      run = emptyRun("idle");
+      return { ok: true };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Option 1: keep the old library untouched as "My Studies (backup <date>)"
+   * beside it and start again in an empty folder, which the next sync claims.
+   */
+  async function freshLibrary() {
+    const busy = libraryBusy();
+    if (busy) return { error: busy };
+    const root = libraryRoot();
+    const date = new Date().toISOString().slice(0, 10);
+    let backup = `${root} (backup ${date})`;
+    for (let n = 2; existsSync(backup); n++) backup = `${root} (backup ${date} ${n})`;
+    try {
+      if (existsSync(root)) await rename(root, backup);
+      await mkdir(root, { recursive: true });
+    } catch (error) {
+      const locked = ["EBUSY", "EPERM", "EACCES"].includes(error?.code);
+      return {
+        error: locked
+          ? "Windows would not move the library: a file in it is open. Close it (or the folder in Explorer) and try again."
+          : `Could not start a new library: ${error.message}`,
+      };
+    }
+    run = emptyRun("idle");
+    return { ok: true, backup };
+  }
+
   async function setSchedule(body = {}) {
     try {
       await writeSchedule(libraryRoot(), Number(body.everyDays));
@@ -327,12 +405,15 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     return { ok: true };
   }
 
-  return {
+  // main.mjs adds packsStatus/packsRebuild once the pack queue exists.
+  const api = {
     status,
     selectUniversity,
     signIn,
     startSync,
     startBackgroundSync,
+    claimLibrary,
+    freshLibrary,
     setSchedule,
     calendarConnect,
     calendarSync,
@@ -342,6 +423,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       onSynced = callback;
     },
   };
+  return api;
 }
 
 function calendarMessage(error) {

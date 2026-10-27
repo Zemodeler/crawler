@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,9 +11,10 @@ import { setImmediate } from "node:timers/promises";
 
 const syncResult = { courses: [], deadlines: [], notifications: [] };
 
-async function setupSync(t, dependencies) {
+async function setupSync(t, dependencies, onRoot = () => {}) {
   const root = await mkdtemp(join(tmpdir(), "studyhub-setup-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  onRoot(root);
   return createSetup({ app: { getPath: () => join(root, "app") }, libraryRoot: () => join(root, "library") }, {
     adapter: { id: "qmul", site: "https://vle.example", whoAmI: async () => ({ userId: 1, permittedFunctions: [] }) },
     tokens: { load: async () => ({ site: "https://vle.example", token: "fixture" }) },
@@ -39,6 +40,55 @@ test("a credential-load failure releases the sync claim so the next sync can sta
   await setImmediate();
   assert.equal(starts, 1);
   assert.equal((await setup.status()).sync.state, "done");
+});
+
+async function legacyLibrary(root) {
+  await mkdir(join(root, "library", ".crawler"), { recursive: true });
+  await writeFile(join(root, "library", "Deadlines.json"), "[]");
+  await writeFile(join(root, "library", "notes.md"), "my notes");
+}
+
+test("a legacy library is reported, refused with its code, and can be claimed in place", async (t) => {
+  let root;
+  let starts = 0;
+  const setup = await setupSync(t, { sync: async () => { starts++; return syncResult; } }, (r) => { root = r; });
+  await legacyLibrary(root);
+  assert.equal((await setup.status()).library.legacy, true);
+  const refused = await setup.startSync();
+  assert.equal(refused.code, "legacy_library");
+  assert.match(refused.error, /legacy data/);
+  assert.deepEqual(await setup.claimLibrary(), { ok: true });
+  assert.equal((await setup.status()).library.legacy, false);
+  assert.deepEqual(await setup.startSync(), { ok: true });
+  await setImmediate();
+  assert.equal(starts, 1);
+  assert.equal(await readFile(join(root, "library", "notes.md"), "utf8"), "my notes");
+});
+
+test("a fresh library keeps the old one beside it untouched", async (t) => {
+  let root;
+  const setup = await setupSync(t, {}, (r) => { root = r; });
+  await legacyLibrary(root);
+  const result = await setup.freshLibrary();
+  assert.equal(result.ok, true);
+  assert.match(result.backup, /library \(backup \d{4}-\d{2}-\d{2}\)$/);
+  assert.equal(await readFile(join(result.backup, "notes.md"), "utf8"), "my notes");
+  assert.deepEqual(await readdir(join(root, "library")), []);
+  assert.equal((await setup.status()).library.legacy, false);
+  assert.deepEqual(await setup.startSync(), { ok: true });
+});
+
+test("a scheduled sync that is refused shows as a failed run", async (t) => {
+  let root;
+  const setup = await setupSync(t, {}, (r) => { root = r; });
+  await legacyLibrary(root);
+  const errors = [];
+  t.mock.method(console, "error", (line) => errors.push(line));
+  await setup.startBackgroundSync("schedule");
+  const { sync } = await setup.status();
+  assert.equal(sync.state, "failed");
+  assert.equal(sync.code, "legacy_library");
+  assert.match(errors[0], /^Sync \(schedule\): Library account ownership is unknown/);
 });
 
 test("finished sync summaries expose incomplete document coverage without failing the sync", async (t) => {

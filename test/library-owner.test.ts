@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { canonicalLibrarySite, withLibraryOwner } from "../src/library-owner.ts";
+import { canonicalLibrarySite, claimLegacyLibrary, withLibraryOwner } from "../src/library-owner.ts";
 import type { UniversityAdapter } from "../src/types.ts";
 
 const site = "https://vle.example/moodle";
@@ -84,4 +84,35 @@ test("claims and credential saves serialize with sync without stealing an old lo
   await withLibraryOwner(root, adapter(), credentials, async () => {
     await assert.rejects(withLibraryOwner(root, adapter("qmul", 2), credentials, async () => assert.fail()), /already running/);
   });
+});
+
+for (const marker of [null, JSON.stringify({ version: 1, university: "qmul" })]) test(`the signed-in account can claim a legacy library (${marker ? "version 1 marker" : "no marker"}) and then sync`, async (t) => {
+  const root = await fixture(t);
+  await mkdir(join(root, ".crawler"));
+  await writeFile(join(root, "Deadlines.json"), "legacy bytes");
+  if (marker) await writeFile(join(root, ".crawler", "university.json"), marker);
+  await claimLegacyLibrary(root, adapter(), credentials);
+  const owner = JSON.parse(await readFile(join(root, ".crawler", "university.json"), "utf8"));
+  assert.deepEqual(Object.keys(owner).sort(), ["account", "site", "university", "version"]);
+  assert.equal(owner.version, 2);
+  let ran = false;
+  await withLibraryOwner(root, adapter(), credentials, async () => { ran = true; });
+  assert.ok(ran);
+  await assert.rejects(withLibraryOwner(root, adapter("qmul", 2), credentials, async () => assert.fail()), /another university, site or account/);
+  assert.equal(await readFile(join(root, "Deadlines.json"), "utf8"), "legacy bytes");
+});
+
+for (const variant of ["owned", "other university marker", "invalid marker", "unverified account"]) test(`a claim refuses ${variant} without changing bytes`, async (t) => {
+  const root = await fixture(t);
+  await mkdir(join(root, ".crawler"));
+  await writeFile(join(root, "course.txt"), "legacy bytes");
+  const marker = join(root, ".crawler", "university.json");
+  if (variant === "owned") await writeFile(marker, `${JSON.stringify({ version: 2, university: "qmul", site, account: "a".repeat(64) })}
+`);
+  if (variant === "other university marker") await writeFile(marker, JSON.stringify({ version: 1, university: "surrey" }));
+  if (variant === "invalid marker") await writeFile(marker, "{bad");
+  const before = await readFile(marker, "utf8").catch(() => null);
+  await assert.rejects(claimLegacyLibrary(root, adapter("qmul", variant === "unverified account" ? NaN : 123456789), credentials));
+  assert.equal(await readFile(marker, "utf8").catch(() => null), before);
+  assert.equal(await readFile(join(root, "course.txt"), "utf8"), "legacy bytes");
 });

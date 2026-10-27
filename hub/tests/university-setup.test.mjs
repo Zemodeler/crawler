@@ -151,7 +151,11 @@ test("a selected Surrey install refuses legacy data manually and on schedule", a
   assert.match((await setup.startSync()).error, /legacy data/);
   assert.match((await setup.startBackgroundSync("schedule")).error, /legacy data/);
   assert.equal(f.calls.length, 0);
-  assert.equal((await setup.status()).sync.state, "idle");
+  // The scheduled refusal stays visible as a failed run, so the sidebar can say why.
+  const status = await setup.status();
+  assert.equal(status.sync.state, "failed");
+  assert.equal(status.sync.code, "legacy_library");
+  assert.equal(status.library.legacy, true);
 });
 
 test("a schedule alone does not claim an empty library", async (t) => {

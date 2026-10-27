@@ -398,6 +398,8 @@ export async function handleSetup(setup, request, response, url) {
     "/api/setup/university": setup.selectUniversity,
     "/api/setup/sign-in": setup.signIn,
     "/api/setup/sync": setup.startSync,
+    "/api/setup/library/claim": setup.claimLibrary,
+    "/api/setup/library/fresh": setup.freshLibrary,
     "/api/setup/schedule": setup.setSchedule,
     "/api/setup/packs/rebuild": setup.packsRebuild,
     "/api/setup/calendar/connect": setup.calendarConnect,
@@ -407,7 +409,7 @@ export async function handleSetup(setup, request, response, url) {
   if (action && request.method === "POST") {
     const body = await readBody(request).catch(() => ({}));
     const result = await action(body && typeof body === "object" ? body : {});
-    sendJson(response, result.error ? 400 : 200, result.error ? { code: "setup_failed", message: result.error } : result);
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: result.code ?? "setup_failed", message: result.error } : result);
     return;
   }
   sendJson(response, 404, { code: "not_found", message: "No such endpoint." });
