@@ -92,9 +92,24 @@ function run(command, args, cwd, env = {}) {
       args = [corepack, ...args];
       command = process.execPath;
     }
-    const child = spawn(command, args, { cwd, stdio: "inherit", shell: false, env: { ...process.env, ...env } });
+    // No inherited stdin: when the parent has none (a GUI, CI, an agent), the
+    // builder's own child spawns fail with ENOTCONN.
+    const child = spawn(command, args, { cwd, stdio: ["ignore", "inherit", "inherit"], shell: false, env: { ...process.env, ...env } });
     child.once("error", reject);
     child.once("exit", (code) => code === 0 ? accept() : reject(new Error(`${command} exited ${code}`)));
+  });
+}
+
+/**
+ * The pinned electron-builder from hub's own devDependencies, run with this
+ * Node. Not `pnpm dlx`: its cache can sit in a per-app virtualised folder
+ * (packaged Windows apps) that makensis, started with that cwd, cannot see.
+ */
+function runNode(script, args, cwd, env = {}) {
+  return new Promise((accept, reject) => {
+    const child = spawn(process.execPath, [script, ...args], { cwd, stdio: ["ignore", "inherit", "inherit"], shell: false, env: { ...process.env, ...env } });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0 ? accept() : reject(new Error(`electron-builder exited ${code}`)));
   });
 }
 
@@ -114,7 +129,8 @@ export async function buildSource({ root = ROOT, destination, runCommand = run }
 }
 
 export async function release(args = process.argv.slice(2)) {
-  const platform = args.includes("--mac") ? "mac" : "win";
+  // Without --win/--mac, build for the OS this runs on.
+  const platform = args.includes("--mac") || (!args.includes("--win") && process.platform === "darwin") ? "mac" : "win";
   if (args.some((arg) => !["--mac", "--win", "--dir", "--stage-only", "--build"].includes(arg) && !arg.startsWith("--dist=")))
     throw new Error("Use --win or --mac, optionally --dir, --stage-only, --build or --dist=path");
   const distArg = args.find((arg) => arg.startsWith("--dist="));
@@ -138,7 +154,8 @@ export async function release(args = process.argv.slice(2)) {
   await writeFile(join(work, "release.json"), JSON.stringify({ platform, arch: process.arch, stage, dist, unsigned: true, automaticUpdates: false, builder: BUILDER }, null, 2) + "\n");
   console.log(`Staged runtime: ${stage}`);
   if (!args.includes("--stage-only"))
-    await run("corepack", ["pnpm", "dlx", BUILDER, "--projectDir", stage, "--config", configPath, `--${platform}`, ...(args.includes("--dir") ? ["--dir"] : []), "--publish", "never"], ROOT, { CSC_IDENTITY_AUTO_DISCOVERY: "false" });
+    await runNode(require.resolve("electron-builder/cli.js"), ["--projectDir", stage, "--config", configPath, `--${platform}`, ...(args.includes("--dir") ? ["--dir"] : []), "--publish", "never"], ROOT, { CSC_IDENTITY_AUTO_DISCOVERY: "false" });
+  console.log(`Installer: ${join(work, "artifacts")}`);
   return work;
 }
 

@@ -27,6 +27,17 @@ pnpm build
 pnpm app
 ```
 
+To make an installer instead, run this from `hub/` on the OS you are building for:
+
+```bash
+pnpm install
+pnpm installer
+```
+
+It prints the folder holding `Study-Hub-<version>-win-x64.exe` (or the `.dmg` on
+macOS), under `hub/outputs/desktop-release-*/artifacts`. The installer is
+unsigned, so Windows SmartScreen asks once: **More info → Run anyway**.
+
 On first launch Study Hub asks you to:
 
 1. **Sign in to your university.** Its own sign-in page opens in a separate
