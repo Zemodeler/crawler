@@ -28,7 +28,7 @@ import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { CLI_SETTINGS, findCli, runCli } from "./cli.mjs";
+import { CLI_SETTINGS, findCli, probeAuth, runCli } from "./cli.mjs";
 import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, removeOwnFile, resolveDeadline, writeModuleFile, writeOwnFile, writeOwnNote, MAX_OWN_FILE_BYTES } from "./library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -174,9 +174,25 @@ let clis = {};
 const lastSearch = {};
 
 function detect(kind) {
-  clis[kind] = findCli(kind);
+  const found = findCli(kind);
+  // Signed-in state is cheap to learn here and only changes when the student
+  // signs in, which they follow with "Check again".
+  clis[kind] = { ...found, ...probeAuth(kind, found), checkedAt: new Date().toISOString() };
   lastSearch[kind] = Date.now();
   return clis[kind];
+}
+
+/** One CLI as /healthz reports it: the real reason when it is not usable, not just a flag. */
+function cliStatus(cli) {
+  return {
+    present: Boolean(cli.path),
+    path: cli.path || cli.failedPath || null,
+    version: cli.version,
+    error: cli.error || null,
+    authenticated: cli.authenticated ?? "unknown",
+    authDetail: cli.detail || null,
+    checkedAt: cli.checkedAt,
+  };
 }
 
 function detectClis() {
@@ -210,9 +226,9 @@ async function handleAi(request, response, url) {
       version: VERSION,
       port: 0,
       clis: {
-        claude: { present: Boolean(clis.claude.path), version: clis.claude.version },
-        codex: { present: Boolean(clis.codex.path), version: clis.codex.version },
-        gemini: { present: Boolean(clis.gemini.path), version: clis.gemini.version },
+        claude: cliStatus(clis.claude),
+        codex: cliStatus(clis.codex),
+        gemini: cliStatus(clis.gemini),
       },
       searched: [...new Set(KINDS.flatMap((kind) => clis[kind].searched))].slice(0, 24),
       capabilities: {
@@ -241,7 +257,11 @@ async function handleAi(request, response, url) {
   const cli = currentCli(kind);
   if (body.probe) {
     if (!cli?.path) {
-      sendJson(response, 200, { code: "cli_not_found", message: `\`${kind}\` was not found.`, detail: cli?.searched?.join(", ") });
+      sendJson(response, 200, {
+        code: "cli_not_found",
+        message: cli?.error || `\`${kind}\` was not found.`,
+        detail: cli?.searched?.join(", "),
+      });
       return;
     }
     sendJson(response, 200, { ok: true, model: `${kind} ${cli.version || ""}`.trim() });
@@ -272,7 +292,7 @@ async function handleAi(request, response, url) {
       console.log(`[${label}] ${kind} moved; searching again…`);
       const found = detect(kind);
       if (!found.path)
-        throw { code: "cli_not_found", message: `Could not find the \`${kind}\` command any more.`, detail: `Searched: ${found.searched.join(", ")}` };
+        throw { code: "cli_not_found", message: found.error || `Could not find the \`${kind}\` command any more.`, detail: `Searched: ${found.searched.join(", ")}` };
       text = await run(found);
     }
     console.log(`[${label}] ${kind}: ${text.length} chars out.`);
