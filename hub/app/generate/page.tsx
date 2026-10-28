@@ -45,6 +45,7 @@ import {
 import type { PlanResult, PlanTopic } from "../../lib/ai-conversion.ts";
 import type { Extract } from "../../lib/source-extract.ts";
 import { getProfile } from "../../lib/subject-profiles.ts";
+import { SOURCE_CATEGORIES, fileName, parseSourceParams } from "../../lib/exam-focus.ts";
 
 type Phase = "loading" | "no-folder" | "intro" | "extracting" | "plan-review" | "running" | "review" | "written" | "error";
 
@@ -68,9 +69,27 @@ export default function Generate() {
   /** Set when the desktop app is already building this module's packs in the background. */
   const [autoBuilding, setAutoBuilding] = useState(false);
   const [moduleKey, setModuleKey] = useState("");
+  /**
+   * The source files chosen for this run, by path. null means every source file
+   * in the module. The Assessments page opens this page with the files it picked
+   * automatically for an exam; the student can change them or go back to all.
+   */
+  const [picked, setPicked] = useState<string[] | null>(null);
+  const [pickedFor, setPickedFor] = useState("");
 
   const subject = useModuleSubject(handle, files);
   const profile = subject.profile;
+  /** The files a student can pick between: the course material the packs are built from. */
+  const candidates = useMemo(
+    () => files.filter((file) => SOURCE_CATEGORIES.includes(file.category)),
+    [files],
+  );
+  /** The files a run reads: every non-source file, and only the picked source files. */
+  const activeFiles = useMemo(() => {
+    if (!picked) return files;
+    const chosen = new Set(picked);
+    return files.filter((file) => !SOURCE_CATEGORIES.includes(file.category) || chosen.has(file.path));
+  }, [files, picked]);
   const report = useMemo(() => subject.choice ? validateCourse(files, {
     courseName: handle?.name,
     manifestPresent: Boolean(manifest),
@@ -87,8 +106,16 @@ export default function Generate() {
     // so reading them on mount is what effects are for. There is no server-side
     // value to hydrate against, which rules out a lazy state initialiser.
     const requested = new URLSearchParams(window.location.search).get("mode");
+    const preselected = parseSourceParams(window.location.search);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (requested === "restructure" || requested === "scaffold") setMode(requested);
+    /** Keeps only the preselected files this module really has. */
+    const preselect = (imported: LocalFile[]) => {
+      const known = new Set(imported.map((file) => file.path));
+      const valid = preselected.sources.filter((path) => known.has(path));
+      setPicked(valid.length ? valid : null);
+      setPickedFor(valid.length && preselected.auto ? preselected.exam : "");
+    };
 
     (async () => {
       try {
@@ -96,18 +123,19 @@ export default function Generate() {
           // The desktop app: convert the module open on the hub, read from My
           // Studies and written back through the host.
           const tree = await fetchTree();
-          const picked = pickModule(tree);
-          if (!picked) {
+          const target = pickModule(tree, preselected.module || undefined);
+          if (!target) {
             setPhase("no-folder");
             return;
           }
-          const key = `${picked.year}/${picked.module}`;
+          const key = `${target.year}/${target.module}`;
           setModuleKey(key);
           const moduleHandle = hostModuleHandle(key);
-          const imported = await loadModule(tree, picked.year, picked.module);
+          const imported = await loadModule(tree, target.year, target.module);
           const loadedManifest = await readManifest(moduleHandle);
           setHandle(moduleHandle);
           setFiles(imported);
+          preselect(imported);
           setManifest(loadedManifest);
           setResumable(await loadRun(moduleHandle.name));
           setPhase("intro");
@@ -123,6 +151,7 @@ export default function Generate() {
         const loadedManifest = await readManifest(found);
         setHandle(found);
         setFiles(imported);
+        preselect(imported);
         setManifest(loadedManifest);
         setResumable(await loadRun(found.name));
         setPhase("intro");
@@ -190,7 +219,7 @@ export default function Generate() {
     setPhase("extracting");
     try {
       const client = mode === "generate" ? await createConfiguredAiClient() : null;
-      const result = await run.plan({ client, files, report, pastedSyllabus: syllabus });
+      const result = await run.plan({ client, files: activeFiles, report, pastedSyllabus: syllabus });
       extractsRef.current = result?.extracts ?? new Map();
       if (!result) {
         // Restructure and scaffold need no plan and no AI.
@@ -241,7 +270,7 @@ export default function Generate() {
       const staged = await run.generate({
         client,
         plan: chosen,
-        files,
+        files: activeFiles,
         extracts: extractsRef.current,
         existing,
       });
@@ -359,7 +388,14 @@ export default function Generate() {
             mode={mode}
             setMode={setMode}
             report={report}
-            files={files}
+            files={activeFiles}
+            candidates={candidates}
+            picked={picked}
+            setPicked={(paths) => {
+              setPicked(paths);
+              setPickedFor("");
+            }}
+            pickedFor={pickedFor}
             settings={settings}
             resumable={resumable}
             syllabus={syllabus}
@@ -424,6 +460,10 @@ function IntroPanel({
   setMode,
   report,
   files,
+  candidates,
+  picked,
+  setPicked,
+  pickedFor,
   settings,
   resumable,
   syllabus,
@@ -436,7 +476,14 @@ function IntroPanel({
   mode: ConversionMode;
   setMode: (mode: ConversionMode) => void;
   report: FormatReport | null;
+  /** The files a run will read, after any source picking. */
   files: LocalFile[];
+  /** Every source file the student could pick from. */
+  candidates: LocalFile[];
+  picked: string[] | null;
+  setPicked: (paths: string[] | null) => void;
+  /** The assessment the picked files were chosen for automatically, if any. */
+  pickedFor: string;
   settings: ReturnType<typeof loadSettings>;
   resumable: RunSnapshot | null;
   syllabus: string;
@@ -460,6 +507,11 @@ function IntroPanel({
   const low = estimateCost(settings.provider, model, estimatedInput, topics * perTopicOut);
   const high = low === null ? null : low * 2.2;
   const subscription = settings.transport === "subscription";
+  const [changing, setChanging] = useState(false);
+  const chosen = picked ?? candidates.map((file) => file.path);
+  const shown = picked
+    ? picked.slice(0, 3).map(fileName).join(", ") + (picked.length > 3 ? ` and ${picked.length - 3} more` : "")
+    : `all ${candidates.length} course files`;
 
   return (
     <>
@@ -502,6 +554,45 @@ function IntroPanel({
           </small>
         </button>
       </div>
+
+      {mode === "generate" && candidates.length > 0 && (
+        <>
+          <h3>Course files to read</h3>
+          <p>
+            Using: {shown}
+            {pickedFor && <> (picked for {pickedFor})</>}
+            {" · "}
+            <button className="text-link" aria-expanded={changing} onClick={() => setChanging(!changing)}>
+              Change
+            </button>
+          </p>
+          {changing && (
+            <fieldset className="source-picker">
+              <legend>Build from these files</legend>
+              {candidates.map((file) => (
+                <label key={file.path}>
+                  <input
+                    type="checkbox"
+                    checked={chosen.includes(file.path)}
+                    onChange={(event) => {
+                      const next = event.target.checked
+                        ? [...chosen, file.path]
+                        : chosen.filter((path) => path !== file.path);
+                      setPicked(next.length === candidates.length ? null : next);
+                    }}
+                  />
+                  <span>{file.path}</span>
+                </label>
+              ))}
+              {picked && (
+                <button className="text-link" onClick={() => setPicked(null)}>
+                  Use all course files
+                </button>
+              )}
+            </fieldset>
+          )}
+        </>
+      )}
 
       {mode === "generate" && !report?.canConvert && (
         <div className="field">
@@ -570,7 +661,11 @@ function IntroPanel({
       )}
 
       <div className="btn-row">
-        <button className="btn btn-primary" onClick={onStart} disabled={busy || !subjectConfirmed || !report}>
+        <button
+          className="btn btn-primary"
+          onClick={onStart}
+          disabled={busy || !subjectConfirmed || !report || (mode === "generate" && picked?.length === 0)}
+        >
           {mode === "generate" ? "Read my materials and propose topics" : "Build the structure"}
         </button>
       </div>
