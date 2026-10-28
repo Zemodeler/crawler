@@ -45,7 +45,7 @@ const ASSISTANTS = new Set(["claude", "codex", "gemini"]);
 export function isModuleKey(value) {
   if (typeof value !== "string") return false;
   const parts = value.split("/");
-  return parts.length === 2 && parts.every((part) => part && part !== "." && part !== ".." && !/[\\:*?"<>|\u0000-\u001f]/.test(part));
+  return parts.length === 2 && parts.every((part) => part && part !== "." && part !== ".." && !/[\\:*?"<>|]/.test(part));
 }
 
 export function createSetup({ app, BrowserWindow, safeStorage, session, shell, dialog, libraryRoot, parent }, dependencies = {}) {

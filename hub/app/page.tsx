@@ -647,7 +647,8 @@ export default function Home() {
             }}
           />
         )}
-        {course && <section className="hub-card"><SubjectControl key={course} target={subjectTarget} subject={subject} /></section>}
+        {/* Asked once; after it is saved the subject lives in the module card's settings. */}
+        {course && (subject.error || (subject.choice && !subject.choice.confirmed)) && <section className="hub-card"><SubjectControl key={course} target={subjectTarget} subject={subject} /></section>}
         {notice && (
           <div className="notice">
             <span>{notice}</span>
@@ -717,6 +718,9 @@ export default function Home() {
                 activeOpened={progress.opened}
                 deadlines={deadlines}
                 onOpen={(m) => openModule(library, activeYear, m)}
+                onSubjectSaved={(key, saved) => {
+                  if (key === course) subject.setChoice({ profile: saved, confirmed: true, reason: "Saved subject choice." });
+                }}
               />
             )}
             <div className="hero">
