@@ -21,7 +21,8 @@ export type CliRow = {
   signIn: string;
   /** The reason it is not usable, in the host's own words. */
   error: string | null;
-  fix: { text: string; command: string } | null;
+  /** `command` is null when there is nothing worth copying into a terminal. */
+  fix: { text: string; command: string | null } | null;
 };
 
 const LABELS: Record<CliKind, string> = { claude: "Claude CLI", codex: "Codex CLI", gemini: "Gemini CLI" };
@@ -31,6 +32,25 @@ const INSTALL: Record<CliKind, string> = {
   codex: "npm install -g @openai/codex",
   gemini: "npm install -g @google/gemini-cli",
 };
+
+const APPS: Record<CliKind, string> = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
+
+// Copies the desktop apps bundle (Windows folders, or inside a macOS .app) and
+// WinGet packages are updated by their own installer; npm cannot repair them.
+const DESKTOP_APP = /[\\/]Claude[\\/]claude-code[\\/]|[\\/]OpenAI[\\/]Codex[\\/]bin[\\/]|\.app[\\/]/i;
+const WINGET = /[\\/]WinGet[\\/]/i;
+
+/** How to repair the copy at `path` that was found but would not run. */
+function repair(kind: CliKind, path: string): { text: string; command: string | null } {
+  if (DESKTOP_APP.test(path))
+    return {
+      text: `This copy came with the ${APPS[kind]} desktop app. Update or reinstall the app, then press Check again.`,
+      command: null,
+    };
+  if (WINGET.test(path))
+    return { text: "This copy was installed with WinGet. Update or reinstall it with WinGet, then press Check again.", command: "winget upgrade" };
+  return { text: "Reinstall it, then press Check again.", command: INSTALL[kind] };
+}
 
 const SIGN_IN: Record<CliKind, { text: string; command: string }> = {
   claude: { text: "Open a terminal, run `claude`, and sign in (type /login if it asks). Then press Check again.", command: "claude" },
@@ -52,16 +72,14 @@ export function describeCli(kind: CliKind, status: CliStatus | undefined): CliRo
 
   if (!status.present) {
     // A path with no `present` means it was found but would not run.
-    const found = Boolean(status.path);
+    const found = status.path ?? null;
     return {
       ...base,
       verdict: found ? "broken" : "missing",
       summary: found ? "Found, but will not run" : "Not installed",
       signIn: "Unknown",
       error: status.error || `${label} was not found on this computer.`,
-      fix: found
-        ? { text: "Reinstall it, then press Check again.", command: INSTALL[kind] }
-        : { text: "Install it, sign in once, then press Check again.", command: INSTALL[kind] },
+      fix: found ? repair(kind, found) : { text: "Install it, sign in once, then press Check again.", command: INSTALL[kind] },
     };
   }
 

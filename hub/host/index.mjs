@@ -28,7 +28,7 @@ import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { CLI_SETTINGS, findCli, probeAuth, runCli } from "./cli.mjs";
+import { CLI_SETTINGS, cliSearchDirs, findCli, probeAuth, runCli } from "./cli.mjs";
 import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, removeOwnFile, resolveDeadline, writeModuleFile, writeOwnFile, writeOwnNote, MAX_OWN_FILE_BYTES } from "./library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -166,15 +166,17 @@ function serveStatic(response, file) {
  *  - a run that fails because the executable vanished searches and retries once
  *
  * Detection runs each candidate's `--version` synchronously; it is rare enough
- * that briefly blocking the server is acceptable.
+ * that briefly blocking the server is acceptable. findCli stops trying copies
+ * of one kind after 25 seconds, and a full detection reads the Windows
+ * registry's PATH once for all kinds.
  */
 const KINDS = ["claude", "codex", "gemini"];
 const REDETECT_MS = 5_000;
 let clis = {};
 const lastSearch = {};
 
-function detect(kind) {
-  const found = findCli(kind);
+function detect(kind, searchDirs) {
+  const found = findCli(kind, searchDirs ? { searchDirs } : {});
   // Signed-in state is cheap to learn here and only changes when the student
   // signs in, which they follow with "Check again".
   clis[kind] = { ...found, ...probeAuth(kind, found), checkedAt: new Date().toISOString() };
@@ -196,7 +198,8 @@ function cliStatus(cli) {
 }
 
 function detectClis() {
-  for (const kind of KINDS) detect(kind);
+  const searchDirs = cliSearchDirs();
+  for (const kind of KINDS) detect(kind, searchDirs);
   return clis;
 }
 

@@ -18,6 +18,9 @@ const RUN_TIMEOUT_MS = 180_000;
 // A first start of a freshly installed exe can sit behind antivirus for a while.
 const VERSION_TIMEOUT_MS = 20_000;
 const AUTH_TIMEOUT_MS = 10_000;
+// Detection blocks the host, so a kind with several slow or broken copies
+// stops trying more of them after this long.
+const KIND_BUDGET_MS = 25_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 export const CLI_SETTINGS = {
@@ -66,14 +69,24 @@ function defaultDeps() {
     env: process.env,
     home: homedir(),
     execPath: process.execPath,
+    now: Date.now,
   };
 }
 
 const withDeps = (overrides) => ({ ...defaultDeps(), ...overrides });
 
-/** The line of `text` that says what went wrong, without colour codes, capped. */
+/**
+ * CLI output can quote a credential (`codex login status` prints a fragment of
+ * the API key it uses), so anything a CLI said passes through this before it
+ * reaches an error or detail field.
+ */
+export function redactSecrets(text) {
+  return String(text ?? "").replace(/\b(sk|key)[-_\w*]{4,}/gi, "[redacted]");
+}
+
+/** The line of `text` that says what went wrong, without colour codes or secrets, capped. */
 export function summariseFailure(text, max = 220) {
-  const lines = String(text || "")
+  const lines = redactSecrets(text || "")
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
     .split(/\r?\n/)
@@ -197,7 +210,15 @@ function windowsRegistryPath(d) {
   return dirs;
 }
 
-/** Directories to look in: this process's PATH first, then the system's current one. */
+/**
+ * Directories to look in: this process's PATH first, then the system's current
+ * one. Reading the registry starts two processes, so a detection run reads it
+ * once and hands the result to every findCli as `searchDirs`.
+ */
+export function cliSearchDirs(overrides = {}) {
+  return searchDirs(withDeps(overrides));
+}
+
 function searchDirs(d) {
   const win = d.platform === "win32";
   const own = (d.env.PATH ?? d.env.Path ?? "").split(win ? ";" : ":");
@@ -222,7 +243,7 @@ function searchDirs(d) {
 function pathLookup(name, d) {
   const exts = d.platform === "win32" ? [".exe", ".cmd", ".bat"] : [""];
   const hits = [];
-  for (const dir of searchDirs(d))
+  for (const dir of d.searchDirs ?? searchDirs(d))
     for (const ext of exts) {
       const candidate = join(dir, `${name}${ext}`);
       if (d.existsSync(candidate)) hits.push(candidate);
@@ -285,14 +306,23 @@ function candidates(name, d) {
  * in words — not found, found but failed (with its output), or timed out (a
  * cold start behind antivirus can be slow) — and `failedPath` is the first copy
  * that was found but would not run, so the panel can still show where it looked.
- * `overrides` replaces the machine (spawnSync, existsSync, platform, env, …) in tests.
+ * Copies are run for at most KIND_BUDGET_MS in all; any left after that are
+ * counted in `error` but not run.
+ * `overrides` replaces the machine (spawnSync, existsSync, platform, env, now, …)
+ * in tests; `searchDirs` (from cliSearchDirs) saves reading the registry again.
  */
 export function findCli(name, overrides = {}) {
   const d = withDeps(overrides);
+  const started = d.now();
   const searched = [];
+  // On Windows the same file can be listed twice in different case.
+  const seen = new Set();
   const failures = [];
+  let untried = 0;
   const tryRun = (cmd) => {
-    if (searched.includes(cmd)) return null;
+    const key = d.platform === "win32" ? cmd.toLowerCase() : cmd;
+    if (seen.has(key)) return null;
+    seen.add(key);
     searched.push(cmd);
     if (/[\\/]/.test(cmd) && !d.existsSync(cmd)) return null;
     const plan = launchPlan(cmd, d);
@@ -300,10 +330,15 @@ export function findCli(name, overrides = {}) {
       failures.push({ path: cmd, problem: plan.error });
       return null;
     }
+    const timeout = Math.min(VERSION_TIMEOUT_MS, KIND_BUDGET_MS - (d.now() - started));
+    if (timeout <= 0) {
+      untried++;
+      return null;
+    }
     const result = d.spawnSync(plan.command, [...plan.prefixArgs, "--version"], {
       shell: false,
       windowsHide: true,
-      timeout: VERSION_TIMEOUT_MS,
+      timeout,
       encoding: "utf8",
       // Electron's own binary is process.execPath inside the shell; make it
       // behave as plain Node when running an npm shim's script.
@@ -314,8 +349,8 @@ export function findCli(name, overrides = {}) {
         path: cmd,
         problem:
           result.error.code === "ETIMEDOUT"
-            ? `did not answer \`--version\` within ${VERSION_TIMEOUT_MS / 1000} seconds`
-            : `could not be started: ${result.error.message}`,
+            ? `did not answer \`--version\` within ${Math.ceil(timeout / 1000)} seconds`
+            : `could not be started: ${redactSecrets(result.error.message)}`,
       });
       return null;
     }
@@ -328,7 +363,7 @@ export function findCli(name, overrides = {}) {
       path: cmd,
       command: plan.command,
       prefixArgs: plan.prefixArgs,
-      version: (result.stdout || result.stderr || "").trim().split(/\r?\n/)[0].slice(0, 80),
+      version: redactSecrets((result.stdout || result.stderr || "").trim().split(/\r?\n/)[0]).slice(0, 80),
       searched,
       failedPath: null,
       error: null,
@@ -340,6 +375,10 @@ export function findCli(name, overrides = {}) {
     if (hit) return hit;
   }
   const first = failures[0];
+  const others = failures.length - 1;
+  const stopped = untried
+    ? ` Stopped after ${KIND_BUDGET_MS / 1000} seconds; ${untried} more cop${untried > 1 ? "ies were" : "y was"} not tried.`
+    : "";
   return {
     path: null,
     command: null,
@@ -348,7 +387,7 @@ export function findCli(name, overrides = {}) {
     searched,
     failedPath: first?.path ?? null,
     error: first
-      ? `Found ${first.path} but it ${first.problem}.${failures.length > 1 ? ` (${failures.length - 1} other cop${failures.length > 2 ? "ies" : "y"} failed too.)` : ""}`
+      ? `Found ${first.path} but it ${first.problem}.${others ? ` (${others} other cop${others > 1 ? "ies" : "y"} failed too.)` : ""}${stopped}`
       : `Not found: \`${name}\` is not on PATH or in the usual install locations.`,
   };
 }
@@ -359,7 +398,9 @@ export function findCli(name, overrides = {}) {
  *  - claude keeps its sign-in in ~/.claude/.credentials.json (or `oauthAccount`
  *    in ~/.claude.json); macOS uses the Keychain, so there it stays "unknown"
  *  - gemini keeps ~/.gemini/oauth_creds.json; no file can still mean an API key
- * Returns `{ authenticated: true | false | "unknown", detail }`.
+ * Returns `{ authenticated: true | false | "unknown", detail }`. `detail` is our
+ * own fixed text, never the CLI's output: /healthz hands it to the page, and
+ * `codex login status` prints part of the API key it signed in with.
  */
 export function probeAuth(kind, cli, overrides = {}) {
   const d = withDeps(overrides);
@@ -378,14 +419,15 @@ export function probeAuth(kind, cli, overrides = {}) {
     if (result?.error)
       return result.error.code === "ETIMEDOUT"
         ? unknown(`\`codex login status\` did not answer within ${AUTH_TIMEOUT_MS / 1000} seconds`)
-        : unknown(`could not run \`codex login status\`: ${result.error.message}`);
+        : unknown(`could not run \`codex login status\`: ${redactSecrets(result.error.message)}`);
     const text = `${result.stdout || ""}\n${result.stderr || ""}`;
-    const said = summariseFailure(text);
     const unsupported = /unrecogni[sz]ed|unexpected argument|unknown (command|subcommand)|invalid subcommand/i.test(text);
     if (!unsupported) {
       if (/not (logged|signed) in/i.test(text) || (result.status !== 0 && /log ?in|auth/i.test(text)))
-        return { authenticated: false, detail: said };
-      return result.status === 0 ? { authenticated: true, detail: said } : unknown(said);
+        return { authenticated: false, detail: "Not signed in" };
+      return result.status === 0
+        ? { authenticated: true, detail: "Signed in (codex login status)" }
+        : unknown(`\`codex login status\` exited with code ${result.status}`);
     }
     return has(".codex", "auth.json")
       ? { authenticated: true, detail: "Found ~/.codex/auth.json" }
@@ -456,7 +498,7 @@ export function runCli(cli, kind, prompt, model, webAccess) {
       });
     } catch (error) {
       rmSync(cwd, { recursive: true, force: true });
-      return reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${error.message}` });
+      return reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${redactSecrets(error.message)}` });
     }
 
     let stdout = "";
@@ -484,13 +526,13 @@ export function runCli(cli, kind, prompt, model, webAccess) {
       // desktop app updated itself into a new version folder.
       if (error.code === "ENOENT")
         return reject({ code: "cli_moved", message: `\`${kind}\` is no longer where it was found.` });
-      reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${error.message}` });
+      reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${redactSecrets(error.message)}` });
     });
     child.on("close", (status) => {
       clearTimeout(timer);
       rmSync(cwd, { recursive: true, force: true });
       // Some CLIs print their error on stdout (claude: "Invalid API key · Please run /login").
-      const output = stderr.trim() || stdout.trim();
+      const output = redactSecrets(stderr.trim() || stdout.trim());
       const said = summariseFailure(output);
       if (killed)
         return reject({
@@ -521,7 +563,7 @@ export function runCli(cli, kind, prompt, model, webAccess) {
         return reject({
           code: "cli_incompatible",
           message: `\`${kind}\` finished but returned no text${said ? `: ${said}` : ""}.`,
-          detail: stderr.trim().slice(0, 900),
+          detail: redactSecrets(stderr.trim()).slice(0, 900),
         });
       resolve(text);
     });

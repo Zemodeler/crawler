@@ -100,7 +100,13 @@ export function CliDiagnostics({
               )}
               {row.fix && (
                 <p style={{ margin: "8px 0 0" }}>
-                  {row.fix.text} <CopyHint command={row.fix.command} />
+                  {row.fix.text}
+                  {row.fix.command && (
+                    <>
+                      {" "}
+                      <CopyHint command={row.fix.command} />
+                    </>
+                  )}
                 </p>
               )}
             </div>
