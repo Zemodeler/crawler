@@ -12,9 +12,15 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 
 const RUN_TIMEOUT_MS = 180_000;
+// A first start of a freshly installed exe can sit behind antivirus for a while.
+const VERSION_TIMEOUT_MS = 20_000;
+const AUTH_TIMEOUT_MS = 10_000;
+// Detection blocks the host, so a kind with several slow or broken copies
+// stops trying more of them after this long.
+const KIND_BUDGET_MS = 25_000;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 export const CLI_SETTINGS = {
@@ -53,21 +59,75 @@ export const CLI_SETTINGS = {
 
 export const CLI_APPS = { claude: "Claude", codex: "Codex", gemini: "Gemini CLI" };
 
+/** What the detection and the auth probe need from the machine; tests replace any of it. */
+function defaultDeps() {
+  return {
+    spawnSync,
+    existsSync,
+    readFileSync,
+    platform: process.platform,
+    env: process.env,
+    home: homedir(),
+    execPath: process.execPath,
+    now: Date.now,
+  };
+}
+
+const withDeps = (overrides) => ({ ...defaultDeps(), ...overrides });
+
+/**
+ * CLI output can quote a credential (`codex login status` prints a fragment of
+ * the API key it uses), so anything a CLI said passes through this before it
+ * reaches an error or detail field.
+ */
+export function redactSecrets(text) {
+  return String(text ?? "").replace(/\b(sk|key)[-_\w*]{4,}/gi, "[redacted]");
+}
+
+/** The line of `text` that says what went wrong, without colour codes or secrets, capped. */
+export function summariseFailure(text, max = 220) {
+  const lines = redactSecrets(text || "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return "";
+  const telling = lines.find((line) =>
+    /error|fail|denied|invalid|unauthori[sz]ed|not (found|logged|signed)|log ?in|limit|quota|expired/i.test(line),
+  );
+  return (telling || lines[lines.length - 1]).slice(0, max);
+}
+
 /**
  * Node refuses to spawn a `.cmd` without a shell (CVE-2024-27980), and a shell
- * is not acceptable here. An npm shim only runs `node "<script>" %*`, so run
- * that script with the Node we are already in.
+ * is not acceptable here. An npm shim only runs `node "<script>" %*` (or, for
+ * the native-binary packages, the `.exe` inside the package), so run that
+ * target directly with the Node we are already in.
  */
-function resolveWindowsShim(cmdPath) {
-  if (!/\.cmd$/i.test(cmdPath)) return null;
+function resolveWindowsShim(cmdPath, d) {
   try {
-    const match = readFileSync(cmdPath, "utf8").match(/%dp0%\\+(.+?\.js)/i);
+    const match = d.readFileSync(cmdPath, "utf8").match(/%~?dp0%?\\+([^"\r\n%]+?\.(?:c?js|mjs|exe))/i);
     if (!match) return null;
-    const script = join(dirname(cmdPath), match[1].replace(/\\+/g, "/"));
-    return existsSync(script) ? script : null;
+    const target = join(dirname(cmdPath), match[1].replace(/\\+/g, "/"));
+    return d.existsSync(target) ? target : null;
   } catch {
     return null;
   }
+}
+
+/** How to start the file at `path`: the program and any leading arguments, or why it cannot be started. */
+function launchPlan(path, d) {
+  if (d.platform !== "win32") return { command: path, prefixArgs: [] };
+  const ext = extname(path).toLowerCase();
+  if (ext === ".exe" || ext === ".com") return { command: path, prefixArgs: [] };
+  if (ext === ".cmd" || ext === ".bat") {
+    const target = resolveWindowsShim(path, d);
+    if (!target) return { error: "is an npm shim whose target script or program could not be located" };
+    if (extname(target).toLowerCase() === ".exe") return { command: target, prefixArgs: [] };
+    return { command: d.execPath, prefixArgs: [target] };
+  }
+  return { error: `is a ${ext || "extensionless"} shim Windows cannot run directly (use the .cmd or .exe next to it)` };
 }
 
 /** Newest-first executables matching `<root>/<a>/<b>/<file>`, by modified time. */
@@ -105,11 +165,11 @@ function nestedExecutables(root, depth, file) {
  * An app opened from Finder does not inherit the shell's PATH, so ask the
  * user's login shell where the command is.
  */
-function loginShellLookup(name) {
-  if (process.platform === "win32") return null;
-  const shell = process.env.SHELL || "/bin/zsh";
+function loginShellLookup(name, d) {
+  if (d.platform === "win32") return null;
+  const shell = d.env.SHELL || "/bin/zsh";
   try {
-    const result = spawnSync(shell, ["-lc", `command -v ${name}`], {
+    const result = d.spawnSync(shell, ["-lc", `command -v ${name}`], {
       shell: false,
       encoding: "utf8",
       timeout: 5_000,
@@ -121,25 +181,115 @@ function loginShellLookup(name) {
   }
 }
 
-function candidates(name) {
-  const home = homedir();
-  if (process.platform === "win32") {
-    const appData = process.env.APPDATA || join(home, "AppData", "Roaming");
-    const localAppData = process.env.LOCALAPPDATA || join(home, "AppData", "Local");
+/**
+ * The PATH Windows itself would give a fresh program. A process launched from
+ * Explorer or an installer keeps the PATH it started with, so a CLI installed
+ * after Study Hub opened is not on it.
+ */
+function windowsRegistryPath(d) {
+  const keys = ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "HKCU\\Environment"];
+  const dirs = [];
+  for (const key of keys) {
+    try {
+      const result = d.spawnSync("reg", ["query", key, "/v", "Path"], {
+        shell: false,
+        windowsHide: true,
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      const match = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(result?.stdout || "");
+      if (!match) continue;
+      const expanded = match[1]
+        .trim()
+        .replace(/%([^%]+)%/g, (all, name) => d.env[name] ?? d.env[name.toUpperCase()] ?? all);
+      dirs.push(...expanded.split(";"));
+    } catch {
+      /* no reg.exe; the process PATH has to do */
+    }
+  }
+  return dirs;
+}
+
+/**
+ * Directories to look in: this process's PATH first, then the system's current
+ * one. Reading the registry starts two processes, so a detection run reads it
+ * once and hands the result to every findCli as `searchDirs`.
+ */
+export function cliSearchDirs(overrides = {}) {
+  return searchDirs(withDeps(overrides));
+}
+
+function searchDirs(d) {
+  const win = d.platform === "win32";
+  const own = (d.env.PATH ?? d.env.Path ?? "").split(win ? ";" : ":");
+  const seen = new Set();
+  const dirs = [];
+  for (const raw of win ? [...own, ...windowsRegistryPath(d)] : own) {
+    const dir = raw.trim().replace(/^"(.*)"$/, "$1");
+    const key = win ? dir.toLowerCase() : dir;
+    if (!dir || seen.has(key)) continue;
+    seen.add(key);
+    dirs.push(dir);
+  }
+  return dirs;
+}
+
+/**
+ * Executables called `name` on PATH, in PATH order. `where claude` lists the
+ * extensionless npm sh script first, which Windows cannot run, so instead of
+ * trusting its first line we look for the files Windows can start (.exe, then
+ * the .cmd shim) ourselves.
+ */
+function pathLookup(name, d) {
+  const exts = d.platform === "win32" ? [".exe", ".cmd", ".bat"] : [""];
+  const hits = [];
+  for (const dir of d.searchDirs ?? searchDirs(d))
+    for (const ext of exts) {
+      const candidate = join(dir, `${name}${ext}`);
+      if (d.existsSync(candidate)) hits.push(candidate);
+    }
+  return hits;
+}
+
+function candidates(name, d) {
+  const home = d.home;
+  if (d.platform === "win32") {
+    const appData = d.env.APPDATA || join(home, "AppData", "Roaming");
+    const localAppData = d.env.LOCALAPPDATA || join(home, "AppData", "Local");
+    const programFiles = d.env.ProgramFiles || "C:\\Program Files";
+    const npmPrefix = d.env.npm_config_prefix || d.env.NPM_CONFIG_PREFIX;
     return [
       join(localAppData, "Programs", name, `${name}.exe`),
       join(appData, "npm", `${name}.cmd`),
+      ...(npmPrefix ? [join(npmPrefix, `${name}.cmd`)] : []),
+      join(programFiles, "nodejs", `${name}.cmd`),
+      join(localAppData, "pnpm", `${name}.cmd`),
       join(home, ".local", "bin", `${name}.exe`),
       join(home, ".bun", "bin", `${name}.exe`),
+      join(home, ".volta", "bin", `${name}.exe`),
+      join(home, "scoop", "shims", `${name}.exe`),
       join(home, `.${name}`, "local", `${name}.exe`),
+      // `winget install` puts a link here and the package itself below Packages.
+      join(localAppData, "Microsoft", "WinGet", "Links", `${name}.exe`),
+      ...nestedExecutables(join(localAppData, "Microsoft", "WinGet", "Packages"), 1, `${name}.exe`),
       // Bundled with the desktop apps: claude-code/<version>/<hash>/claude.exe
-      // and OpenAI/Codex/bin/<hash>/codex.exe.
-      ...(name === "claude" ? nestedExecutables(join(appData, "Claude", "claude-code"), 2, "claude.exe") : []),
-      ...(name === "codex" ? nestedExecutables(join(localAppData, "OpenAI", "Codex", "bin"), 1, "codex.exe") : []),
+      // (or without the hash) and OpenAI/Codex/bin/<hash>/codex.exe.
+      ...(name === "claude"
+        ? [
+            ...nestedExecutables(join(appData, "Claude", "claude-code"), 2, "claude.exe"),
+            ...nestedExecutables(join(appData, "Claude", "claude-code"), 1, "claude.exe"),
+          ]
+        : []),
+      ...(name === "codex"
+        ? [
+            ...nestedExecutables(join(localAppData, "OpenAI", "Codex", "bin"), 1, "codex.exe"),
+            ...nestedExecutables(join(localAppData, "OpenAI", "Codex", "bin"), 0, "codex.exe"),
+          ]
+        : []),
     ];
   }
   return [
-    loginShellLookup(name),
+    loginShellLookup(name, d),
     `/opt/homebrew/bin/${name}`,
     `/usr/local/bin/${name}`,
     join(home, ".local", "bin", name),
@@ -149,52 +299,160 @@ function candidates(name) {
   ].filter(Boolean);
 }
 
-export function findCli(name) {
+/**
+ * Looks for the CLI and runs `--version` on each hit until one works.
+ *
+ * `path` is the copy that runs; when none does it is null and `error` says why
+ * in words — not found, found but failed (with its output), or timed out (a
+ * cold start behind antivirus can be slow) — and `failedPath` is the first copy
+ * that was found but would not run, so the panel can still show where it looked.
+ * Copies are run for at most KIND_BUDGET_MS in all; any left after that are
+ * counted in `error` but not run.
+ * `overrides` replaces the machine (spawnSync, existsSync, platform, env, now, …)
+ * in tests; `searchDirs` (from cliSearchDirs) saves reading the registry again.
+ */
+export function findCli(name, overrides = {}) {
+  const d = withDeps(overrides);
+  const started = d.now();
   const searched = [];
+  // On Windows the same file can be listed twice in different case.
+  const seen = new Set();
+  const failures = [];
+  let untried = 0;
   const tryRun = (cmd) => {
+    const key = d.platform === "win32" ? cmd.toLowerCase() : cmd;
+    if (seen.has(key)) return null;
+    seen.add(key);
     searched.push(cmd);
-    if (!existsSync(cmd) && /[\\/]/.test(cmd)) return null;
-    const script = resolveWindowsShim(cmd);
-    const command = script ? process.execPath : cmd;
-    const prefixArgs = script ? [script] : [];
-    try {
-      const result = spawnSync(command, [...prefixArgs, "--version"], {
-        shell: false,
-        windowsHide: true,
-        timeout: 12_000,
-        encoding: "utf8",
-        // Electron's own binary is process.execPath inside the shell; make it
-        // behave as plain Node when running an npm shim's script.
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-      });
-      if (result.error || result.status !== 0) return null;
-      return {
-        path: cmd,
-        command,
-        prefixArgs,
-        version: (result.stdout || result.stderr || "").trim().split("\n")[0].slice(0, 80),
-      };
-    } catch {
+    if (/[\\/]/.test(cmd) && !d.existsSync(cmd)) return null;
+    const plan = launchPlan(cmd, d);
+    if (plan.error) {
+      failures.push({ path: cmd, problem: plan.error });
       return null;
     }
+    const timeout = Math.min(VERSION_TIMEOUT_MS, KIND_BUDGET_MS - (d.now() - started));
+    if (timeout <= 0) {
+      untried++;
+      return null;
+    }
+    const result = d.spawnSync(plan.command, [...plan.prefixArgs, "--version"], {
+      shell: false,
+      windowsHide: true,
+      timeout,
+      encoding: "utf8",
+      // Electron's own binary is process.execPath inside the shell; make it
+      // behave as plain Node when running an npm shim's script.
+      env: plan.prefixArgs.length ? { ...d.env, ELECTRON_RUN_AS_NODE: "1" } : d.env,
+    });
+    if (result?.error) {
+      failures.push({
+        path: cmd,
+        problem:
+          result.error.code === "ETIMEDOUT"
+            ? `did not answer \`--version\` within ${Math.ceil(timeout / 1000)} seconds`
+            : `could not be started: ${redactSecrets(result.error.message)}`,
+      });
+      return null;
+    }
+    if (result?.status !== 0) {
+      const said = summariseFailure(result?.stderr || result?.stdout);
+      failures.push({ path: cmd, problem: `failed \`--version\` with exit code ${result?.status}${said ? `: ${said}` : ""}` });
+      return null;
+    }
+    return {
+      path: cmd,
+      command: plan.command,
+      prefixArgs: plan.prefixArgs,
+      version: redactSecrets((result.stdout || result.stderr || "").trim().split(/\r?\n/)[0]).slice(0, 80),
+      searched,
+      failedPath: null,
+      error: null,
+    };
   };
 
-  const locator = process.platform === "win32" ? "where" : "which";
-  try {
-    const found = spawnSync(locator, [name], { shell: false, windowsHide: true, encoding: "utf8" });
-    const first = (found.stdout || "").split(/\r?\n/)[0].trim();
-    if (first) {
-      const hit = tryRun(first);
-      if (hit) return { ...hit, searched };
-    }
-  } catch {
-    /* no locator; fall through */
-  }
-  for (const candidate of candidates(name)) {
+  for (const candidate of [...pathLookup(name, d), ...candidates(name, d)]) {
     const hit = tryRun(candidate);
-    if (hit) return { ...hit, searched };
+    if (hit) return hit;
   }
-  return { path: null, command: null, prefixArgs: [], version: null, searched };
+  const first = failures[0];
+  const others = failures.length - 1;
+  const stopped = untried
+    ? ` Stopped after ${KIND_BUDGET_MS / 1000} seconds; ${untried} more cop${untried > 1 ? "ies were" : "y was"} not tried.`
+    : "";
+  return {
+    path: null,
+    command: null,
+    prefixArgs: [],
+    version: null,
+    searched,
+    failedPath: first?.path ?? null,
+    error: first
+      ? `Found ${first.path} but it ${first.problem}.${others ? ` (${others} other cop${others > 1 ? "ies" : "y"} failed too.)` : ""}${stopped}`
+      : `Not found: \`${name}\` is not on PATH or in the usual install locations.`,
+  };
+}
+
+/**
+ * Is the CLI signed in? Cheap evidence only, never a model call:
+ *  - codex has `codex login status`; a version without it falls back to ~/.codex/auth.json
+ *  - claude keeps its sign-in in ~/.claude/.credentials.json (or `oauthAccount`
+ *    in ~/.claude.json); macOS uses the Keychain, so there it stays "unknown"
+ *  - gemini keeps ~/.gemini/oauth_creds.json; no file can still mean an API key
+ * Returns `{ authenticated: true | false | "unknown", detail }`. `detail` is our
+ * own fixed text, never the CLI's output: /healthz hands it to the page, and
+ * `codex login status` prints part of the API key it signed in with.
+ */
+export function probeAuth(kind, cli, overrides = {}) {
+  const d = withDeps(overrides);
+  const unknown = (detail = "") => ({ authenticated: "unknown", detail });
+  if (!cli?.path) return unknown();
+  const has = (...parts) => d.existsSync(join(d.home, ...parts));
+
+  if (kind === "codex") {
+    const result = d.spawnSync(cli.command, [...cli.prefixArgs, "login", "status"], {
+      shell: false,
+      windowsHide: true,
+      timeout: AUTH_TIMEOUT_MS,
+      encoding: "utf8",
+      env: cli.prefixArgs.length ? { ...d.env, ELECTRON_RUN_AS_NODE: "1" } : d.env,
+    });
+    if (result?.error)
+      return result.error.code === "ETIMEDOUT"
+        ? unknown(`\`codex login status\` did not answer within ${AUTH_TIMEOUT_MS / 1000} seconds`)
+        : unknown(`could not run \`codex login status\`: ${redactSecrets(result.error.message)}`);
+    const text = `${result.stdout || ""}\n${result.stderr || ""}`;
+    const unsupported = /unrecogni[sz]ed|unexpected argument|unknown (command|subcommand)|invalid subcommand/i.test(text);
+    if (!unsupported) {
+      if (/not (logged|signed) in/i.test(text) || (result.status !== 0 && /log ?in|auth/i.test(text)))
+        return { authenticated: false, detail: "Not signed in" };
+      return result.status === 0
+        ? { authenticated: true, detail: "Signed in (codex login status)" }
+        : unknown(`\`codex login status\` exited with code ${result.status}`);
+    }
+    return has(".codex", "auth.json")
+      ? { authenticated: true, detail: "Found ~/.codex/auth.json" }
+      : { authenticated: false, detail: "No ~/.codex/auth.json" };
+  }
+
+  if (kind === "claude") {
+    if (has(".claude", ".credentials.json")) return { authenticated: true, detail: "Found ~/.claude/.credentials.json" };
+    try {
+      if (/"oauthAccount"\s*:\s*\{/.test(d.readFileSync(join(d.home, ".claude.json"), "utf8")))
+        return { authenticated: true, detail: "Signed-in account recorded in ~/.claude.json" };
+    } catch {
+      /* no config file */
+    }
+    return d.platform === "darwin"
+      ? unknown("Claude keeps its sign-in in the macOS Keychain, which Study Hub does not read")
+      : { authenticated: false, detail: "No saved sign-in found in ~/.claude" };
+  }
+
+  if (kind === "gemini")
+    return has(".gemini", "oauth_creds.json")
+      ? { authenticated: true, detail: "Found ~/.gemini/oauth_creds.json" }
+      : unknown("No saved Google sign-in in ~/.gemini (an API key would not show up here)");
+
+  return unknown();
 }
 
 /** Only what a CLI needs. Provider API keys are deliberately absent. */
@@ -220,7 +478,7 @@ export function runCli(cli, kind, prompt, model, webAccess) {
     if (!cli?.path)
       return reject({
         code: "cli_not_found",
-        message: `Could not find the \`${kind}\` command.`,
+        message: cli?.error || `Could not find the \`${kind}\` command.`,
         detail: `Searched: ${cli?.searched?.join(", ") || "nothing"}`,
       });
 
@@ -240,7 +498,7 @@ export function runCli(cli, kind, prompt, model, webAccess) {
       });
     } catch (error) {
       rmSync(cwd, { recursive: true, force: true });
-      return reject({ code: "cli_incompatible", message: error.message });
+      return reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${redactSecrets(error.message)}` });
     }
 
     let stdout = "";
@@ -268,15 +526,23 @@ export function runCli(cli, kind, prompt, model, webAccess) {
       // desktop app updated itself into a new version folder.
       if (error.code === "ENOENT")
         return reject({ code: "cli_moved", message: `\`${kind}\` is no longer where it was found.` });
-      reject({ code: "cli_incompatible", message: error.message });
+      reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${redactSecrets(error.message)}` });
     });
     child.on("close", (status) => {
       clearTimeout(timer);
       rmSync(cwd, { recursive: true, force: true });
-      if (killed) return reject({ code: "timeout", message: `\`${kind}\` did not finish within 3 minutes.` });
+      // Some CLIs print their error on stdout (claude: "Invalid API key · Please run /login").
+      const output = redactSecrets(stderr.trim() || stdout.trim());
+      const said = summariseFailure(output);
+      if (killed)
+        return reject({
+          code: "timeout",
+          message: `\`${kind}\` did not finish within 3 minutes${said ? `; its last message was: ${said}` : ""}.`,
+          detail: output.slice(0, 900),
+        });
       if (status !== 0) {
-        const noise = stderr.toLowerCase();
-        const code = /log ?in|logged in|auth|credential|session expired|not signed/.test(noise)
+        const noise = output.toLowerCase();
+        const code = /log ?in|logged in|auth|credential|session expired|not signed|unauthori[sz]ed|invalid api key|oauth|\b401\b/.test(noise)
           ? "cli_not_authenticated"
           : /rate.?limit|quota|too many requests|usage limit/.test(noise)
             ? "rate_limited"
@@ -285,12 +551,21 @@ export function runCli(cli, kind, prompt, model, webAccess) {
           code,
           message:
             code === "cli_not_authenticated"
-              ? `\`${kind}\` is not signed in. Open ${CLI_APPS[kind] || kind} and sign in, then retry.`
-              : `\`${kind}\` exited with code ${status}.`,
-          detail: stderr.trim().slice(0, 900),
+              ? `\`${kind}\` is not signed in${said ? ` (${said})` : ""}. Sign in to ${CLI_APPS[kind] || kind}, then retry.`
+              : code === "rate_limited"
+                ? `\`${kind}\` hit a usage limit${said ? `: ${said}` : ""}.`
+                : `\`${kind}\` failed with exit code ${status}${said ? `: ${said}` : ""}.`,
+          detail: output.slice(0, 900),
         });
       }
-      resolve(extractText(stdout));
+      const text = extractText(stdout);
+      if (!text)
+        return reject({
+          code: "cli_incompatible",
+          message: `\`${kind}\` finished but returned no text${said ? `: ${said}` : ""}.`,
+          detail: redactSecrets(stderr.trim()).slice(0, 900),
+        });
+      resolve(text);
     });
 
     child.stdin.on("error", () => {});

@@ -27,7 +27,16 @@ const GENERATE_TIMEOUT_MS = 200_000;
 const GUARD_HEADER = "x-study-hub-host";
 const BASE = "/api/ai";
 
-export type CliStatus = { present: boolean; version: string | null; path?: string | null };
+export type CliStatus = {
+  present: boolean;
+  version: string | null;
+  path?: string | null;
+  /** Why it is not usable: not found, failed to run (with its output) or timed out. */
+  error?: string | null;
+  authenticated?: boolean | "unknown";
+  authDetail?: string | null;
+  checkedAt?: string;
+};
 
 export type HostHealth = {
   name: string;
@@ -149,7 +158,7 @@ export function createHostClient(provider: ProviderId, modelOverride: string, op
           return {
             ok: false,
             code: "cli_not_found",
-            message: `Study Hub could not find the \`${cli}\` command on this computer.`,
+            message: status?.error || `Study Hub could not find the \`${cli}\` command on this computer.`,
             hint: health.searched?.length ? `Searched: ${health.searched.join(", ")}` : undefined,
           };
         const result = await call({ provider, probe: true }, signal, 30_000);
