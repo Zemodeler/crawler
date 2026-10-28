@@ -125,6 +125,18 @@ A full spaced-repetition app over the CSV files in your folder.
 - **Star** any card to build your own list.
 - **Filter** by topic and by deck.
 
+### Practice papers
+
+The **Practice** tab on the flashcards page generates exam practice from your own course, only when you ask for it.
+
+- **Three types.** An exam paper (multiple-choice plus written questions, in the style of your past papers), an MCQ quiz, or simple exercises with worked solutions.
+- **Written from your files.** Past papers found in the module and anything you add (PDF, Word, PowerPoint or text; kept in the module's My Files) are the source. Lectures and seminars can be ticked in too. Add a short request such as "harder, more calculations" to steer it.
+- **Marked and graded.** Multiple-choice is marked instantly; you mark written answers yourself against the model answer. The grade is a percentage with the UK band (1st, 2:1, 2:2, 3rd, fail).
+- **A study pack of what you got wrong.** Each missed question with your answer, the correct one and why, topics ranked weakest first, and a recall list. Download it, or save it to the module's notes. You can also retry only the questions you missed.
+- **Every attempt is kept** (in this browser, per module), with a chart of your marks over time, your average and best, and the topics that still need work.
+
+Answer keys come from the model, so each paper is shuffled and checked for impossible keys, but treat the explanations as a study aid and check anything that looks off against your notes.
+
 ### Format check and generation
 
 When you open a folder, Study Hub checks it against the expected format and, if

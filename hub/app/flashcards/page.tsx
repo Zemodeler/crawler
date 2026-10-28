@@ -3,6 +3,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { loadHandles } from "../../lib/course-fs.ts";
 import { isHosted } from "../../lib/ai/settings.ts";
 import { fetchTree, loadModule, pickModule } from "../../lib/library.ts";
+import Practice from "./practice.tsx";
 type Confidence = 1 | 2 | 3 | 4 | 5;
 type Card = {
   id: string;
@@ -132,7 +133,7 @@ export default function Flashcards() {
   const [course, setCourse] = useState("");
   const [cards, setCards] = useState<Card[]>([]);
   const [stats, setStats] = useState<Stats>(EMPTY);
-  const [tab, setTab] = useState<"home" | "study" | "browse" | "stats">("home");
+  const [tab, setTab] = useState<"home" | "study" | "browse" | "stats" | "practice">("home");
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [selectedDecks, setSelectedDecks] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("smart");
@@ -154,6 +155,8 @@ export default function Flashcards() {
   const [reconnect, setReconnect] = useState<DirectoryHandle>();
   const input = useRef<HTMLInputElement>(null);
   const started = useRef(0);
+  // A link straight to the practice tab must survive the course loading, which otherwise resets to home.
+  const wantPractice = useRef(false);
   // `now` comes from a ticking effect and the shuffle seed is derived, rather
   // than either being read during render. Reading the clock or the RNG while
   // rendering made the due-filter and the random order change on every
@@ -188,11 +191,16 @@ export default function Flashcards() {
     setCourse(courseName);
     setCards(all);
     setSelectedCats([]);
-    setTab("home");
+    setTab(wantPractice.current ? "practice" : "home");
     setNotice(`${all.length} cards loaded automatically from ${courseName}.`);
   }
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("mode");
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("tab") === "practice") {
+      wantPractice.current = true;
+      queueMicrotask(() => setTab("practice"));
+    }
+    const requested = params.get("mode");
     const allowed: Mode[] = [
       "smart", "random", "progressive", "due", "weak", "unseen", "starred",
     ];
@@ -482,7 +490,7 @@ export default function Flashcards() {
       ) : (
         <>
           <nav className="fc-nav">
-            {(["home", "study", "browse", "stats"] as const).map((t) => (
+            {(["home", "study", "browse", "stats", "practice"] as const).map((t) => (
               <button
                 className={tab === t ? "active" : ""}
                 key={t}
@@ -492,6 +500,7 @@ export default function Flashcards() {
               </button>
             ))}
           </nav>
+          {tab === "practice" && <Practice key={course} course={course} />}
           {tab === "home" && (
             <section className="fc-page">
               <div className="fc-hero">
