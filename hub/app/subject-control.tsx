@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { getModuleProfile, setModuleProfile, suggestModuleProfile, type ModuleProfile } from "../lib/library.ts";
 import { getProfile, PROFILES, type SubjectId } from "../lib/subject-profiles.ts";
 import type { DirectoryHandle, LocalFile } from "../lib/course-fs.ts";
 
-export function useModuleSubject(target: string | DirectoryHandle | null, files: LocalFile[], name = "") {
-  const [loaded, setLoaded] = useState<{ target: typeof target; files: LocalFile[]; choice: ModuleProfile } | null>(null);
+export function useModuleSubject(target: string | DirectoryHandle | null, files: Pick<LocalFile, "path">[], name = "") {
+  const [loaded, setLoaded] = useState<{ target: typeof target; files: Pick<LocalFile, "path">[]; choice: ModuleProfile } | null>(null);
   const setChoice = (choice: ModuleProfile) => setLoaded((previous) =>
     previous?.target === target && previous.files === files ? { ...previous, choice } : previous);
   const [error, setError] = useState("");
@@ -20,9 +20,12 @@ export function useModuleSubject(target: string | DirectoryHandle | null, files:
   return { choice: current, setChoice, error, setError, profile: getProfile(current?.profile ?? "general") };
 }
 
-export function SubjectControl({ target, subject, disabled = false }: {
+export function SubjectControl({ target, subject, disabled = false, onSaved }: {
   target: string | DirectoryHandle | null; subject: ReturnType<typeof useModuleSubject>; disabled?: boolean;
+  /** Called after the choice is written, for pages that show the same module elsewhere. */
+  onSaved?: (profile: SubjectId) => void;
 }) {
+  const id = useId();
   const [saving, setSaving] = useState(false);
   const [picked, setPicked] = useState<SubjectId | null>(null);
   const { choice, profile, error } = subject;
@@ -34,15 +37,16 @@ export function SubjectControl({ target, subject, disabled = false }: {
       await setModuleProfile(target, selected, !choice.confirmed && selected === choice.profile ? "suggested" : "student");
       subject.setChoice({ profile: selected, confirmed: true, reason: "Saved subject choice." });
       subject.setError("");
+      onSaved?.(selected);
     } catch (e) { subject.setError((e as Error).message); }
     finally { setSaving(false); }
   };
   return <div className="field">
-    <label htmlFor="module-subject">Subject</label>
+    <label htmlFor={id}>Subject</label>
     <p>{choice ? <><b>{profile.label}</b> — {profile.description}</> : "Loading subject…"}</p>
     {choice && !choice.confirmed && <p>Suggested: {profile.label}. {choice.reason} Confirm this subject before converting.</p>}
     <div className="inline-row">
-      <select id="module-subject" value={selected} disabled={disabled || saving || !choice} onChange={(e) => setPicked(e.target.value as SubjectId)}>
+      <select id={id} value={selected} disabled={disabled || saving || !choice} onChange={(e) => setPicked(e.target.value as SubjectId)}>
         {Object.values(PROFILES).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
       </select>
       <button className="btn btn-ghost" disabled={!target || !choice || disabled || saving} onClick={save}>{saving ? "Saving…" : choice?.confirmed ? "Save subject" : "Confirm subject"}</button>

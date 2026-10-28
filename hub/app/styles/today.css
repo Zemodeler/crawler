@@ -61,3 +61,20 @@
 .module-bar i{display:block;height:100%;border-radius:var(--radius-full)}
 .module-card-stats,.module-card-next{font-size:var(--text-xs);color:var(--text-muted);font-variant-numeric:tabular-nums}
 .module-card-next b{color:var(--text);font-weight:600}
+/* ---- per-module settings: the cogwheel and its dialog ---- */
+.module-card-wrap{position:relative;display:grid;min-width:0}
+.module-card-wrap .module-card-head{padding-right:34px}
+.module-settings-anchor{display:contents}
+.module-gear{position:absolute;top:10px;right:10px;width:30px;height:30px;display:grid;place-items:center;padding:0;border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--text-muted);cursor:pointer}
+.module-gear:hover,.module-gear[aria-expanded="true"]{background:var(--surface-2);border-color:var(--border);color:var(--text)}
+.module-settings{position:absolute;top:46px;right:8px;z-index:30;width:320px;max-width:calc(100vw - 32px);display:grid;gap:var(--space-3);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-md);box-shadow:var(--shadow);padding:var(--space-4);text-align:left;color:var(--text)}
+.module-settings.align-left{right:auto;left:8px}
+.module-settings:focus{outline:none}
+.module-settings .field p{font-size:var(--text-xs);color:var(--text-muted);margin:4px 0}
+.module-settings .field label{font-size:var(--text-xs);font-weight:600}
+.module-settings .field select{min-width:0;flex:1;padding:8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font:inherit}
+.module-settings .inline-row{display:flex;gap:var(--space-2);align-items:center}
+.module-settings-actions{display:grid;gap:var(--space-2)}
+.module-settings-actions .btn{text-align:left}
+.module-settings-note{margin:0;font-size:var(--text-xs);color:var(--text-muted)}
+.module-settings-note.error{color:var(--danger)}

@@ -13,9 +13,9 @@
  * must pass Crawler's quote check before it reaches the calendar.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 import {
   ALL_UNIVERSITIES,
@@ -40,6 +40,13 @@ import { readSchedule, writeSchedule } from "./background.mjs";
 import { formatLibrary } from "../host/auto-format.mjs";
 
 const ASSISTANTS = new Set(["claude", "codex", "gemini"]);
+
+/** "year/module": exactly two plain folder names, so it can never leave the library. */
+export function isModuleKey(value) {
+  if (typeof value !== "string") return false;
+  const parts = value.split("/");
+  return parts.length === 2 && parts.every((part) => part && part !== "." && part !== ".." && !/[\\:*?"<>|]/.test(part));
+}
 
 export function createSetup({ app, BrowserWindow, safeStorage, session, shell, dialog, libraryRoot, parent }, dependencies = {}) {
   const userData = app.getPath("userData");
@@ -217,11 +224,29 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     return next;
   }
 
-  /** The page's "Sync now": `assistant` is the student's current choice, remembered for later syncs. */
+  /**
+   * The page's "Sync now": `assistant` is the student's current choice, remembered for later syncs.
+   * With `module` ("year/module") only that module's folder is synced; the rest is left as it is.
+   */
   async function startSync(body = {}) {
+    if (body.module !== undefined && !isModuleKey(body.module)) return { error: "No such module." };
     if (ASSISTANTS.has(body.assistant)) savePrefs({ assistant: body.assistant });
     else if (body.assistant === "none") savePrefs({ assistant: null });
-    return begin("page");
+    return begin("page", body.module);
+  }
+
+  /** Opens one module's folder in the system file manager. */
+  async function openModuleFolder(body = {}) {
+    if (!isModuleKey(body.module)) return { error: "No such module." };
+    const root = resolve(libraryRoot());
+    const folder = resolve(root, body.module);
+    try {
+      if (!folder.startsWith(root + sep) || !statSync(folder).isDirectory()) throw new Error("not a folder");
+    } catch {
+      return { error: "That module's folder is not in your library yet." };
+    }
+    const failure = await shell.openPath(folder);
+    return failure ? { error: failure } : { ok: true };
   }
 
   /** A sync Study Hub starts itself ("schedule", "first") or from the tray ("tray"). */
@@ -233,8 +258,8 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
    * A sync Study Hub or the tray started has no page waiting for its answer, so
    * a refusal is kept as a failed run (the sidebar shows it) and logged.
    */
-  async function begin(origin) {
-    const result = await tryBegin(origin);
+  async function begin(origin, module) {
+    const result = await tryBegin(origin, module);
     if (result.error && origin !== "page") {
       console.error(`Sync (${origin}): ${result.error}`);
       run = { ...emptyRun("failed"), error: result.error, code: result.code ?? null, finishedAt: new Date().toISOString() };
@@ -242,7 +267,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     return result;
   }
 
-  async function tryBegin(origin) {
+  async function tryBegin(origin, module) {
     if (signingIn) return { error: "Wait for sign-in to finish before syncing." };
     if (run.state === "running") return { ok: true };
     const university = selected();
@@ -276,6 +301,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       adapter,
       credentials,
       root,
+      ...(module ? { select: (_course, placement) => `${placement.year}/${placement.folder}` === module } : {}),
       ...(assistant ? { ai: createHostAiRunner(assistant), confirmAi: confirmAiFor(origin, assistant) } : {}),
       onProgress(event) {
         if (event.type === "course-start") run.course = event.course;
@@ -411,6 +437,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     selectUniversity,
     signIn,
     startSync,
+    openModuleFolder,
     startBackgroundSync,
     claimLibrary,
     freshLibrary,
