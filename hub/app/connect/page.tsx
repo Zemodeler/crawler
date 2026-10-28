@@ -13,6 +13,7 @@ import { getModuleProfile, savedActiveModule, fetchTree, pickModule, loadModule 
 import { getProfile } from "../../lib/subject-profiles.ts";
 import { loadHandles, collectDirectory } from "../../lib/course-fs.ts";
 
+import { CliDiagnostics } from "../settings/cli-diagnostics.tsx";
 import { CLI_FOR, discover, type HostHealth } from "../../lib/ai/host.ts";
 import { ANTHROPIC_MODELS } from "../../lib/ai/models.ts";
 import { createAiClient } from "../../lib/ai/provider.ts";
@@ -478,7 +479,6 @@ function SubscriptionSection({
         subscription, or use an API key here.
       </div>
     );
-  const status = host?.clis?.[cli];
   return (
     <>
       <div className="callout">
@@ -486,31 +486,7 @@ function SubscriptionSection({
         Study Hub runs <span className="mono">{cli}</span> for you on this computer. There is
         nothing to start or pair. It can only answer prompts: it cannot read or write your files.
       </div>
-      <div className="btn-row" style={{ marginTop: 0 }}>
-        {checking && <span className="badge badge-idle">Looking for {cli}…</span>}
-        {!checking && status && (
-          <span className={`badge ${status.present ? "badge-ok" : "badge-err"}`}>
-            {status.present ? `${cli}${status.version ? ` ${status.version}` : ""} found` : `${cli} not found`}
-          </span>
-        )}
-        <button className="btn btn-ghost" onClick={onRecheck} disabled={checking}>
-          Check again
-        </button>
-      </div>
-      {error && (
-        <div className="callout callout-warn">
-          <b>Something went wrong</b>
-          {error.message}
-          {error.hint ? ` ${error.hint}` : ""}
-        </div>
-      )}
-      {host && status && !status.present && (
-        <div className="callout callout-warn">
-          <b>{cli} is not installed</b>
-          Install the {cli === "claude" ? "Claude" : cli === "codex" ? "ChatGPT Codex" : "Gemini"} app or CLI and sign in once,
-          then press Check again.
-        </div>
-      )}
+      <CliDiagnostics host={host} checking={checking} error={error} onRecheck={onRecheck} />
     </>
   );
 }

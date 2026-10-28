@@ -191,7 +191,7 @@ export default function Welcome() {
                       >
                         <b>{a.name}</b>
                         <small>
-                          {!health ? "Looking on this computer…" : cli?.present ? `Found on this computer${cli.version ? ` (version ${cli.version.split(" ")[0]})` : ""}` : `Not found. Install the ${a.app} app and sign in.`}
+                          {!health ? "Looking on this computer…" : cli?.present ? `Found on this computer${cli.version ? ` (version ${cli.version.split(" ")[0]})` : ""}` : cli?.path && cli.error ? cli.error : `Not found. Install the ${a.app} app and sign in.`}
                         </small>
                       </button>
                     );
