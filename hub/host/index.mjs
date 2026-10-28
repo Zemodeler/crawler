@@ -444,6 +444,7 @@ export async function handleSetup(setup, request, response, url) {
     "/api/setup/university": setup.selectUniversity,
     "/api/setup/sign-in": setup.signIn,
     "/api/setup/sync": setup.startSync,
+    "/api/setup/module/open": setup.openModuleFolder,
     "/api/setup/library/claim": setup.claimLibrary,
     "/api/setup/library/fresh": setup.freshLibrary,
     "/api/setup/schedule": setup.setSchedule,
