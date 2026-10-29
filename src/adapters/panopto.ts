@@ -51,6 +51,13 @@ export function panoptoOption(universityId: string, credentials: Credentials): {
 
 export type PanoptoSession = { deliveryId: string; title: string; startUtc: string | null; hasCaptions: boolean };
 export type PanoptoDelivery = { title: string; startUtc: string | null; languages: number[] };
+export type PanoptoFolder = { id: string; name: string };
+
+/** Whether a folder name holds `code` as a whole token: COM1025 matches "COM1025 - Lectures", not "COM10255". */
+export function folderMatchesCode(name: string, code: string): boolean {
+  const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "i").test(name);
+}
 
 const GUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const PAGE_SIZE = 100;
@@ -118,6 +125,25 @@ export function createPanoptoClient({ site, cookies = "", fetch: doFetch = globa
     }
   }
   return {
+    /** Folders whose names match `query`, through Panopto's documented REST API (first page only). */
+    searchFolders(query: string): Promise<PanoptoFolder[]> {
+      return serial(async () => {
+        const params = new URLSearchParams({ searchQuery: query, pageNumber: "0" });
+        const response = await request("folders", `/Panopto/api/v1/folders/search?${params}`, { headers: { accept: "application/json" } });
+        let rows: unknown[];
+        try {
+          if (response.status !== 200) throw new Error();
+          rows = JSON.parse(response.text)?.Results;
+          if (!Array.isArray(rows)) throw new Error();
+        } catch { throw new PanoptoError("folders", response.status); }
+        const folders: PanoptoFolder[] = [];
+        for (const row of rows as { Id?: unknown; Name?: unknown }[]) {
+          if (typeof row?.Id !== "string" || !new RegExp(`^${GUID}$`, "i").test(row.Id) || typeof row.Name !== "string") continue;
+          folders.push({ id: row.Id.toLowerCase(), name: row.Name });
+        }
+        return folders;
+      });
+    },
     /** Sessions in one folder, oldest first. */
     sessions(folderId: string): Promise<PanoptoSession[]> {
       return serial(async () => {

@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createEcho360Client, Echo360Error } from "./adapters/echo360.ts";
-import { createPanoptoClient, panoptoRefs, PanoptoError, srtToText } from "./adapters/panopto.ts";
+import { createPanoptoClient, folderMatchesCode, panoptoRefs, PanoptoError, srtToText } from "./adapters/panopto.ts";
 import type { PanoptoSession } from "./adapters/panopto.ts";
 import { sanitizeSegment } from "./naming.ts";
 import type { Course, Credentials, ManifestEntry, ModulePlacement, UniversityAdapter, VleItem } from "./types.ts";
@@ -23,6 +23,9 @@ export function vttToText(vtt: string): string {
   }
   return out.join("\n");
 }
+
+/** Folders found by module code that are read per course. */
+const MAX_SEARCHED_FOLDERS = 3;
 
 export type TranscriptOptions = {
   adapter: UniversityAdapter; credentials: Credentials; course: Course; placement: ModulePlacement;
@@ -120,6 +123,13 @@ export async function syncTranscripts(options: TranscriptOptions): Promise<Trans
       const refs = panoptoRefs(text, site);
       refs.folders.forEach((id) => folders.add(id));
       refs.deliveries.forEach((id) => deliveries.add(id));
+    }
+    // Recordings reached only through the module's Panopto nav-bar link: its folder is named by module code.
+    if (options.panopto.cookies && placement.code) {
+      try {
+        const found = (await client.searchFolders(placement.code)).filter((f) => folderMatchesCode(f.name, placement.code!));
+        found.slice(0, MAX_SEARCHED_FOLDERS).forEach((f) => folders.add(f.id));
+      } catch (error) { failure(error, "folders"); }
     }
     const recordings: (Partial<PanoptoSession> & { deliveryId: string })[] = [];
     for (const folder of folders) {

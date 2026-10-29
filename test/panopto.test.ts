@@ -3,13 +3,14 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createPanoptoClient, PANOPTO_SITES, panoptoRefs, srtToText } from "../src/adapters/panopto.ts";
+import { createPanoptoClient, folderMatchesCode, PANOPTO_SITES, panoptoRefs, srtToText } from "../src/adapters/panopto.ts";
 import { syncTranscripts } from "../src/transcripts.ts";
 import type { TranscriptOptions } from "../src/transcripts.ts";
 import type { UniversityAdapter, VleItem } from "../src/types.ts";
 
 const site = "https://panopto.example";
 const folder = "aaaaaaaa-0000-0000-0000-000000000001";
+const searched = "aaaaaaaa-0000-0000-0000-000000000002";
 const d = (n: number) => `dddddddd-0000-0000-0000-00000000000${n}`;
 const srt = "1\n00:00:02,160 --> 00:00:05,760\n[Auto-generated transcript. Edits may have been applied for clarity.]\nWelcome back.\n\n2\n00:00:05,760 --> 00:00:07,000\n<i>Welcome back.</i>\nToday: graphs\n";
 const placement: Placement = { section: "Week 1", sectionIndex: 0, activity: "Recordings", activityType: "Link", activityId: 9, activityUrl: "https://vle.example/topic/9" };
@@ -20,8 +21,13 @@ function fakeSite(seen: { url: string; init?: RequestInit }[]): typeof fetch {
   return async (input, init) => {
     const url = new URL(String(input));
     seen.push({ url: url.href, init });
+    if (url.pathname.endsWith("/folders/search")) return Response.json({ Results: [] });
     if (url.pathname.endsWith("/GetSessions")) {
       const { queryParameters } = JSON.parse(String(init?.body));
+      if (queryParameters.folderID === searched) return Response.json({ d: { Results: [
+        { DeliveryID: d(8), SessionName: "Nav-bar lecture", StartTime: "/Date(1791540000000)/", HasCaptions: true },
+        { DeliveryID: d(1), SessionName: "Lecture 1", StartTime: "/Date(1790330400000)/", HasCaptions: true },
+      ] } });
       if (queryParameters.folderID !== folder) return Response.json({ d: { Results: [] } });
       return Response.json({ d: { Results: [
         { DeliveryID: d(2).toUpperCase(), SessionName: "Lecture 2", StartTime: "/Date(1790935200000)/", HasCaptions: false },
@@ -152,4 +158,61 @@ test("Panopto failures are isolated and maxNew caps attempts", async (t) => {
   const none = await setup(t);
   delete none.options.panopto;
   assert.deepEqual(await syncTranscripts(none.options), { added: [], skippedNoCaptions: 0, failed: 0 });
+});
+
+test("folder names match the module code only as a whole token", () => {
+  assert.ok(folderMatchesCode("COM1025 - Lectures 2026-27", "COM1025"));
+  assert.ok(folderMatchesCode("Lectures (com1025)", "COM1025"));
+  assert.ok(folderMatchesCode("2026_COM1025_Sem1", "COM1025"));
+  assert.ok(!folderMatchesCode("COM10255 - Other", "COM1025"));
+  assert.ok(!folderMatchesCode("XCOM1025", "COM1025"));
+});
+
+test("signed in, folders found by module code add their recordings, de-duplicated", async (t) => {
+  const { options, seen } = await setup(t);
+  const original = options.fetch!;
+  options.fetch = async (input, init) => {
+    if (String(input).includes("/folders/search")) {
+      seen.push({ url: String(input), init });
+      return Response.json({ Results: [
+        { Id: folder.toUpperCase(), Name: "COM1001 - Testing" },
+        { Id: searched, Name: "COM1001 Testing (2026-27)" },
+        { Id: "aaaaaaaa-0000-0000-0000-000000000003", Name: "COM10011 - Not this one" },
+        { Id: "not-a-guid", Name: "COM1001" },
+      ] });
+    }
+    return original(input, init);
+  };
+  options.manifest.set(`panopto:${d(3)}`, { vleId: `panopto:${d(3)}` } as never);
+  const result = await syncTranscripts(options);
+  assert.equal(result.failed, 0);
+  const search = seen.find((r) => r.url.includes("/folders/search"))!;
+  assert.equal(new URL(search.url).pathname, "/Panopto/api/v1/folders/search");
+  assert.equal(new URL(search.url).searchParams.get("searchQuery"), "COM1001");
+  assert.equal(new Headers(search.init?.headers).get("cookie"), ".ASPXAUTH=panopto-secret");
+  const listed = seen.filter((r) => r.url.endsWith("/GetSessions")).map((r) => JSON.parse(String(r.init?.body)).queryParameters.folderID);
+  assert.deepEqual(listed, [folder, searched]); // the linked folder once; COM10011 never
+  assert.deepEqual(result.added.map((path) => path.split("/").slice(-1)[0]).sort(), [
+    "01 - Lecture 1 (2026-09-25).txt", "03 - Nav-bar lecture (2026-10-09).txt",
+  ]);
+  assert.equal(seen.filter((r) => r.url.includes("GenerateSRT") && r.url.includes(d(1))).length, 1);
+  assert.ok(!seen.some((r) => r.url.includes("GenerateSRT") && r.url.includes(d(3))));
+});
+
+test("no folder search without cookies or a module code, and a failed search is not fatal", async (t) => {
+  const anonymous = await setup(t);
+  delete anonymous.options.panopto!.cookies;
+  await syncTranscripts(anonymous.options);
+  assert.ok(!anonymous.seen.some((r) => r.url.includes("/folders/search")));
+  const uncoded = await setup(t);
+  uncoded.options.placement = { ...uncoded.options.placement, code: null };
+  await syncTranscripts(uncoded.options);
+  assert.ok(!uncoded.seen.some((r) => r.url.includes("/folders/search")));
+  const failing = await setup(t);
+  const original = failing.options.fetch!;
+  failing.options.fetch = async (input, init) =>
+    String(input).includes("/folders/search") ? new Response("<html>sign in</html>", { status: 302 }) : original(input, init);
+  const result = await syncTranscripts(failing.options);
+  assert.equal(result.failed, 1); assert.equal(result.error, "folders: 302");
+  assert.equal(result.added.length, 2);
 });
