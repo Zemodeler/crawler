@@ -7,7 +7,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -118,6 +118,19 @@ test("WinGet and desktop-app install locations are searched when PATH has nothin
 
   const local = join(HOME, ".local", "bin", "claude.exe");
   assert.equal(findCli("claude", machine({ files: [local] }).deps).path, local);
+});
+
+test("the Microsoft Store Claude app's bundled CLI is found under Claude-Data", () => {
+  const local = mkdtempSync(join(tmpdir(), "claude-store-"));
+  const exe = join(local, "Claude-Data", "claude_pzs8", "claude-code", "2.1.308", "c17a", "claude.exe");
+  mkdirSync(dirname(exe), { recursive: true });
+  writeFileSync(exe, "");
+  try {
+    const { deps } = machine({ files: [exe], env: { LOCALAPPDATA: local } });
+    assert.equal(findCli("claude", deps).path, exe);
+  } finally {
+    rmSync(local, { recursive: true, force: true });
+  }
 });
 
 test("a CLI that is nowhere says so", () => {
@@ -318,7 +331,17 @@ test("a failed run surfaces the CLI's own message, whichever stream it used", as
   const signedOut = fakeCli(`process.stdout.write("Invalid API key · Please run /login\\n"); process.exit(1);`);
   const broken = fakeCli(`process.stderr.write("warming up\\nError: model overloaded_error\\n"); process.exit(2);`);
   const silent = fakeCli(`process.exit(0);`);
+  const revoked = fakeCli(
+    `process.stderr.write("2026-10-28T23:06:54Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user\\n"); process.exit(1);`,
+  );
   try {
+    await assert.rejects(runCli(revoked.cli, "codex", "hi"), (error) => {
+      assert.equal(error.code, "cli_not_authenticated");
+      assert.equal(error.message, "Your Codex sign-in has expired or was signed out, so `codex` was refused.");
+      assert.match(error.hint, /codex logout.*codex login/);
+      assert.match(error.detail, /invalidated oauth token/);
+      return true;
+    });
     await assert.rejects(runCli(signedOut.cli, "claude", "hi"), (error) => {
       assert.equal(error.code, "cli_not_authenticated");
       assert.match(error.message, /Invalid API key · Please run \/login/);
@@ -336,7 +359,7 @@ test("a failed run surfaces the CLI's own message, whichever stream it used", as
       return true;
     });
   } finally {
-    for (const fake of [signedOut, broken, silent]) fake.cleanup();
+    for (const fake of [signedOut, broken, silent, revoked]) fake.cleanup();
   }
 });
 
@@ -383,6 +406,10 @@ test("a broken desktop-app or WinGet copy is not sent to npm to be fixed", () =>
   assert.equal(claudeApp.verdict, "broken");
   assert.match(claudeApp.fix.text, /Claude desktop app/);
   assert.equal(claudeApp.fix.command, null);
+
+  const storeApp = brokenAt("claude", join(LOCALAPPDATA, "Claude-Data", "claude_pzs8", "claude-code", "2.1.3", "c17a", "claude.exe"));
+  assert.match(storeApp.fix.text, /Claude desktop app/);
+  assert.equal(storeApp.fix.command, null);
 
   const codexApp = brokenAt("codex", join(LOCALAPPDATA, "OpenAI", "Codex", "bin", "ab12", "codex.exe"));
   assert.match(codexApp.fix.text, /Codex desktop app/);

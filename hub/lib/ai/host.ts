@@ -95,7 +95,7 @@ export async function discover(signal?: AbortSignal, options: { refresh?: boolea
 }
 
 function classify(status: number, body: string): AiError {
-  let parsed: { code?: string; message?: string; detail?: string } = {};
+  let parsed: { code?: string; message?: string; detail?: string; hint?: string } = {};
   try {
     parsed = JSON.parse(body);
   } catch {
@@ -115,7 +115,7 @@ function classify(status: number, body: string): AiError {
     rate_limited: "rate_limited",
   };
   const code = parsed.code && known[parsed.code] ? known[parsed.code] : "unknown";
-  return new AiError(code, message, { detail: parsed.detail });
+  return new AiError(code, message, { detail: parsed.detail, hint: parsed.hint });
 }
 
 async function call(body: unknown, signal: AbortSignal | undefined, timeoutMs: number): Promise<Record<string, unknown>> {

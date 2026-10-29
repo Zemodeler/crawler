@@ -23,7 +23,7 @@ import {
   type PracticeStore,
   type SelfMark,
 } from "../../lib/practice.ts";
-import { COUNT_LIMITS, candidateSources, generatePaper, sourceRole } from "../../lib/practice-generate.ts";
+import { COUNT_LIMITS, aiPick, autoPick, candidateSources, generatePaper, sourceRole, type AiPick } from "../../lib/practice-generate.ts";
 import { Marker, Result, Taker } from "./practice-session.tsx";
 
 type View =
@@ -39,6 +39,26 @@ const KIND_HELP: Record<PracticeKind, string> = {
   mcq: "Multiple-choice only, marked instantly. Quick to do and good for covering a lot of ground.",
   exercise: "Short written exercises with worked solutions, which you mark yourself.",
 };
+
+const PICK_KEY = (course: string) => `studyhub:practice-pick:${course}`;
+
+/** The assistant's last choice for this module, kept while the module's files stay the same. */
+function savedPick(course: string, files: string): AiPick | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PICK_KEY(course)) || "null");
+    return saved?.files === files && Array.isArray(saved.paths) ? { paths: saved.paths, reason: String(saved.reason || "") } : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepPick(course: string, files: string, pick: AiPick) {
+  try {
+    localStorage.setItem(PICK_KEY(course), JSON.stringify({ files, ...pick }));
+  } catch {
+    /* only a convenience */
+  }
+}
 
 const date = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 const bandClass = (percent: number) => `band-${gradeBand(percent).short.replace(":", "")}`;
@@ -331,10 +351,74 @@ function Create({
   const [status, setStatus] = useState("");
   const [error, setError] = useState<{ title: string; detail?: string; connect?: boolean } | null>(null);
   const [uploadError, setUploadError] = useState("");
+  const [aiChoice, setAiChoice] = useState<(AiPick & { files: string }) | null>(null);
+  const [choosing, setChoosing] = useState(false);
+  const [chooseNote, setChooseNote] = useState("");
   const abort = useRef<AbortController | null>(null);
+  const chooseAbort = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
-  const on = (file: LocalFile) => picked[file.path] ?? sourceRole(file) !== "material";
+  const fileKey = useMemo(() => sources.map((f) => f.path).join("\n"), [sources]);
+  const auto = useMemo(() => autoPick(sources), [sources]);
+  const chosenByAi = aiChoice?.files === fileKey ? aiChoice : null;
+  const base = useMemo(() => (chosenByAi ? new Set(chosenByAi.paths) : auto), [chosenByAi, auto]);
+  const on = (file: LocalFile) => picked[file.path] ?? base.has(file.path);
+
+  /** Lets the assistant look at the module's files and tick the ones to write from. */
+  async function choose(fresh: boolean) {
+    chooseAbort.current?.abort();
+    setChooseNote("");
+    if (!sources.length) return;
+    const saved = fresh ? null : savedPick(course, fileKey);
+    if (saved) {
+      setAiChoice({ ...saved, files: fileKey });
+      return;
+    }
+    if (!(await hasAnyConnection().catch(() => false))) {
+      if (fresh) setChooseNote("Connect an AI assistant first, under Settings, so it can choose for you.");
+      return;
+    }
+    const controller = new AbortController();
+    chooseAbort.current = controller;
+    setChoosing(true);
+    try {
+      const pick = await aiPick({
+        client: await createConfiguredAiClient(),
+        kind,
+        brief,
+        module: course.split("/").slice(1).join("/") || course,
+        sources,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      keepPick(course, fileKey, pick);
+      setAiChoice({ ...pick, files: fileKey });
+      if (fresh) setPicked({});
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      const err = e as AiError;
+      setChooseNote(
+        `Your assistant could not choose the files: ${[err.message, err.hint].filter(Boolean).join(" ")} The files below were ticked by their names instead.`,
+      );
+    } finally {
+      if (chooseAbort.current === controller) {
+        chooseAbort.current = null;
+        setChoosing(false);
+      }
+    }
+  }
+
+  // Once per set of files: the assistant's choice replaces the by-name guess.
+  // The short wait lets a module's files finish arriving before it is asked.
+  useEffect(() => {
+    const timer = setTimeout(() => void choose(false), 400);
+    return () => {
+      clearTimeout(timer);
+      chooseAbort.current?.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileKey]);
+
   const chosen = sources.filter(on);
   const pastPapers = sources.filter((f) => sourceRole(f) === "past-paper");
   const limits = COUNT_LIMITS[kind];
@@ -443,9 +527,14 @@ function Create({
 
       <div className="pr-section-head">
         <h2>Write it from</h2>
-        <button type="button" className="pr-quiet" onClick={() => input.current?.click()}>
-          Add a past paper or file
-        </button>
+        <div className="pr-actions">
+          <button type="button" className="pr-quiet" disabled={choosing || busy || !sources.length} onClick={() => choose(true)}>
+            {choosing ? "Choosing…" : "Let my assistant choose"}
+          </button>
+          <button type="button" className="pr-quiet" onClick={() => input.current?.click()}>
+            Add a past paper or file
+          </button>
+        </div>
         <input ref={input} type="file" hidden multiple accept=".pdf,.docx,.pptx,.txt,.md" onChange={upload} />
       </div>
       {uploadError && <p className="pr-error">{uploadError}</p>}
@@ -455,7 +544,18 @@ function Create({
           {hosted ? " Files you add are kept in this module's My Files." : " Files you add here last until you leave this page."}
         </p>
       )}
-      {sources.length === 0 && <p className="pr-note">There are no readable files yet.</p>}
+      {sources.length === 0 ? (
+        <p className="pr-note">There are no readable files yet.</p>
+      ) : (
+        <p className="pr-meta" aria-live="polite">
+          {choosing
+            ? "Your assistant is looking through the files to choose what to write from…"
+            : chosenByAi
+              ? `Chosen by your assistant${chosenByAi.reason ? `: ${chosenByAi.reason}` : "."} Tick or untick any to change it.`
+              : "The most useful files are ticked for you, by their names. Tick or untick any to change what the paper is written from."}
+        </p>
+      )}
+      {chooseNote && <p className="pr-note">{chooseNote}</p>}
       {groups.map((group) => {
         const list = sources.filter((f) => sourceRole(f) === group.role);
         if (!list.length) return null;

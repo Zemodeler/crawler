@@ -12,7 +12,7 @@ import {
   studyPackMarkdown,
   topicScores,
 } from "../lib/practice.ts";
-import { PAPER_SCHEMA, buildPaperPrompt, generatePaper, shuffled, usableQuestions } from "../lib/practice-generate.ts";
+import { PAPER_SCHEMA, aiPick, autoPick, buildPaperPrompt, generatePaper, shuffled, usableQuestions } from "../lib/practice-generate.ts";
 import { validate } from "../lib/ai/schema.ts";
 
 const mcq = (id, topic, correctIndex = 0) => ({
@@ -195,4 +195,49 @@ test("generatePaper fails clearly with no readable source or too few usable ques
     generatePaper({ client: fakeClient({ title: "Mock", questions: [raw()] }), kind: "mcq", count: 5, brief: "", module: "M", sources: [file("a.txt", "some real course text ".repeat(5))] }),
     /enough usable questions/,
   );
+});
+
+test("sources: past papers and own files are always ticked, then the most useful material while it fits", () => {
+  const f = (path, category, size = 5_000) => ({
+    path, name: path.split("/").pop(), ext: path.split(".").pop(), category, topic: "", file: { size },
+  });
+  const material = [
+    f("00 - COURSE MATERIALS INDEX.md", "Guides & hubs"),
+    f("ECS509U mid-term test location V1030.pdf", "Course materials"),
+    f("Lectures/01 - Lecture1-core slides.pdf", "Source materials"),
+    f("Notes/01 - Probability (Topic Pack).md", "Study packs"),
+    f("Notes/04 - Model Worked Problems.md", "Course materials"),
+    f("exercise1-solution.pdf", "Course materials"),
+  ];
+  const onlyMaterial = autoPick(material);
+  assert.ok(onlyMaterial.has("Notes/01 - Probability (Topic Pack).md"));
+  assert.ok(onlyMaterial.has("Notes/04 - Model Worked Problems.md"));
+  assert.ok(onlyMaterial.has("exercise1-solution.pdf"));
+  assert.ok(!onlyMaterial.has("00 - COURSE MATERIALS INDEX.md"));
+  assert.ok(!onlyMaterial.has("ECS509U mid-term test location V1030.pdf"));
+
+  const many = Array.from({ length: 20 }, (_, i) => f(`Notes/${i} (Topic Pack).md`, "Study packs", 20_000));
+  const withPaper = autoPick([f("Past papers/2024.pdf", "Past papers"), f("Course Materials/My Files/mine.md", "Source materials"), ...many]);
+  assert.ok(withPaper.has("Past papers/2024.pdf"));
+  assert.ok(withPaper.has("Course Materials/My Files/mine.md"));
+  assert.ok(withPaper.size < 22, "material stops at the prompt budget");
+  assert.ok(withPaper.has("Notes/0 (Topic Pack).md"), "earlier files win a tie");
+});
+
+test("aiPick shows the model the files and their openings, keeps past papers, ignores bad indices and holds the budget", async () => {
+  const sources = [
+    file("Past papers/2024.txt", "Q1 Find P(A)."),
+    file("Notes/01 Probability (Topic Pack).md", "# Probability\nSample spaces and events.", "Study packs"),
+    file("Notes/02 Bayes (Topic Pack).md", "# Bayes theorem", "Study packs"),
+    file("location V1030.txt", "Room V1030", "Course materials"),
+  ];
+  const client = fakeClient({ picks: [2, 1, 99, 1], reason: "The two topic packs cover the syllabus." });
+  const pick = await aiPick({ client, kind: "exam", brief: "focus on Bayes", module: "ECS509U", sources });
+  assert.deepEqual(pick.paths.sort(), ["Notes/01 Probability (Topic Pack).md", "Notes/02 Bayes (Topic Pack).md", "Past papers/2024.txt"]);
+  assert.equal(pick.reason, "The two topic packs cover the syllabus.");
+  const request = client.seen[0];
+  assert.equal(request.schemaName, "source_picks");
+  assert.match(request.messages[0].content, /2\. \[material\] 02 Bayes \(Topic Pack\)\.md \(in Notes\)/);
+  assert.match(request.messages[0].content, /starts: # Bayes theorem/);
+  assert.match(request.messages[0].content, /focus on Bayes/);
 });

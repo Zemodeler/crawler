@@ -59,6 +59,13 @@ export const CLI_SETTINGS = {
 
 export const CLI_APPS = { claude: "Claude", codex: "Codex", gemini: "Gemini CLI" };
 
+/** What to do when a CLI's saved sign-in stops working, even though it still says it is signed in. */
+const SIGN_IN_HINTS = {
+  claude: "Open a terminal, run `claude`, type /login and sign in again, then retry.",
+  codex: "Open a terminal, run `codex logout` and then `codex login` to sign in again (or sign out and back in inside the Codex app), then retry.",
+  gemini: "Open a terminal, run `gemini` and sign in again, then retry.",
+};
+
 /** What the detection and the auth probe need from the machine; tests replace any of it. */
 function defaultDeps() {
   return {
@@ -128,6 +135,17 @@ function launchPlan(path, d) {
     return { command: d.execPath, prefixArgs: [target] };
   }
   return { error: `is a ${ext || "extensionless"} shim Windows cannot run directly (use the .cmd or .exe next to it)` };
+}
+
+/** Folders directly inside `root` whose names match `pattern`. */
+function childDirs(root, pattern) {
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && pattern.test(entry.name))
+      .map((entry) => join(root, entry.name));
+  } catch {
+    return [];
+  }
 }
 
 /** Newest-first executables matching `<root>/<a>/<b>/<file>`, by modified time. */
@@ -274,11 +292,17 @@ function candidates(name, d) {
       ...nestedExecutables(join(localAppData, "Microsoft", "WinGet", "Packages"), 1, `${name}.exe`),
       // Bundled with the desktop apps: claude-code/<version>/<hash>/claude.exe
       // (or without the hash) and OpenAI/Codex/bin/<hash>/codex.exe.
+      // The Microsoft Store build of the Claude app keeps its copy under
+      // Claude-Data/claude_<publisher>/claude-code instead, and its Roaming
+      // folder is virtualised under Packages/Claude_<publisher>/LocalCache.
       ...(name === "claude"
         ? [
-            ...nestedExecutables(join(appData, "Claude", "claude-code"), 2, "claude.exe"),
-            ...nestedExecutables(join(appData, "Claude", "claude-code"), 1, "claude.exe"),
-          ]
+            join(appData, "Claude", "claude-code"),
+            ...childDirs(join(localAppData, "Claude-Data"), /^claude_/i).map((dir) => join(dir, "claude-code")),
+            ...childDirs(join(localAppData, "Packages"), /^claude_/i).map((dir) =>
+              join(dir, "LocalCache", "Roaming", "Claude", "claude-code"),
+            ),
+          ].flatMap((root) => [...nestedExecutables(root, 2, "claude.exe"), ...nestedExecutables(root, 1, "claude.exe")])
         : []),
       ...(name === "codex"
         ? [
@@ -547,14 +571,18 @@ export function runCli(cli, kind, prompt, model, webAccess) {
           : /rate.?limit|quota|too many requests|usage limit/.test(noise)
             ? "rate_limited"
             : "cli_incompatible";
+        const revoked = /invalidated|revoked|expired|\b401\b|unauthori[sz]ed/.test(noise);
         return reject({
           code,
           message:
             code === "cli_not_authenticated"
-              ? `\`${kind}\` is not signed in${said ? ` (${said})` : ""}. Sign in to ${CLI_APPS[kind] || kind}, then retry.`
+              ? revoked
+                ? `Your ${CLI_APPS[kind] || kind} sign-in has expired or was signed out, so \`${kind}\` was refused.`
+                : `\`${kind}\` is not signed in${said ? ` (${said})` : ""}. Sign in to ${CLI_APPS[kind] || kind}, then retry.`
               : code === "rate_limited"
                 ? `\`${kind}\` hit a usage limit${said ? `: ${said}` : ""}.`
                 : `\`${kind}\` failed with exit code ${status}${said ? `: ${said}` : ""}.`,
+          ...(code === "cli_not_authenticated" && revoked ? { hint: SIGN_IN_HINTS[kind] } : {}),
           detail: output.slice(0, 900),
         });
       }

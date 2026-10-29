@@ -37,7 +37,7 @@ const APPS: Record<CliKind, string> = { claude: "Claude", codex: "Codex", gemini
 
 // Copies the desktop apps bundle (Windows folders, or inside a macOS .app) and
 // WinGet packages are updated by their own installer; npm cannot repair them.
-const DESKTOP_APP = /[\\/]Claude[\\/]claude-code[\\/]|[\\/]OpenAI[\\/]Codex[\\/]bin[\\/]|\.app[\\/]/i;
+const DESKTOP_APP = /[\\/](Claude|claude_[^\\/]+)[\\/]claude-code[\\/]|[\\/]OpenAI[\\/]Codex[\\/]bin[\\/]|\.app[\\/]/i;
 const WINGET = /[\\/]WinGet[\\/]/i;
 
 /** How to repair the copy at `path` that was found but would not run. */
