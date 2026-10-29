@@ -341,7 +341,8 @@ export function createBrightspaceAdapter(config: BrightspaceSiteConfig, deps: Br
   async function contentItems(credentials: Credentials, course: Course): Promise<VleItem[]> {
     const cookies = cookiesOf(credentials);
     const v = await apiVersions();
-    const toc = await core(async () => getJson<{ Modules?: TocModule[] }>(await le(course.id, "/content/toc"), cookies, "content toc"));
+    // The session was already proven by myenrollments; a 403/404 here is one course with Content hidden or off.
+    const toc = await optional(async () => getJson<{ Modules?: TocModule[] }>(await le(course.id, "/content/toc"), cookies, "content toc"), {});
     const items: VleItem[] = [];
     const pages: Promise<void>[] = [];
     const walk = (module: TocModule, trail: string[], sectionIndex: number) => {

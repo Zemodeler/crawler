@@ -140,7 +140,10 @@ test("401 anywhere, or 403 on a core call, means sign in again", async () => {
   const invalid = (error: unknown) => error instanceof VleError && error.code === "invalid_token";
   await assert.rejects(adapterWith({ "/whoami": status(401) }).adapter.whoAmI(CREDENTIALS), invalid);
   await assert.rejects(adapterWith({ "/whoami": status(403) }).adapter.whoAmI(CREDENTIALS), invalid);
-  await assert.rejects(adapterWith({ "/content/toc": status(403) }).adapter.listItems(CREDENTIALS, COURSE), invalid);
+  await assert.rejects(adapterWith({ "/content/toc": status(401) }).adapter.listItems(CREDENTIALS, COURSE), invalid);
+  // One course with Content hidden must not end the whole sync.
+  await assert.doesNotReject(adapterWith({ "/content/toc": status(403) }).adapter.listItems(CREDENTIALS, COURSE));
+  await assert.doesNotReject(adapterWith({ "/content/toc": status(404) }).adapter.listItems(CREDENTIALS, COURSE));
   await assert.rejects(adapterWith({ "/dropbox/": status(401) }).adapter.listItems(CREDENTIALS, COURSE), invalid);
   await assert.rejects(adapterWith({ "/myenrollments/": () => new Response("", { status: 302, headers: { location: "/d2l/login" } }) }).adapter.listCourses(CREDENTIALS), invalid);
   await assert.rejects(adapterWith().adapter.whoAmI({ site: SITE, token: "", privateToken: null }), invalid);

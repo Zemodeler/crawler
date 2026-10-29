@@ -142,7 +142,8 @@ export function currentAcademicYear(now: Date): string {
 /** Courses synced unless the student says otherwise: this year's modules. */
 export function defaultSelection(now: Date): (course: Course, placement: ModulePlacement) => boolean {
   const year = currentAcademicYear(now);
-  return (_course, placement) => placement.isModule && placement.year === year;
+  // Brightspace often gives no dates and no year in the name; skipping those would sync nothing.
+  return (_course, placement) => placement.isModule && (placement.year === year || placement.year === "Undated");
 }
 
 export async function readState(root: string, io: Partial<DeadlineFileOps> = {}): Promise<SyncState> {
