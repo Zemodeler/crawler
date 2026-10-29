@@ -1,4 +1,6 @@
 /** Read-only Panopto captions client. Cookies are sent only to the Panopto site. */
+import type { Credentials, LoginBrowser } from "../types.ts";
+
 export class PanoptoError extends Error {
   readonly stage: string;
   readonly status: number;
@@ -14,6 +16,38 @@ export class PanoptoError extends Error {
 export const PANOPTO_SITES: Readonly<Record<string, string>> = {
   surrey: "https://surrey.cloud.panopto.eu",
 };
+
+/** Single sign-on pages by university id: the university's own identity provider, silent when already signed in. */
+const PANOPTO_LOGIN_PATHS: Readonly<Record<string, string>> = {
+  surrey: "/Panopto/Pages/Auth/Login.aspx?instance=SurreySSO&AllowBounce=true",
+};
+
+/** One line for a sync that reads only public recordings because there is no Panopto session. */
+export const PANOPTO_PUBLIC_ONLY = "Panopto: not signed in, so only public lecture recordings are transcribed. Sign in again to read the rest.";
+
+/**
+ * Signs in to the university's Panopto site through its single sign-on and
+ * resolves with that site's Cookie header; null when the university has no
+ * Panopto sign-in. The cookies are read for the Panopto origin only.
+ */
+export async function panoptoSignIn(universityId: string, browser: LoginBrowser): Promise<string | null> {
+  const site = PANOPTO_SITES[universityId];
+  const path = PANOPTO_LOGIN_PATHS[universityId];
+  if (!site || !path) return null;
+  if (!browser.captureCookies) throw new PanoptoError("sign-in", 0);
+  const origin = new URL(site).origin;
+  const cookies = await browser.captureCookies(new URL(path, origin).href, `${origin}/Panopto/Pages/`, origin);
+  // The sign-in page is under /Panopto/Pages/ too; without Panopto's auth cookie nothing was signed in.
+  if (!/(?:^|;\s*)\.ASPXAUTH=[^;]/.test(cookies ?? "")) throw new PanoptoError("sign-in", 0);
+  return cookies;
+}
+
+/** The sync's `panopto` option: the university's Panopto site with the saved session, if any. */
+export function panoptoOption(universityId: string, credentials: Credentials): { site: string; cookies?: string } | undefined {
+  const site = PANOPTO_SITES[universityId];
+  if (!site) return undefined;
+  return credentials.panoptoCookies ? { site, cookies: credentials.panoptoCookies } : { site };
+}
 
 export type PanoptoSession = { deliveryId: string; title: string; startUtc: string | null; hasCaptions: boolean };
 export type PanoptoDelivery = { title: string; startUtc: string | null; languages: number[] };

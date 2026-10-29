@@ -29,6 +29,9 @@ import {
   describeFreshness,
   disconnectCalendar,
   getUniversity,
+  PANOPTO_PUBLIC_ONLY,
+  panoptoOption,
+  panoptoSignIn,
   readState,
   sync,
   syncCalendarFromRoot,
@@ -52,7 +55,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   const userData = app.getPath("userData");
   const tokens = dependencies.tokens ?? createTokenStore({ safeStorage, dir: join(userData, "tokens") });
   const calendarTokens = dependencies.calendarTokens ?? createCalendarTokenStore({ safeStorage, dir: join(userData, "tokens") });
-  const loginBrowser = createLoginBrowser({ BrowserWindow, session, parent });
+  const loginBrowser = dependencies.loginBrowser ?? createLoginBrowser({ BrowserWindow, session, parent });
   const universities = ALL_UNIVERSITIES.filter((u) => ["qmul", "surrey"].includes(u.id));
   const selected = () => universities.find((u) => u.id === prefs().university) ?? universities.find((u) => u.id === "qmul");
   const adapterFor = (university) => dependencies.adapter ?? (dependencies.getUniversity ?? getUniversity)(university.id);
@@ -66,7 +69,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   let calendarState = { busy: false, lastReport: null, error: null };
 
   function emptyRun(state) {
-    return { state, course: null, coursesDone: 0, newFiles: 0, files: 0, failedCourses: [], error: null, finishedAt: null, summary: null };
+    return { state, course: null, coursesDone: 0, newFiles: 0, files: 0, failedCourses: [], error: null, finishedAt: null, summary: null, notice: null };
   }
 
   function prefs() {
@@ -150,11 +153,26 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       await checkLibrary(university);
       const credentials = await adapter.login(loginBrowser);
       await withLibraryOwner(libraryRoot(), adapter, credentials, () => tokens.save(credentials));
+      await signInToPanopto(university, adapter, credentials);
       return { ok: true };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     } finally {
       signingIn = false;
+    }
+  }
+
+  /**
+   * Lecture recordings, right after the university sign-in: silent through its
+   * single sign-on. A failure only leaves the sync reading public recordings.
+   */
+  async function signInToPanopto(university, adapter, credentials) {
+    if (!panoptoOption(university.id, credentials)) return;
+    try {
+      const panoptoCookies = await panoptoSignIn(university.id, loginBrowser);
+      if (panoptoCookies) await withLibraryOwner(libraryRoot(), adapter, credentials, () => tokens.save({ ...credentials, panoptoCookies }));
+    } catch {
+      console.error("Panopto sign-in did not finish; only public lecture recordings will be transcribed.");
     }
   }
 
@@ -297,10 +315,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       run = previous;
       return { error: error.message, ...(error?.code === LEGACY_LIBRARY ? { code: LEGACY_LIBRARY } : {}) };
     }
+    const panopto = panoptoOption(university.id, credentials);
+    if (panopto && !panopto.cookies) run.notice = PANOPTO_PUBLIC_ONLY;
     Promise.resolve().then(() => runSync({
       adapter,
       credentials,
       root,
+      ...(panopto ? { panopto } : {}),
       ...(module ? { select: (_course, placement) => `${placement.year}/${placement.folder}` === module } : {}),
       ...(assistant ? { ai: createHostAiRunner(assistant), confirmAi: confirmAiFor(origin, assistant) } : {}),
       onProgress(event) {

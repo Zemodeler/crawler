@@ -16,6 +16,7 @@ import { join, resolve } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { createMoodleAdapter } from "./adapters/moodle.ts";
+import { PANOPTO_PUBLIC_ONLY, panoptoOption, panoptoSignIn } from "./adapters/panopto.ts";
 import { ALL_UNIVERSITIES, getUniversity } from "./adapters/universities.ts";
 import { doctor } from "./doctor.ts";
 import { placeCourse } from "./naming.ts";
@@ -42,6 +43,8 @@ export type CliEnv = {
   err: (line: string) => void;
   fetch?: typeof fetch;
   now?: () => Date;
+  /** Tests replace the sync; the real one by default. */
+  sync?: typeof sync;
 };
 
 type Parsed = { command: string; positionals: string[]; flags: Map<string, string | true> };
@@ -167,6 +170,18 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
         const who = await adapter.whoAmI(credentials);
         await env.tokenStore.save(credentials);
         env.out(`Signed in. (${who.permittedFunctions.length} web-service functions allowed.)`);
+        // Lecture recordings: silent through the university's single sign-on; without it only public ones are read.
+        if (panoptoOption(adapter.id, credentials)) {
+          try {
+            const panoptoCookies = await panoptoSignIn(adapter.id, env.loginBrowser);
+            if (panoptoCookies) {
+              await env.tokenStore.save({ ...credentials, panoptoCookies });
+              env.out("Signed in to Panopto for lecture recordings.");
+            }
+          } catch {
+            env.out("Panopto sign-in did not finish, so only public lecture recordings will be transcribed.");
+          }
+        }
         return 0;
       }
 
@@ -180,7 +195,9 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
 
         if (parsed.command === "courses") return await coursesCommand(parsed, env, adapter, credentials, root, now());
 
-        const result = await sync({
+        const panopto = parsed.flags.has("no-transcripts") ? undefined : panoptoOption(adapter.id, credentials);
+        if (panopto && !panopto.cookies) env.out(PANOPTO_PUBLIC_ONLY);
+        const result = await (env.sync ?? sync)({
           adapter,
           credentials,
           root,
@@ -189,6 +206,7 @@ export async function runCli(argv: string[], env: CliEnv): Promise<number> {
           // --ai: the student asked for it on the command line, so no further confirmation.
           ...(parsed.flags.has("ai") && env.ai ? { ai: env.ai, confirmAi: async () => true } : {}),
           ...(parsed.flags.has("no-transcripts") ? { transcripts: false } : {}),
+          ...(panopto ? { panopto } : {}),
           onProgress: (event) => progress(env, event),
         });
         summarize(env, result, root);

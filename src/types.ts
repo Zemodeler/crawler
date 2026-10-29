@@ -15,6 +15,8 @@ export type Credentials = {
   privateToken: string | null;
   /** Cookie header value for session-cookie platforms (Brightspace); never logged or put in a URL. */
   cookies?: string;
+  /** Cookie header for the university's Panopto site (PANOPTO_SITES); sent only there, never logged. */
+  panoptoCookies?: string;
 };
 
 /** Persists credentials encrypted (Electron safeStorage in the app). */
