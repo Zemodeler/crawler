@@ -16,6 +16,14 @@ test("'CODE - Title - year' names", () => {
   });
 });
 
+test("Surrey four-digit module codes", () => {
+  const placed = placeCourse(course("COM1025 Foundations of Computing I", "COM1025", london("2025-09-22T00:00:00Z")));
+  assert.equal(placed.code, "COM1025");
+  assert.equal(placed.title, "Foundations of Computing I");
+  assert.equal(placed.year, "2025-26");
+  assert.equal(placed.isModule, true);
+});
+
 test("'CODE Title year' names without separators", () => {
   assert.deepEqual(placeCourse(course("ECS505U Software Engineering 2026/27", "ECS505U 2026/27")), {
     code: "ECS505U",

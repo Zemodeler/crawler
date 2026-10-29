@@ -7,10 +7,10 @@ import type { Course, ModulePlacement } from "./types.ts";
 
 const MAX_SEGMENT = 120;
 
-/** First module code in a name: "ECS505U", "ECS401A". */
-const CODE = /(?<![A-Za-z0-9])[A-Z]{3}\d{3}[A-Z]?(?![A-Za-z0-9])/;
+/** First module code in a name: "ECS505U", "ECS401A" (QMUL), "COM1025" (Surrey). */
+const CODE = /(?<![A-Za-z0-9])[A-Z]{3}\d{3,4}[A-Z]?(?![A-Za-z0-9])/;
 /** A code plus any "/ECS401A"-style siblings right after it. */
-const CODE_RUN = (code: string) => new RegExp(`${code}(?:\\s*/\\s*[A-Z]{3}\\d{3}[A-Z]?(?![A-Za-z0-9]))*`);
+const CODE_RUN = (code: string) => new RegExp(`${code}(?:\\s*/\\s*[A-Z]{3}\\d{3,4}[A-Z]?(?![A-Za-z0-9]))*`);
 /** "2026/27", "2026-27", "2026/2027". */
 const YEAR = /(?<!\d)(20\d{2})\s*[/\-–]\s*(?:20)?(\d{2})(?!\d)/;
 const YEAR_ALL = new RegExp(YEAR.source, "g");
