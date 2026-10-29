@@ -19,6 +19,8 @@ export type SyncRun = {
   /** "legacy_library" when a sync Study Hub started on its own met a library with no owner record. */
   code?: string | null;
   finishedAt: string | null;
+  /** A one-line heads-up about the run, e.g. only public Panopto recordings were read. */
+  notice?: string | null;
   /** What the last finished sync found; null while running or before the first. */
   summary: {
     deadlines: number;

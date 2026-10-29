@@ -97,6 +97,7 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
         {error ||
           (run?.state === "failed" ? run.error : run?.state === "done" ? `Synced at ${time}, ${findings}` : freshness)}
       </small>
+      {run?.state === "done" && run.notice && <small className="sync-notice">{run.notice}</small>}
       {run?.state === "done" && <ExtractionWarnings summary={run.summary} />}
     </div>
   );
