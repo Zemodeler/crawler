@@ -426,15 +426,15 @@ export function changeLines(previous: Deadline[], merged: Deadline[]): string[] 
 
     for (const change of fresh) {
       if (change.field === "added" && change.from === "removed") {
-        lines.push(`${label} — back on QMplus`);
+        lines.push(`${label} — back on the course page`);
       } else if (change.field === "added") {
         lines.push(`${label} — new deadline, ${d.due ? `due ${formatShort(d.due)}` : "date TBC"}`);
       } else if (change.field === "removed") {
         const fromText = d.id.includes(":text:");
         lines.push(
           d.status === "user-verified"
-            ? `${label} — ${fromText ? "no longer found in the course material" : "removed from QMplus"}, but kept because you confirmed it`
-            : `${label} — ${fromText ? "no longer found in the course material" : "removed from QMplus"}`,
+            ? `${label} — ${fromText ? "no longer found in the course material" : "removed from the course page"}, but kept because you confirmed it`
+            : `${label} — ${fromText ? "no longer found in the course material" : "removed from the course page"}`,
         );
       } else if (change.field === "title") {
         lines.push(`${label} — renamed from "${change.from ?? ""}"`);

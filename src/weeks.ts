@@ -36,6 +36,14 @@ export const TERM_WEEKS: Record<string, Record<string, TermConfig>> = {
   qmul: {
     "2026-27 Semester A": { termStart: "2026-09-21", readingWeeks: [], weeks: 12 },
   },
+  // Surrey key dates (surrey.ac.uk/about/facts/key-dates): Semester 1 teaching
+  // 28 Sep - 11 Dec 2026; Semester 2 from 8 Feb 2027 with spring vacation
+  // 22 Mar - 9 Apr (calendar weeks 7-9, left out of the numbering) to 14 May.
+  // Surrey says "Semester 1/2"; the labels stay A/B like QM's.
+  surrey: {
+    "2026-27 Semester A": { termStart: "2026-09-28", readingWeeks: [], weeks: 11 },
+    "2026-27 Semester B": { termStart: "2027-02-08", readingWeeks: [7, 8, 9], weeks: 11 },
+  },
 };
 
 /** The configured week map for a term, or null when the term isn't configured. */

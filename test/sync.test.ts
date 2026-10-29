@@ -635,7 +635,7 @@ test("a file already in the way is not overwritten", async () => {
     await writeFile(join(t.lectureDir, "01 - Lecture1.pdf"), "something of mine");
     await t.run();
     assert.equal(await read(join(t.lectureDir, "01 - Lecture1.pdf")), "something of mine");
-    assert.equal(await read(join(t.lectureDir, "01 - Lecture1 (from QMplus).pdf")), "lecture one");
+    assert.equal(await read(join(t.lectureDir, "01 - Lecture1 (from course page).pdf")), "lecture one");
   } finally {
     await t.cleanup();
   }
@@ -720,7 +720,7 @@ test("a deadline removed from the VLE is cancelled, but a switched-off course ke
     await writeFile(t.path(".crawler", "state.json"), JSON.stringify({ version: 1, lastSync: null, courses: {} }));
     const on = await t.run(new Date("2026-10-20T09:00:00Z"));
     assert.equal(on.deadlines[0]!.status, "cancelled");
-    assert.ok(on.changes.some((l) => l.includes("removed from QMplus")));
+    assert.ok(on.changes.some((l) => l.includes("removed from the course page")));
   } finally {
     await t.cleanup();
   }

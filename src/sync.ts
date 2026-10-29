@@ -438,7 +438,7 @@ async function syncFile(ctx: FileContext): Promise<{ result: FileResult; line?: 
     /* A file we have never written. */
     if (!entry) {
       const wanted = safeJoin(root, job.relativePath);
-      const target = (await exists(wanted)) ? await freeSibling(wanted, "from QMplus") : wanted;
+      const target = (await exists(wanted)) ? await freeSibling(wanted, "from course page") : wanted;
       const { sha256 } = await fetchTo(target);
       record(toRelative(root, target), sha256);
       return { result: "new", line: `new file ${display}` };

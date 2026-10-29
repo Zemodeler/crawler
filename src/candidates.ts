@@ -68,7 +68,7 @@ const CITATION_RE = /\b(?:accessed|retrieved|doi|isbn|proceedings|journal\s+of)\
 const REFERENCES_HEADING_RE = /^\s*(?:\d+(?:\.\d+)*\.?\s+)?(?:references|bibliography|reading\s+list|further\s+reading|works\s+cited|sources)\s*:?\s*$/i;
 
 const TITLE_RE =
-  /\b(?:(?:mid-?term|in-term|end-term|term|final|class|in-class|in-person|in-lab|practice|online|group|individual|written|practical|programming|lab)\s+)?(?:coursework|assignment|lab\s+test|lab\s+report|test|quiz|exam(?:ination)?|presentation|project|essay|report|viva)(?:\s+(?:\d+|[A-Z])\b)?|\bCW\s*(?:\(?\s*part\s*\)?\s*)?\d+\b/gi;
+  /\b(?:(?:mid-?term|in-term|end-term|term|in-semester|end-of-semester|unseen|final|class|in-class|in-person|in-lab|practice|online|group|individual|written|practical|programming|lab)\s+)?(?:coursework|assignment|lab\s+test|lab\s+report|test|quiz|exam(?:ination)?|presentation|project|essay|report|viva|portfolio|dissertation|poster|logbook|case\s+study)(?:\s+(?:\d+|[A-Z])\b)?|\bCW\s*(?:\(?\s*part\s*\)?\s*)?\d+\b/gi;
 
 /** "CW (Part) 1", "CW part 2", "CW1": QMUL's shorthand for Coursework N. */
 const CW_RE = /^CW\s*(?:\(?\s*part\s*\)?\s*)?(\d+)$/i;

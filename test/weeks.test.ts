@@ -96,6 +96,16 @@ test("teachingWeekAt: teaching began Tue 22 Sep 2026, so that week is week 1", (
   assert.deepEqual(week("2026-12-07T12:00:00Z"), { term: "2026-27 Semester A", week: 12, monday: "2026-12-07" });
   assert.equal(week("2026-12-14T12:00:00Z"), null); // after the last teaching week
   assert.equal(week("2027-01-26T12:00:00Z"), null); // Semester B numbering remains unverified
-  assert.equal(teachingWeekAt("surrey", new Date("2026-10-17T12:00:00Z")), null);
-  assert.equal(teachingWeekAt("surrey", new Date("2027-02-08T12:00:00Z")), null);
+});
+
+test("teachingWeekAt: Surrey 2026-27, spring vacation left out of Semester 2 numbering", () => {
+  const week = (iso: string) => teachingWeekAt("surrey", new Date(iso));
+  assert.equal(week("2026-09-28T12:00:00Z")?.week, 1);
+  assert.equal(week("2026-12-07T12:00:00Z")?.week, 11);
+  assert.equal(week("2026-12-14T12:00:00Z"), null);
+  assert.deepEqual(week("2027-02-08T12:00:00Z"), { term: "2026-27 Semester B", week: 1, monday: "2027-02-08" });
+  assert.equal(week("2027-03-15T12:00:00Z")?.week, 6);
+  assert.equal(week("2027-03-29T12:00:00Z"), null); // spring vacation
+  assert.equal(week("2027-04-12T12:00:00Z")?.week, 7);
+  assert.equal(week("2027-05-10T12:00:00Z")?.week, 11);
 });

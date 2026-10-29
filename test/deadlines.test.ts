@@ -254,7 +254,7 @@ test("merge records added, moved and removed deadlines and keeps notes", () => {
   assert.equal(third.find((d) => d.title === "Coursework 2")!.history.length, cw2.history.length);
 
   assert.deepEqual(changeLines(withNote, second), [
-    "ECS505U · Lab report — removed from QMplus",
+    "ECS505U · Lab report — removed from the course page",
     "ECS505U · Coursework 2 — due moved 3 Mar 12:00 → 10 Mar 12:00",
   ]);
   assert.deepEqual(changeLines(second, third), []);
@@ -408,7 +408,7 @@ test("a user-verified deadline removed from QMplus is kept and reported once", (
       ["removed", "user-verified", "user-verified"],
     ],
   );
-  assert.deepEqual(changeLines([verified], [kept!]), ["ECS505U · Coursework 2 — removed from QMplus, but kept because you confirmed it"]);
+  assert.deepEqual(changeLines([verified], [kept!]), ["ECS505U · Coursework 2 — removed from the course page, but kept because you confirmed it"]);
 
   const [again] = mergeDeadlines([kept!], [], later);
   assert.equal(again?.status, "user-verified");
@@ -428,14 +428,14 @@ test("a user-verified deadline that is removed, restored and removed again is re
     restored!.history.map((h) => h.field),
     ["added", "removed", "added"],
   );
-  assert.deepEqual(changeLines([removed!], [restored!]), ["ECS505U · Coursework 2 — back on QMplus"]);
+  assert.deepEqual(changeLines([removed!], [restored!]), ["ECS505U · Coursework 2 — back on the course page"]);
   const muchLater = new Date(evenLater.getTime() + 86_400_000);
   const [removedAgain] = mergeDeadlines([restored!], [], muchLater);
   assert.deepEqual(
     removedAgain!.history.map((h) => h.field),
     ["added", "removed", "added", "removed"],
   );
-  assert.deepEqual(changeLines([restored!], [removedAgain!]), ["ECS505U · Coursework 2 — removed from QMplus, but kept because you confirmed it"]);
+  assert.deepEqual(changeLines([restored!], [removedAgain!]), ["ECS505U · Coursework 2 — removed from the course page, but kept because you confirmed it"]);
 });
 
 test("a fresh deadline with two vle-field sources keeps only one, so it cannot conflict with itself", () => {
