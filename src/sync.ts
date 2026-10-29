@@ -41,6 +41,7 @@ import { planFiles } from "./sorter.ts";
 import type { FileJob } from "./sorter.ts";
 import { renameWithRetry } from "./fs-retry.ts";
 import { syncTranscripts } from "./transcripts.ts";
+import { PANOPTO_SITES } from "./adapters/panopto.ts";
 import { VleError } from "./types.ts";
 import type {
   AiRunner,
@@ -72,12 +73,14 @@ export type SyncOptions = {
   confirmAi?: (documents: number) => Promise<boolean>;
   /** Read downloaded documents, announcements and pages for deadlines. Default true. */
   textDeadlines?: boolean;
-  /** Save lecture-recording captions (Echo360) as text in Transcripts/. Default true. */
+  /** Save lecture-recording captions (Echo360, Panopto) as text in Transcripts/. Default true. */
   transcripts?: boolean;
-  /** Injected for tests; the Echo360 client uses global fetch otherwise. */
+  /** Injected for tests; the caption clients use global fetch otherwise. */
   transcriptFetch?: typeof fetch;
-  /** Pause between Echo360 requests, in ms (default 500). */
+  /** Pause between caption requests, in ms (default 500). */
   transcriptPauseMs?: number;
+  /** Panopto session for the university's Panopto site (PANOPTO_SITES); without it only public recordings are read. */
+  panopto?: { site: string; cookies?: string };
   onProgress?: (event: SyncEvent) => void;
   /** Per-call file operations for storage failure tests. */
   storage?: Partial<DeadlineFileOps>;
@@ -239,7 +242,9 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
         else if (result.line) fileChanges.push(`${label} · ${result.line}`);
         emit({ type: "file", course: course.shortname, path: job.relativePath, result: result.result });
       });
-      if (options.transcripts !== false && adapter.ltiLaunch) {
+      const panoptoSite = PANOPTO_SITES[adapter.id];
+      const panopto = options.panopto ?? (panoptoSite ? { site: panoptoSite } : undefined);
+      if (options.transcripts !== false && (adapter.ltiLaunch || panopto)) {
         const got = await syncTranscripts({
           adapter,
           credentials,
@@ -251,6 +256,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
           now,
           ...(options.transcriptFetch ? { fetch: options.transcriptFetch } : {}),
           ...(options.transcriptPauseMs !== undefined ? { pauseMs: options.transcriptPauseMs } : {}),
+          ...(panopto ? { panopto } : {}),
         });
         report.transcripts = { added: got.added.length, skippedNoCaptions: got.skippedNoCaptions, failed: got.failed, ...(got.error ? { error: got.error } : {}) };
         for (const path of got.added) emit({ type: "file", course: course.shortname, path, result: "new" });
