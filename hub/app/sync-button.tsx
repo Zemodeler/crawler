@@ -36,6 +36,8 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
           setFreshness("last synced just now");
           onSynced();
         }
+        // An expired sign-in is cleared by the sync; show the way back in.
+        if (next.state === "failed") setupStatus().then((s) => setSignedIn(s.signedIn)).catch(() => {});
       });
     } catch (e) {
       if ((e as { code?: string }).code === LEGACY_LIBRARY) {
@@ -43,7 +45,10 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
         const status = await setupStatus().catch(() => null);
         if (status) setLibrary({ status, open: true });
         else setError((e as Error).message);
-      } else setError((e as Error).message);
+      } else {
+        setError((e as Error).message);
+        setupStatus().then((s) => setSignedIn(s.signedIn)).catch(() => {});
+      }
     }
   };
 
@@ -54,7 +59,8 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
     void begin();
   };
 
-  if (!signedIn)
+  const message = error || (run?.state === "failed" ? run.error : "");
+  if (!signedIn || /sign in again/i.test(message ?? ""))
     return (
       <a className="switch sync-button" href="/welcome">
         Sign in to sync
