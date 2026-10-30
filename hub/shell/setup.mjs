@@ -451,6 +451,10 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       });
       return { modules };
     } catch (error) {
+      if (error instanceof VleError && error.code === "invalid_token") {
+        await tokens.clear(adapter.site);
+        return { error: `Your ${university.displayName} sign-in has expired. Sign in again.`, code: "signed_out" };
+      }
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }

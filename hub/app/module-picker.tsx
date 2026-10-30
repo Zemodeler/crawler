@@ -15,6 +15,7 @@ export default function ModulePicker({ onSaved, saveLabel = "Continue" }: { onSa
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
 
   const load = () =>
     listModules()
@@ -22,7 +23,10 @@ export default function ModulePicker({ onSaved, saveLabel = "Continue" }: { onSa
         setModules(modules);
         setPicked(Object.fromEntries(modules.map((m) => [m.shortname, m.enabled])));
       })
-      .catch((e) => setError((e as Error).message));
+      .catch((e) => {
+        setSignedOut((e as { code?: string }).code === "signed_out");
+        setError((e as Error).message);
+      });
   useEffect(() => {
     load();
   }, []);
@@ -55,6 +59,12 @@ export default function ModulePicker({ onSaved, saveLabel = "Continue" }: { onSa
     }
   };
 
+  if (!modules && signedOut)
+    return (
+      <p className="form-error" role="alert">
+        {error} <a href="/welcome">Sign in again</a>
+      </p>
+    );
   if (!modules) return error ? <p className="form-error" role="alert">{error}</p> : <p className="quiet">Loading your modules…</p>;
 
   const years = [...new Set(modules.map((m) => m.year))].sort((a, b) => (a === "Undated" ? 1 : b === "Undated" ? -1 : b.localeCompare(a)));

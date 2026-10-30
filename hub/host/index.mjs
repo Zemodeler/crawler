@@ -461,7 +461,7 @@ export async function handleSetup(setup, request, response, url) {
   }
   if (url.pathname === "/api/setup/modules" && request.method === "GET") {
     const result = await setup.listModules();
-    sendJson(response, result.error ? 400 : 200, result.error ? { code: "setup_failed", message: result.error } : result);
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: result.code ?? "setup_failed", message: result.error } : result);
     return;
   }
   if (url.pathname === "/api/setup/packs" && request.method === "GET") {
