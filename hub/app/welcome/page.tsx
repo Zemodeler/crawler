@@ -227,6 +227,12 @@ export default function Welcome() {
                       {run?.course ? <>Now: <b>{run.course}</b> · </> : null}
                       {run?.coursesDone || 0} module{run?.coursesDone === 1 ? "" : "s"} done · {run?.newFiles || 0} new files
                     </p>
+                    {/* Once a module is on disk the hub can open it; the sync keeps running in the desktop app. */}
+                    {run?.coursesDone ? (
+                      <div className="welcome-actions">
+                        <button className="text-link" onClick={finish}>Open Study Hub now; the sync carries on</button>
+                      </div>
+                    ) : null}
                   </>
                 )}
                 {run?.state === "done" && (
