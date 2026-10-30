@@ -12,6 +12,7 @@
  */
 
 import { app, BrowserWindow, Menu, MenuItem, Notification, Tray, dialog, nativeImage, safeStorage, session, shell } from "electron";
+import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +24,7 @@ import { LOGIN_ITEM, createBackground } from "./background.mjs";
 import { createSetup } from "./setup.mjs";
 import { createAutoGenerator } from "./auto-generate.mjs";
 import { listLibrary } from "../host/library.mjs";
-import { showUpdateInstructions } from "./updates.mjs";
+import { createUpdater } from "./updates.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SELFTEST = process.argv.includes("--selftest");
@@ -40,6 +41,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 let mainWindow = null;
 let hostUrl = null;
 let quitting = false;
+let updater = null;
 
 function createWindow(url) {
   mainWindow = new BrowserWindow({
@@ -145,12 +147,19 @@ app.whenReady().then(async () => {
     ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
     { role: "fileMenu" }, { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
   ]);
+  let setup;
+  let background;
+  updater = createUpdater({
+    app, dialog, Notification, spawn,
+    window: () => mainWindow,
+    busy: () => Boolean(setup?.libraryBusy()),
+    onChange: () => background?.refreshTray(),
+  });
   menu.append(new MenuItem({ label: "Updates", submenu: [
-    { label: "Update instructions…", click: () => void showUpdateInstructions({ dialog, version: app.getVersion() }) },
+    { label: "Check for updates…", click: () => void updater.check({ manual: true }) },
   ] }));
   Menu.setApplicationMenu(menu);
   let host;
-  let setup;
   try {
     await formatLibrary(libraryRoot()).catch((error) => console.error(`Study Hub materials index: ${error.message}`));
     setup = createSetup({ app, BrowserWindow, safeStorage, session, shell, dialog, libraryRoot, parent: () => mainWindow });
@@ -175,10 +184,10 @@ app.whenReady().then(async () => {
     app.exit(ok ? 0 : 1);
     return;
   }
-  const background = createBackground({
+  background = createBackground({
     app, Notification, Tray, Menu, nativeImage,
     iconPath: join(HERE, "..", "public", "icon.png"),
-    setup, libraryRoot, openPage,
+    setup, libraryRoot, openPage, updater,
   });
   const packLog = join(app.getPath("userData"), "study-packs.log");
   const packs = createAutoGenerator({
@@ -211,8 +220,10 @@ app.whenReady().then(async () => {
   setup.onSynced = (result) => {
     background.onSynced(result);
     void packs.afterSync(result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
+    void updater.remind();
   };
   background.start();
+  updater.start();
   if (SYNC_FLAG) void setup.startBackgroundSync("tray");
   // Modules synced before automatic packs existed get theirs now; up-to-date ones are skipped.
   newestModules()
@@ -231,6 +242,7 @@ app.on("activate", () => openPage(""));
 
 app.on("before-quit", () => {
   quitting = true;
+  updater?.installOnQuit();
 });
 
 app.on("second-instance", () => {

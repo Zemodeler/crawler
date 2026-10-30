@@ -467,6 +467,8 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     calendarSync,
     calendarDisconnect,
     prefs,
+    /** Why the library cannot change right now (sign-in, sync, study packs), or null. */
+    libraryBusy,
     set onSynced(callback) {
       onSynced = callback;
     },

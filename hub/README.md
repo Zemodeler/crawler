@@ -38,6 +38,14 @@ It prints the folder holding `Study-Hub-<version>-win-x64.exe` (or the `.dmg` on
 macOS), under `hub/outputs/desktop-release-*/artifacts`. The installer is
 unsigned, so Windows SmartScreen asks once: **More info → Run anyway**.
 
+From 1.0.4, an installed Study Hub on Windows updates itself from this
+repository's latest GitHub release: it downloads the new installer in the
+background, checks it against the SHA-256 GitHub shows for the file, then asks
+to restart (or installs when you quit it). For a release to reach it, publish
+it as the latest release (not a draft or pre-release), tag it `v<version>`
+matching `hub/package.json`, and attach the installer under its built name,
+`Study-Hub-<version>-win-x64.exe`. **Updates → Check for updates…** checks now.
+
 On first launch Study Hub asks you to:
 
 1. **Sign in to your university.** Its own sign-in page opens in a separate

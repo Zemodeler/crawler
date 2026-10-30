@@ -45,9 +45,10 @@ export function toastsFor(events, max = MAX_TOASTS) {
   return [...shown, { kind: "files-summary", title: "Study Hub", body: `${events.length - shown.length} more updates in your calendar.` }];
 }
 
-export function createBackground({ app, Notification, Tray, Menu, nativeImage, iconPath, setup, libraryRoot, openPage }) {
+export function createBackground({ app, Notification, Tray, Menu, nativeImage, iconPath, setup, libraryRoot, openPage, updater = null }) {
   let tray = null;
   let timer = null;
+  let refreshTray = () => {};
 
   function notify(events) {
     if (!Notification.isSupported()) return;
@@ -105,6 +106,9 @@ export function createBackground({ app, Notification, Tray, Menu, nativeImage, i
         Menu.buildFromTemplate([
           { label: "Open Study Hub", click: () => openPage("") },
           { label: "Sync now", click: () => setup.startBackgroundSync("tray") },
+          ...(updater?.status().state === "ready"
+            ? [{ label: `Restart to update to ${updater.status().version}`, click: () => updater.restartNow() }]
+            : []),
           { type: "separator" },
           {
             label: "Start at login",
@@ -120,6 +124,7 @@ export function createBackground({ app, Notification, Tray, Menu, nativeImage, i
         ]),
       );
     };
+    refreshTray = refresh;
     refresh();
     tray.on("click", () => openPage(""));
   }
@@ -142,5 +147,7 @@ export function createBackground({ app, Notification, Tray, Menu, nativeImage, i
     notify,
     remind,
     maybeSync,
+    /** Rebuilds the tray menu, e.g. when an update is ready. */
+    refreshTray: () => refreshTray(),
   };
 }

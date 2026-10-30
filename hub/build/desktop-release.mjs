@@ -151,7 +151,7 @@ export async function release(args = process.argv.slice(2)) {
   const config = { ...builderConfig, electronVersion: "44.7.2", directories: { app: stage, output: join(work, "artifacts") } };
   const configPath = join(work, "builder.json");
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n");
-  await writeFile(join(work, "release.json"), JSON.stringify({ platform, arch: process.arch, stage, dist, unsigned: true, automaticUpdates: false, builder: BUILDER }, null, 2) + "\n");
+  await writeFile(join(work, "release.json"), JSON.stringify({ platform, arch: process.arch, stage, dist, unsigned: true, automaticUpdates: "github-releases", builder: BUILDER }, null, 2) + "\n");
   console.log(`Staged runtime: ${stage}`);
   if (!args.includes("--stage-only"))
     await runNode(require.resolve("electron-builder/cli.js"), ["--projectDir", stage, "--config", configPath, `--${platform}`, ...(args.includes("--dir") ? ["--dir"] : []), "--publish", "never"], ROOT, { CSC_IDENTITY_AUTO_DISCOVERY: "false" });
