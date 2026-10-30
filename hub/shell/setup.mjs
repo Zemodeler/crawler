@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { mkdir, rename } from "node:fs/promises";
+import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 import {
@@ -32,7 +32,10 @@ import {
   PANOPTO_PUBLIC_ONLY,
   panoptoOption,
   panoptoSignIn,
+  defaultSelection,
+  placeCourse,
   readState,
+  setCourseChoices,
   sync,
   syncCalendarFromRoot,
 } from "crawler";
@@ -417,6 +420,73 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     return { ok: true, backup };
   }
 
+  /**
+   * Every course the university lists, with whether it syncs (the student's
+   * choice, else this year's modules) and whether its folder is on disk.
+   */
+  async function listModules() {
+    const university = selected();
+    const adapter = adapterFor(university);
+    const credentials = await tokens.load(adapter.site);
+    if (!credentials) return { error: `Sign in to ${university.displayName} first.` };
+    const root = libraryRoot();
+    try {
+      const courses = await adapter.listCourses(credentials);
+      const state = await readState(root);
+      const byDefault = defaultSelection(new Date(), courses);
+      const modules = courses.map((course) => {
+        const placement = placeCourse(course);
+        const key = `${placement.year}/${placement.folder}`;
+        const chosen = state.courses[course.shortname]?.enabled;
+        return {
+          shortname: course.shortname,
+          name: placement.folder,
+          year: placement.year,
+          key,
+          isModule: placement.isModule,
+          recommended: byDefault(course, placement),
+          enabled: chosen ?? byDefault(course, placement),
+          onDisk: existsSync(join(root, placement.year, placement.folder)),
+        };
+      });
+      return { modules };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /** `choices`: { shortname: true|false }, kept in the library's state.json. */
+  async function saveModules(body = {}) {
+    const busy = libraryBusy();
+    if (busy) return { error: busy };
+    const choices = body.choices;
+    if (!choices || typeof choices !== "object" || Object.values(choices).some((v) => typeof v !== "boolean")) return { error: "No module choices." };
+    try {
+      await setCourseChoices(libraryRoot(), choices);
+      return { ok: true };
+    } catch (error) {
+      return { error: error.message };
+    }
+  }
+
+  /** Deletes a module's folder ("year/module") and stops syncing it, so it does not come back. */
+  async function removeModule(body = {}) {
+    const busy = libraryBusy();
+    if (busy) return { error: busy };
+    if (!isModuleKey(body.module)) return { error: "No such module." };
+    const root = resolve(libraryRoot());
+    const folder = resolve(root, body.module);
+    if (!folder.startsWith(root + sep) || body.module.startsWith(".")) return { error: "No such module." };
+    try {
+      if (typeof body.shortname === "string" && body.shortname) await setCourseChoices(root, { [body.shortname]: false });
+      await rm(folder, { recursive: true, force: true });
+      return { ok: true };
+    } catch (error) {
+      const locked = ["EBUSY", "EPERM", "EACCES"].includes(error?.code);
+      return { error: locked ? "A file in that module is open. Close it and try again." : error.message };
+    }
+  }
+
   async function setSchedule(body = {}) {
     try {
       await writeSchedule(libraryRoot(), Number(body.everyDays));
@@ -462,6 +532,9 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     startBackgroundSync,
     claimLibrary,
     freshLibrary,
+    listModules,
+    saveModules,
+    removeModule,
     setSchedule,
     calendarConnect,
     calendarSync,

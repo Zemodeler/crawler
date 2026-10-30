@@ -91,6 +91,21 @@ export const claimLibrary = () => call<{ ok: true }>("/api/setup/library/claim",
 export const freshLibrary = () => call<{ ok: true; backup: string }>("/api/setup/library/fresh", "POST", {});
 export const LEGACY_LIBRARY = "legacy_library";
 export const setSchedule = (everyDays: 1 | 3 | 7) => call<{ ok: true }>("/api/setup/schedule", "POST", { everyDays });
+export type ModuleChoice = {
+  shortname: string;
+  name: string;
+  year: string;
+  /** "year/module", the folder in the library. */
+  key: string;
+  isModule: boolean;
+  /** Picked by default: this year's modules. */
+  recommended: boolean;
+  enabled: boolean;
+  onDisk: boolean;
+};
+export const listModules = () => call<{ modules: ModuleChoice[] }>("/api/setup/modules");
+export const saveModules = (choices: Record<string, boolean>) => call<{ ok: true }>("/api/setup/modules/save", "POST", { choices });
+export const removeModule = (module: string, shortname: string) => call<{ ok: true }>("/api/setup/modules/remove", "POST", { module, shortname });
 export const connectCalendar = () => call<{ ok: true }>("/api/setup/calendar/connect", "POST");
 export const syncCalendarNow = () => call<{ ok: true; report: CalendarReport | null }>("/api/setup/calendar/sync", "POST");
 export const disconnectCalendar = () => call<{ ok: true }>("/api/setup/calendar/disconnect", "POST");

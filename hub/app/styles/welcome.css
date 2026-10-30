@@ -40,3 +40,7 @@
 @media (max-width:700px){
   .welcome-card{padding:32px 20px}
 }
+.module-picker fieldset{border:0;margin:14px 0;padding:0}
+.module-picker legend{font-weight:600;margin-bottom:6px}
+.module-picker .welcome-actions{margin:14px 0}
+.module-choice{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:4px 0}

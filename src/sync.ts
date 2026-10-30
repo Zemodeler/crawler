@@ -142,11 +142,44 @@ export function currentAcademicYear(now: Date): string {
   return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
 }
 
-/** Courses synced unless the student says otherwise: this year's modules. */
-export function defaultSelection(now: Date): (course: Course, placement: ModulePlacement) => boolean {
+/** Study level from a 4-digit code: COM1025 → 1 (Surrey's first digit is the year of study). */
+function levelOf(placement: ModulePlacement): number | null {
+  const digits = /^[A-Z]{3}(\d)\d{3}/.exec(placement.code ?? "");
+  return digits ? Number(digits[1]) : null;
+}
+
+/**
+ * Courses synced unless the student says otherwise: this year's modules.
+ * Given every enrolled course, undated modules (Brightspace often has no dates)
+ * are narrowed to the highest study level among them, so first-year modules a
+ * student can still open are not downloaded again in later years.
+ */
+export function defaultSelection(now: Date, courses: Course[] = []): (course: Course, placement: ModulePlacement) => boolean {
   const year = currentAcademicYear(now);
-  // Brightspace often gives no dates and no year in the name; skipping those would sync nothing.
-  return (_course, placement) => placement.isModule && (placement.year === year || placement.year === "Undated");
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const levels = courses
+    .map((c) => placeCourse(c))
+    .filter((p) => p.isModule && p.year === "Undated")
+    .map(levelOf)
+    .filter((l): l is number => l !== null);
+  const top = levels.length ? Math.max(...levels) : null;
+  return (course, placement) => {
+    if (!placement.isModule) return false;
+    if (placement.year === year) return true;
+    if (placement.year !== "Undated") return false;
+    if (course.enddate && course.enddate < nowSec) return false;
+    const level = levelOf(placement);
+    return top === null || level === null || level === top;
+  };
+}
+
+/** Saves per-course switches; the caller should not run alongside a sync. */
+export async function setCourseChoices(root: string, choices: Record<string, boolean>): Promise<SyncState> {
+  const state = await readState(root);
+  for (const [shortname, enabled] of Object.entries(choices)) state.courses[shortname] = { ...state.courses[shortname], enabled };
+  await mkdir(join(root, STATE_DIR), { recursive: true });
+  await writeFile(join(root, STATE_DIR, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
+  return state;
 }
 
 export async function readState(root: string, io: Partial<DeadlineFileOps> = {}): Promise<SyncState> {
@@ -184,7 +217,6 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const root = resolve(options.root);
   const concurrency = Math.max(1, options.concurrency ?? 4);
   const startedAt = now.toISOString();
-  const select = options.select ?? defaultSelection(now);
   const emit = options.onProgress ?? (() => {});
 
   await enforceLibraryOwnerUnlocked(root, adapter, credentials);
@@ -199,6 +231,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const freshAssessments = new Map<string, AssessmentComponent[]>();
 
   const courses = await adapter.listCourses(credentials);
+  const select = options.select ?? defaultSelection(now, courses);
   const reports: CourseReport[] = [];
   const freshDeadlines: Deadline[] = [];
   const syncedKeys = new Set<string>();

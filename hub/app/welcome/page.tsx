@@ -1,5 +1,6 @@
 "use client";
 import ExtractionWarnings from "../extraction-warnings.tsx";
+import ModulePicker from "../module-picker.tsx";
 
 import { useEffect, useState } from "react";
 
@@ -8,11 +9,12 @@ import { isHosted, loadSettings, saveSettings } from "../../lib/ai/settings.ts";
 import type { ProviderId } from "../../lib/ai/types.ts";
 import { markSetupDone, setupStatus, selectUniversity, signIn, startSync, watchSync, type SetupStatus, type SyncRun } from "../../lib/setup.ts";
 
-type Step = "sign-in" | "assistant" | "sync";
+type Step = "sign-in" | "assistant" | "modules" | "sync";
 const STEPS: { id: Step; label: string }[] = [
   { id: "sign-in", label: "Sign in" },
   { id: "assistant", label: "Assistant" },
-  { id: "sync", label: "Your modules" },
+  { id: "modules", label: "Choose modules" },
+  { id: "sync", label: "Download" },
 ];
 
 const ASSISTANTS: { provider: ProviderId; cli: "claude" | "codex" | "gemini"; name: string; app: string }[] = [
@@ -99,7 +101,7 @@ export default function Welcome() {
 
   const chooseAssistant = (skip: boolean) => {
     if (!skip && provider) saveSettings({ ...loadSettings(), provider, transport: "subscription" });
-    beginSync();
+    setStep("modules");
   };
 
   const finish = () => {
@@ -158,7 +160,7 @@ export default function Welcome() {
 
             {step === "sign-in" && (
               <>
-                <p className="eyebrow">Step 1 of 3</p>
+                <p className="eyebrow">Step 1 of 4</p>
                 <h1>Sign in to {universityName}.</h1>
                 <p className="lede">
                   Your university&apos;s own sign-in page opens in a separate window. Study Hub never sees your password. It keeps
@@ -174,7 +176,7 @@ export default function Welcome() {
 
             {step === "assistant" && (
               <>
-                <p className="eyebrow">Step 2 of 3</p>
+                <p className="eyebrow">Step 2 of 4</p>
                 <h1>Choose your assistant.</h1>
                 <p className="lede">Study Hub uses the AI app already signed in on this computer to build study packs and answer questions. You can change this later in AI settings.</p>
                 <div className="assistant-choices" role="radiogroup" aria-label="Assistant">
@@ -211,14 +213,23 @@ export default function Welcome() {
               </>
             )}
 
+            {step === "modules" && (
+              <>
+                <p className="eyebrow">Step 3 of 4</p>
+                <h1>Choose your modules.</h1>
+                <p className="lede">This year&apos;s modules are ticked. Only ticked modules are downloaded; you can change this later in Calendar → Syncing.</p>
+                <ModulePicker onSaved={beginSync} saveLabel="Download these" />
+              </>
+            )}
+
             {step === "sync" && (
               <>
-                <p className="eyebrow">Step 3 of 3</p>
+                <p className="eyebrow">Step 4 of 4</p>
                 <h1>{run?.state === "done" ? "Your modules are ready." : run?.state === "failed" ? "The sync stopped." : "Fetching your modules…"}</h1>
                 {(!run || run.state === "running" || run.state === "idle") && (
                   <>
                     <p className="lede">
-                      The first sync downloads every file for this year&apos;s modules, which can take a few minutes. You can leave this window open.
+                      The first sync downloads every file for the modules you chose, which can take a few minutes. You can leave this window open.
                     </p>
                     <div className="sync-progress" role="progressbar" aria-label="Sync progress" aria-valuetext={`${run?.files || 0} files`}>
                       <span />

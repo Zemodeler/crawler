@@ -285,7 +285,7 @@ async function coursesCommand(parsed: Parsed, env: CliEnv, adapter: UniversityAd
   const [action, ...names] = parsed.positionals;
   const courses = await adapter.listCourses(credentials);
   const state = await readState(root);
-  const byDefault = defaultSelection(now);
+  const byDefault = defaultSelection(now, courses);
 
   if (action === "enable" || action === "disable") {
     if (!names.length) return fail(env, `Usage: crawler courses ${action} <course name or code>…`);

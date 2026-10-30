@@ -102,3 +102,12 @@ test("sanitizeSegment makes names safe on Windows and macOS", () => {
   assert.ok(long.endsWith(".pdf"));
   assert.equal(sanitizeSegment("y".repeat(300)).length, 120);
 });
+
+test("default selection keeps undated modules at the newest study level only", async () => {
+  const { defaultSelection } = await import("../src/sync.ts");
+  const make = (fullname: string, enddate: number | null = null) => ({ id: 1, shortname: fullname, fullname, startdate: null, enddate, url: "" });
+  const courses = [make("COM1025 Foundations"), make("COM2001 Systems"), make("COM2002 Databases"), make("COM2003 Old", 1), make("Library Skills")];
+  const select = defaultSelection(new Date("2026-10-30T00:00:00Z"), courses);
+  const picked = courses.filter((c) => select(c, placeCourse(c))).map((c) => c.fullname);
+  assert.deepEqual(picked, ["COM2001 Systems", "COM2002 Databases"]);
+});

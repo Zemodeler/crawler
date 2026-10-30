@@ -10,6 +10,7 @@ import {
   syncCalendarNow,
   type SetupStatus,
 } from "../../lib/setup.ts";
+import ModulePicker from "../module-picker.tsx";
 
 const EVERY: { days: 1 | 3 | 7; label: string }[] = [
   { days: 1, label: "Every day" },
@@ -73,6 +74,10 @@ export default function SyncSettings() {
           ? `Documents and announcements are also read by ${status.assistant === "codex" ? "ChatGPT" : status.assistant === "gemini" ? "Gemini" : "Claude"} on your subscription; every date it finds is checked against the document's own words.`
           : "Documents and announcements are read with rules only. Choose “My subscription” in AI settings to let your assistant read them too."}
       </p>
+
+      <h3 className="list-heading">Modules</h3>
+      <p className="quiet">Ticked modules sync. Remove an old module to delete its folder from this computer; it will not come back unless you tick it again.</p>
+      {status.signedIn ? <ModulePicker saveLabel="Save choices" /> : <p className="quiet">Sign in to choose modules.</p>}
 
       <h3 className="list-heading">Google Calendar</h3>
       {!cal.configured ? (

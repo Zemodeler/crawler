@@ -459,6 +459,11 @@ export async function handleSetup(setup, request, response, url) {
     sendJson(response, 200, await setup.status());
     return;
   }
+  if (url.pathname === "/api/setup/modules" && request.method === "GET") {
+    const result = await setup.listModules();
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: "setup_failed", message: result.error } : result);
+    return;
+  }
   if (url.pathname === "/api/setup/packs" && request.method === "GET") {
     sendJson(response, 200, setup.packsStatus?.() ?? { state: "idle", module: null });
     return;
@@ -471,6 +476,8 @@ export async function handleSetup(setup, request, response, url) {
     "/api/setup/library/claim": setup.claimLibrary,
     "/api/setup/library/fresh": setup.freshLibrary,
     "/api/setup/schedule": setup.setSchedule,
+    "/api/setup/modules/save": setup.saveModules,
+    "/api/setup/modules/remove": setup.removeModule,
     "/api/setup/packs/rebuild": setup.packsRebuild,
     "/api/setup/calendar/connect": setup.calendarConnect,
     "/api/setup/calendar/sync": setup.calendarSync,
