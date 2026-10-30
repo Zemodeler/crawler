@@ -169,22 +169,29 @@ export function createUpdater({
     if (install({ relaunch: true })) app.quit();
   }
 
-  async function ask() {
-    if (state.state !== "ready" || asked === state.version || busy()) return;
+  /** `manual`: the student asked, so answer even when busy or from the tray (a dialog, not a notification). */
+  async function ask({ manual = false } = {}) {
+    if (state.state !== "ready" || asked === state.version) return;
+    if (busy()) {
+      if (manual) await dialog.showMessageBox({ type: "info", buttons: ["OK"], message: `Study Hub ${state.version} is downloaded.`, detail: "It installs once the sync or study pack in progress finishes, or when you quit Study Hub." });
+      return;
+    }
     asked = state.version;
     const owner = window();
-    if (!owner || owner.isDestroyed?.() || !owner.isVisible?.()) {
+    const visible = owner && !owner.isDestroyed?.() && owner.isVisible?.();
+    if (!visible && !manual) {
       if (!Notification?.isSupported?.()) return;
       const note = new Notification({ title: `Study Hub ${state.version} is ready`, body: "Click to restart and update. Otherwise it installs when you quit Study Hub." });
       note.on?.("click", () => restartNow());
       note.show();
       return;
     }
-    const { response } = await dialog.showMessageBox(owner, {
+    const options = {
       type: "info", buttons: ["Restart now", "Later"], defaultId: 0, cancelId: 1,
       message: `Study Hub ${state.version} is ready to install.`,
       detail: "Study Hub restarts in a few seconds. Your library and settings are kept. Choose Later to install it when you quit Study Hub.",
-    });
+    };
+    const { response } = visible ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
     if (response === 0) restartNow();
   }
 
@@ -193,6 +200,7 @@ export function createUpdater({
       if (manual) await dialog.showMessageBox({ type: "info", title: "Update Study Hub", buttons: ["OK"], message: `Study Hub ${version}`, detail: MANUAL_UPDATE });
       return state;
     }
+    if (manual && state.state === "downloading") void dialog.showMessageBox({ type: "info", buttons: ["OK"], message: `Downloading Study Hub ${state.version}…`, detail: "Study Hub asks to restart once the download is checked." });
     checking ??= (async () => {
       try {
         if (state.state !== "ready") {
@@ -204,6 +212,8 @@ export function createUpdater({
           } else {
             set({ state: "downloading", version: update.version });
             log(`Updates: downloading Study Hub ${update.version}`);
+            // The download takes a while; say so now instead of staying silent until it is verified.
+            if (manual) void dialog.showMessageBox({ type: "info", buttons: ["OK"], message: `Downloading Study Hub ${update.version}…`, detail: "This takes a minute or two. Study Hub asks to restart once the download is checked." });
             installer = await downloadUpdate({ fetch, update, dir, version });
             await removeOldInstallers(dir, update.name);
             set({ state: "ready" });
@@ -221,7 +231,7 @@ export function createUpdater({
     await checking;
     if (state.state === "ready") {
       if (manual) asked = null;
-      await ask();
+      await ask({ manual });
     } else if (manual) {
       await dialog.showMessageBox({
         type: state.state === "failed" ? "warning" : "info", buttons: ["OK"],
