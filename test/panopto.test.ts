@@ -69,6 +69,8 @@ test("client sends cookies only to the site, never follows redirects and types i
   await assert.rejects(client.sessions(folder), { name: "PanoptoError", message: "sessions: 302" });
   assert.equal(new Headers(seen[0]!.init!.headers).get("cookie"), ".ASPXAUTH=secret");
   assert.equal(seen[0]!.init!.redirect, "manual");
+  // Every request has a time limit, so a stalled server cannot hold the sync forever.
+  assert.ok(seen[0]!.init!.signal instanceof AbortSignal);
   await assert.rejects(client.delivery(d(1)), { message: "delivery: 302" });
   await assert.rejects(client.captionsSrt(d(1), 1), { message: "captions: 302" });
   const thrown = createPanoptoClient({ site, fetch: async () => { throw new Error("secret detail"); } });

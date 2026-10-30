@@ -60,6 +60,8 @@ export function folderMatchesCode(name: string, code: string): boolean {
 }
 
 const GUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+/** A request that gets no answer in this long fails, so one stalled server cannot hold the whole sync. */
+const REQUEST_TIMEOUT_MS = 20_000;
 const PAGE_SIZE = 100;
 const MAX_PAGES = 10;
 // DeliveryInfo's SessionStartTime counts seconds from 1601-01-01 (site local time).
@@ -116,7 +118,7 @@ export function createPanoptoClient({ site, cookies = "", fetch: doFetch = globa
       const headers = new Headers(init.headers);
       if (cookies) headers.set("cookie", cookies);
       // An ended session redirects to the sign-in page; that must not look like an answer.
-      const response = await doFetch(url.href, { ...init, headers, redirect: "manual" });
+      const response = await doFetch(url.href, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       status = response.status;
       const text = await response.text();
       return { status, text, headers: response.headers };

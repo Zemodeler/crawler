@@ -18,6 +18,9 @@ export type EchoLesson = {
 };
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
+/** A request that gets no answer in this long fails, so one stalled server cannot hold the whole sync. */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 export function createEcho360Client({ fetch: doFetch = globalThis.fetch, pauseMs = 500 }: {
   fetch?: typeof fetch; pauseMs?: number;
 } = {}) {
@@ -38,7 +41,7 @@ export function createEcho360Client({ fetch: doFetch = globalThis.fetch, pauseMs
       requested = true;
       const headers = new Headers(init.headers);
       if (cookies.size) headers.set("cookie", [...cookies].map(([k, v]) => `${k}=${v}`).join("; "));
-      const response = await doFetch(url, { ...init, headers, redirect: "manual" });
+      const response = await doFetch(url, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       status = response.status;
       for (const cookie of response.headers.getSetCookie()) {
         const pair = cookie.split(";", 1)[0] ?? "";
