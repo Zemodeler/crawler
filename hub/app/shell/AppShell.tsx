@@ -15,6 +15,7 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 
 import { isHosted } from "../../lib/ai/settings.ts";
+import { HIDDEN_MODULES_EVENT, readHidden } from "../../lib/hidden-modules.ts";
 import {
   ACTIVE_MODULE_EVENT,
   currentAcademicYear,
@@ -81,6 +82,7 @@ function Rail({ pathname }: { pathname: string }) {
   const [search, setSearch] = useState("");
   const [pastOpen, setPastOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [hidden, setHidden] = useState<string[]>([]);
 
   useEffect(() => {
     const host = isHosted();
@@ -88,7 +90,8 @@ function Rail({ pathname }: { pathname: string }) {
       setHosted(host);
       setSearch(window.location.search);
     });
-    if (host)
+    queueMicrotask(() => setHidden(readHidden()));
+    const loadTree = () =>
       fetchTree()
         .then((t) => {
           setTree(t);
@@ -96,6 +99,14 @@ function Rail({ pathname }: { pathname: string }) {
           if (picked) setActive(`${picked.year}/${picked.module}`);
         })
         .catch(() => {});
+    if (host) loadTree();
+    const onHidden = (event: Event) => setHidden((event as CustomEvent<string[]>).detail);
+    // A module deleted or synced elsewhere on the page.
+    const onLibrary = () => {
+      if (host) loadTree();
+    };
+    window.addEventListener(HIDDEN_MODULES_EVENT, onHidden);
+    window.addEventListener(LIBRARY_CHANGED_EVENT, onLibrary);
     const onModule = (event: Event) => setActive((event as CustomEvent<string>).detail);
     const onUrl = () => setSearch(window.location.search);
     const onChat = (event: Event) => setChatOpen(Boolean((event as CustomEvent<boolean>).detail));
@@ -108,6 +119,8 @@ function Rail({ pathname }: { pathname: string }) {
       window.removeEventListener(NAVIGATE_EVENT, onUrl);
       window.removeEventListener("popstate", onUrl);
       window.removeEventListener(CHAT_STATE_EVENT, onChat);
+      window.removeEventListener(HIDDEN_MODULES_EVENT, onHidden);
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, onLibrary);
     };
   }, []);
 
@@ -115,8 +128,9 @@ function Rail({ pathname }: { pathname: string }) {
   const view = homeView(search, hosted);
   const allModules = tree?.years.flatMap((y) => y.modules) || [];
   const thisYear = tree?.years.find((y) => y.year === currentAcademicYear()) ? currentAcademicYear() : tree?.years[0]?.year;
-  const years = tree?.years.filter((y) => y.modules.length && (y.year === thisYear || pastOpen)) || [];
-  const hasPast = Boolean(tree?.years.some((y) => y.year !== thisYear && y.modules.length));
+  const shown = (tree?.years || []).map((y) => ({ ...y, modules: y.modules.filter((m) => !hidden.includes(`${y.year}/${m}`)) }));
+  const years = shown.filter((y) => y.modules.length && (y.year === thisYear || pastOpen));
+  const hasPast = shown.some((y) => y.year !== thisYear && y.modules.length);
 
   /** On "/" switch view in place; elsewhere let the link load the page. */
   const go = (target: HomeView) => (event: MouseEvent) => {

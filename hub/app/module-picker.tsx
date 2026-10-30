@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { listModules, removeModule, saveModules, type ModuleChoice } from "../lib/setup.ts";
+import { listModules, removeModule, saveModules, signIn, type ModuleChoice } from "../lib/setup.ts";
 
 /**
  * Which modules the sync downloads, newest year first. This year's modules
@@ -62,7 +62,20 @@ export default function ModulePicker({ onSaved, saveLabel = "Continue" }: { onSa
   if (!modules && signedOut)
     return (
       <p className="form-error" role="alert">
-        {error} <a href="/welcome">Sign in again</a>
+        {error}{" "}
+        <button className="text-link" disabled={busy} onClick={async () => {
+          setBusy(true);
+          try {
+            await signIn();
+            setSignedOut(false);
+            setError("");
+            await load();
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}>Sign in again</button>
       </p>
     );
   if (!modules) return error ? <p className="form-error" role="alert">{error}</p> : <p className="quiet">Loading your modules…</p>;

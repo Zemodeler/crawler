@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import ExtractionWarnings from "./extraction-warnings.tsx";
 import LegacyLibraryDialog from "./legacy-library-dialog.tsx";
 
-import { LEGACY_LIBRARY, setupStatus, startSync, watchSync, type SetupStatus, type SyncRun } from "../lib/setup.ts";
+import { LEGACY_LIBRARY, setupStatus, signIn, startSync, watchSync, type SetupStatus, type SyncRun } from "../lib/setup.ts";
 
 /** Sidebar control: sync My Studies again, and say when it last finished. */
 export default function SyncButton({ onSynced }: { onSynced: () => void }) {
   const [run, setRun] = useState<SyncRun | null>(null);
   const [signedIn, setSignedIn] = useState(true);
+  const [signingIn, setSigningIn] = useState(false);
   const [freshness, setFreshness] = useState("");
   const [error, setError] = useState("");
   const [library, setLibrary] = useState<{ status: SetupStatus; open: boolean } | null>(null);
@@ -52,6 +53,22 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
     }
   };
 
+  /** Opens the university's sign-in window, then syncs; no trip back through setup. */
+  const signInAndSync = async () => {
+    setError("");
+    setSigningIn(true);
+    try {
+      await signIn();
+      setSignedIn(true);
+      setRun(null);
+      await begin();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
   const libraryChosen = (message: string) => {
     setLibrary(null);
     setFreshness(message);
@@ -62,9 +79,12 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
   const message = error || (run?.state === "failed" ? run.error : "");
   if (!signedIn || /sign in again/i.test(message ?? ""))
     return (
-      <a className="switch sync-button" href="/welcome">
-        Sign in to sync
-      </a>
+      <div className="sync-status" aria-live="polite">
+        <button className="switch sync-button" onClick={signInAndSync} disabled={signingIn}>
+          {signingIn ? "Waiting for you to sign in…" : "Sign in to sync"}
+        </button>
+        {error && !/sign in again/i.test(error) && <small>{error}</small>}
+      </div>
     );
 
   const time = run?.finishedAt ? new Date(run.finishedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";

@@ -219,16 +219,12 @@ app.whenReady().then(async () => {
   };
   setup.onSynced = (result) => {
     background.onSynced(result);
-    void packs.afterSync(result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
     void updater.remind();
   };
   background.start();
   updater.start();
   if (SYNC_FLAG) void setup.startBackgroundSync("tray");
-  // Modules synced before automatic packs existed get theirs now; up-to-date ones are skipped.
-  newestModules()
-    .then((modules) => (modules.length ? packs.afterSync(modules) : []))
-    .catch((error) => console.error(`Study packs: ${error.message}`));
+  // Study packs are only built when the student asks (Regenerate study pack), never after a sync.
   const startedAtLogin = BACKGROUND_FLAG || (process.platform === "darwin" && app.getLoginItemSettings(LOGIN_ITEM).wasOpenedAtLogin);
   if (startedAtLogin) await window.loadURL(host.url);
   else {

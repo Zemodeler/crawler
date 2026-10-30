@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObjec
 
 import { SUPPORTED_EXTS } from "../lib/course-format.ts";
 import { moduleCode, moduleColor, rebuildPacks, type Deadline, type LibraryTree } from "../lib/library.ts";
+import { readHidden, writeHidden } from "../lib/hidden-modules.ts";
 import { chosenAssistant, watchSync } from "../lib/setup.ts";
 import type { SubjectId } from "../lib/subject-profiles.ts";
 import { formatDue, latestDate, placeDate } from "./calendar/deadline-ui.tsx";
@@ -30,25 +31,6 @@ function statsFor(tree: LibraryTree, key: string, liveOpened?: Record<string, nu
   return { files: paths.length, opened: Object.keys(opened).filter((p) => set.has(p)).length, reviewed };
 }
 
-/** "year/module" keys the student hid from the home page. */
-const HIDDEN_KEY = "studyhub:hidden-modules";
-
-function readHidden(): string[] {
-  try {
-    const saved = JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]");
-    return Array.isArray(saved) ? saved.filter((key): key is string => typeof key === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeHidden(keys: string[]) {
-  try {
-    localStorage.setItem(HIDDEN_KEY, JSON.stringify(keys));
-  } catch {
-    /* hidden until the page is reloaded */
-  }
-}
 
 /** A desktop-app action (`/api/setup/*`); the host refuses it in a plain browser. */
 async function setupPost(path: string, payload: object) {
@@ -190,11 +172,14 @@ function SettingsPanel({
   };
 
   /** Syncs only this module's folder; the page refreshes itself when the sync is done. */
-  const resync = async () => {
+  /** `fresh`: delete the module's folder first and download every file again. */
+  const resync = async (fresh = false) => {
+    if (fresh && !window.confirm(`Delete everything in ${module} on this PC, including your own notes and study packs there, and download it again?`)) return;
     setBusy("sync");
-    say("Starting the sync…");
+    say(fresh ? "Deleting and downloading again…" : "Starting the sync…");
     try {
-      await setupPost("/api/setup/sync", { module: moduleKey, assistant: chosenAssistant() });
+      if (fresh) await setupPost("/api/setup/modules/remove", { module: moduleKey, redownload: true });
+      else await setupPost("/api/setup/sync", { module: moduleKey, assistant: chosenAssistant() });
     } catch (error) {
       say((error as Error).message, true);
       if (alive.current) setBusy(null);
@@ -224,6 +209,19 @@ function SettingsPanel({
     if (alive.current) setBusy(null);
   };
 
+  const remove = async () => {
+    if (!window.confirm(`Delete ${module} from this PC? Its files, your notes and study packs in it go, and it stops syncing. Tick it again in Calendar → Syncing to bring it back.`)) return;
+    setBusy("folder");
+    try {
+      await setupPost("/api/setup/modules/remove", { module: moduleKey });
+      window.dispatchEvent(new CustomEvent(LIBRARY_CHANGED_EVENT));
+      say("Deleted.");
+    } catch (error) {
+      say((error as Error).message, true);
+    }
+    if (alive.current) setBusy(null);
+  };
+
   const openFolder = async () => {
     setBusy("folder");
     try {
@@ -247,8 +245,14 @@ function SettingsPanel({
       <p className="eyebrow">{moduleCode(module)} settings</p>
       <SubjectControl target={moduleKey} subject={subject} onSaved={onSubjectSaved} />
       <div className="module-settings-actions">
-        <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={resync}>
+        <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => resync()}>
           Resync this module
+        </button>
+        <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={() => resync(true)}>
+          Delete and download again
+        </button>
+        <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={remove}>
+          Delete from this PC
         </button>
         <button type="button" className="btn btn-ghost" disabled={busy !== null} onClick={regenerate}>
           Regenerate study pack
@@ -257,7 +261,7 @@ function SettingsPanel({
           Open module folder
         </button>
         <button type="button" className="btn btn-ghost" onClick={onHide}>
-          Hide module from home
+          Hide module
         </button>
       </div>
       {note && (

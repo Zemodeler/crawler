@@ -223,3 +223,30 @@ test("desktop cannot replace credentials while another process holds the full-sy
   assert.equal(f.saved.get(f.adapters.qmul.site), saved);
   await rm(lock, { recursive: true });
 });
+
+test("deleting a module forgets its files; re-download syncs only that module", async (t) => {
+  const f = await fixture(t);
+  await f.setup.signIn();
+  const key = "2026-27/COM2001 - Systems";
+  await mkdir(join(f.root, key), { recursive: true });
+  await writeFile(join(f.root, key, "notes.txt"), "x");
+  await mkdir(join(f.root, ".crawler"), { recursive: true });
+  const entry = (localPath, module) => ({ vleId: localPath, module, localPath, sourceUrl: "", category: "Other", categoryReason: "", vleModified: null, sha256: "", writtenAt: "" });
+  await writeFile(join(f.root, ".crawler", "manifest.json"), JSON.stringify([entry(`${key}/a.pdf`, "COM2001"), entry("2026-27/COM2002 - DB/b.pdf", "COM2002")]));
+  const manifest = async () => JSON.parse(await readFile(join(f.root, ".crawler", "manifest.json"), "utf8")).map((e) => e.module);
+  const state = async () => JSON.parse(await readFile(join(f.root, ".crawler", "state.json"), "utf8")).courses;
+
+  assert.deepEqual(await f.setup.removeModule({ module: key, redownload: true }), { ok: true });
+  await finished(f.setup);
+  assert.deepEqual(await manifest(), ["COM2002"]);
+  assert.deepEqual(await state(), { COM2001: { enabled: true } });
+  const select = f.calls.at(-1).select;
+  assert.equal(select({}, { year: "2026-27", folder: "COM2001 - Systems" }), true);
+  assert.equal(select({}, { year: "2026-27", folder: "COM2002 - DB" }), false);
+
+  await mkdir(join(f.root, key), { recursive: true });
+  assert.deepEqual(await f.setup.removeModule({ module: key, shortname: "COM2001" }), { ok: true });
+  assert.equal((await readFile(join(f.root, key, "notes.txt")).catch(() => null)), null);
+  assert.deepEqual(await state(), { COM2001: { enabled: false } });
+  assert.match((await f.setup.removeModule({ module: "../outside" })).error, /No such module/);
+});

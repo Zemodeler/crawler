@@ -244,7 +244,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
 
   for (const course of courses) {
     const placement = placeCourse(course);
-    const wanted = state.courses[course.shortname]?.enabled ?? select(course, placement);
+    const wanted = options.select ? options.select(course, placement) : (state.courses[course.shortname]?.enabled ?? select(course, placement));
     const report: CourseReport = {
       shortname: course.shortname,
       folder: `${placement.year}/${placement.folder}`,

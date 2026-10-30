@@ -14,7 +14,7 @@
  */
 
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 
 import {
@@ -473,7 +473,11 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     }
   }
 
-  /** Deletes a module's folder ("year/module") and stops syncing it, so it does not come back. */
+  /**
+   * Deletes a module's folder ("year/module") and forgets its files, so the
+   * sync does not treat them as deleted by the student. With `redownload` the
+   * module syncs again straight away; otherwise it stops syncing.
+   */
   async function removeModule(body = {}) {
     const busy = libraryBusy();
     if (busy) return { error: busy };
@@ -481,14 +485,27 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     const root = resolve(libraryRoot());
     const folder = resolve(root, body.module);
     if (!folder.startsWith(root + sep) || body.module.startsWith(".")) return { error: "No such module." };
+    const manifestFile = join(root, ".crawler", "manifest.json");
     try {
-      if (typeof body.shortname === "string" && body.shortname) await setCourseChoices(root, { [body.shortname]: false });
+      let manifest = [];
+      try {
+        manifest = JSON.parse(await readFile(manifestFile, "utf8"));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      const inModule = (entry) => entry.localPath === body.module || entry.localPath.startsWith(`${body.module}/`);
+      const shortnames = new Set(manifest.filter(inModule).map((entry) => entry.module));
+      if (typeof body.shortname === "string" && body.shortname) shortnames.add(body.shortname);
       await rm(folder, { recursive: true, force: true });
-      return { ok: true };
+      if (manifest.length) await writeFile(manifestFile, `${JSON.stringify(manifest.filter((entry) => !inModule(entry)), null, 2)}
+`);
+      if (shortnames.size) await setCourseChoices(root, Object.fromEntries([...shortnames].map((name) => [name, body.redownload === true])));
     } catch (error) {
       const locked = ["EBUSY", "EPERM", "EACCES"].includes(error?.code);
       return { error: locked ? "A file in that module is open. Close it and try again." : error.message };
     }
+    if (body.redownload === true) return begin("page", body.module);
+    return { ok: true };
   }
 
   async function setSchedule(body = {}) {

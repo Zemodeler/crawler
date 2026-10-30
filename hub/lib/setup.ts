@@ -105,7 +105,8 @@ export type ModuleChoice = {
 };
 export const listModules = () => call<{ modules: ModuleChoice[] }>("/api/setup/modules");
 export const saveModules = (choices: Record<string, boolean>) => call<{ ok: true }>("/api/setup/modules/save", "POST", { choices });
-export const removeModule = (module: string, shortname: string) => call<{ ok: true }>("/api/setup/modules/remove", "POST", { module, shortname });
+export const removeModule = (module: string, shortname?: string, redownload = false) =>
+  call<{ ok: true }>("/api/setup/modules/remove", "POST", { module, shortname, redownload });
 export const connectCalendar = () => call<{ ok: true }>("/api/setup/calendar/connect", "POST");
 export const syncCalendarNow = () => call<{ ok: true; report: CalendarReport | null }>("/api/setup/calendar/sync", "POST");
 export const disconnectCalendar = () => call<{ ok: true }>("/api/setup/calendar/disconnect", "POST");
