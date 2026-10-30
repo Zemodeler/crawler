@@ -43,6 +43,22 @@ test("lists years newest first and only files inside modules", async () => {
   ]);
 });
 
+test("undated modules are listed after every dated year", async () => {
+  const root = fixture();
+  mkdirSync(join(root, "Undated", "COM1025 - Foundations of Computing"), { recursive: true });
+  writeFileSync(join(root, "Undated", "COM1025 - Foundations of Computing", "Start Here.md"), "# Start here\n");
+  mkdirSync(join(root, "Notes"), { recursive: true });
+  const tree = await listLibrary(root);
+  assert.deepEqual(tree.years.map((y) => y.year), ["2026-27", "2025-26", "Undated"]);
+  assert.deepEqual(tree.years[2].modules, ["COM1025 - Foundations of Computing"]);
+  assert.ok(tree.files.some((f) => f.path === "Undated/COM1025 - Foundations of Computing/Start Here.md"));
+
+  // Surrey courses without a year in their name are all undated: the hub must still open them.
+  const only = mkdtempSync(join(tmpdir(), "studyhub-library-"));
+  mkdirSync(join(only, "Undated", "COM1025 - Foundations of Computing"), { recursive: true });
+  assert.deepEqual((await listLibrary(only)).years, [{ year: "Undated", modules: ["COM1025 - Foundations of Computing"] }]);
+});
+
 test("a missing library is reported, not thrown", async () => {
   const tree = await listLibrary(join(tmpdir(), "no-such-library-folder"));
   assert.equal(tree.found, false);

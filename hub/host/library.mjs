@@ -24,6 +24,9 @@ import { PROFILES } from "../lib/subject-profiles.ts";
 import { readDeadlineFile, withDeadlineLock, writeDeadlineFile } from "../../src/deadline-store.ts";
 
 const YEAR = /^\d{4}-\d{2}$/;
+/** Where the sync puts modules with no academic year in their name or dates (src/naming.ts). */
+const UNDATED = "Undated";
+const isYearFolder = (name) => YEAR.test(name) || name === UNDATED;
 const TEXT_EXTS = new Set(["md", "txt", "csv"]);
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_FILES = 20_000;
@@ -106,7 +109,10 @@ export async function listLibrary(root = libraryRoot()) {
   const years = [];
   const files = [];
   const top = await readdir(root, { withFileTypes: true }).catch(() => []);
-  for (const year of top.filter((e) => e.isDirectory() && YEAR.test(e.name)).map((e) => e.name).sort().reverse()) {
+  // Newest year first; undated modules after every dated year.
+  const folders = top.filter((e) => e.isDirectory() && isYearFolder(e.name)).map((e) => e.name);
+  const ordered = [...folders.filter((name) => name !== UNDATED).sort().reverse(), ...folders.filter((name) => name === UNDATED)];
+  for (const year of ordered) {
     const inner = await readdir(join(root, year), { withFileTypes: true }).catch(() => []);
     const modules = inner
       .filter((e) => e.isDirectory() && !e.name.startsWith("."))
@@ -180,7 +186,7 @@ async function addDeadlineUnlocked(root, body) {
   const { module, year, title, kind, date, weight, formative, note } = body;
   const text = (v, max) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !hasControlCharacters(v);
   if (!text(module, 100) || !/^[A-Za-z0-9_-]+$/.test(module)) return { error: "Choose a module." };
-  if (typeof year !== "string" || !YEAR.test(year) || Number(year.slice(5)) !== (Number(year.slice(0, 4)) + 1) % 100) return { error: "Choose an academic year." };
+  if (typeof year !== "string" || (year !== UNDATED && (!YEAR.test(year) || Number(year.slice(5)) !== (Number(year.slice(0, 4)) + 1) % 100))) return { error: "Choose an academic year." };
   const tree = await listLibrary(root);
   if (!tree.years.some((y) => y.year === year && y.modules.some((f) => f.split(" - ")[0].trim() === module))) return { error: "Choose a module in your library." };
   if (!text(title, 500)) return { error: "Enter a title (up to 500 characters)." };
@@ -277,7 +283,7 @@ const MAX_WRITE_BYTES = 4 * 1024 * 1024;
 function moduleDir(root, module) {
   if (typeof module !== "string") return null;
   const [year, name, ...rest] = module.split("/");
-  if (rest.length || !YEAR.test(year || "") || !name) return null;
+  if (rest.length || !isYearFolder(year || "") || !name) return null;
   const dir = resolveInside(root, `${year}/${name}`);
   try {
     return dir && statSync(dir).isDirectory() ? dir : null;
