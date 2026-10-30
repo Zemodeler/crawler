@@ -24,7 +24,6 @@ import {
   claimLegacyLibrary,
   LEGACY_LIBRARY,
   withLibraryOwner,
-  VleError,
   connectCalendar,
   describeFreshness,
   disconnectCalendar,
@@ -354,7 +353,8 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
         await syncCalendarAfter(root);
       })
       .catch(async (error) => {
-        const expired = error instanceof VleError && error.code === "invalid_token";
+        // By name, not instanceof: the packaged app can load two copies of the crawler module.
+        const expired = error?.name === "VleError" && error.code === "invalid_token";
         if (expired) await tokens.clear(adapter.site);
         run = {
           ...run,
@@ -451,7 +451,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       });
       return { modules };
     } catch (error) {
-      if (error instanceof VleError && error.code === "invalid_token") {
+      if (error?.name === "VleError" && error.code === "invalid_token") {
         await tokens.clear(adapter.site);
         return { error: `Your ${university.displayName} sign-in has expired. Sign in again.`, code: "signed_out" };
       }
