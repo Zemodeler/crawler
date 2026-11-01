@@ -257,7 +257,7 @@ export default function AssessmentsPage() {
           const other = assignments.filter((a) => a.component === -1);
           return <section className="panel assessment-module" key={folder} aria-label={folder}>
             <h3><span className="module-dot" style={{ background: moduleColor(modules, folder) }} aria-hidden="true" />{folder}</h3>
-            {!components.length && <><p className="quiet">No assessment breakdown found on QMplus yet</p>
+            {!components.length && <><p className="quiet">No assessment breakdown found on your course site yet</p>
               <p className="weight">Known deadline weights: {moduleDeadlines.reduce((sum, d) => sum + (d.weight || 0), 0)}%</p></>}
             {components.map((c, index) => <div className="assessment-component" key={`${c.seq}-${index}`}>
               <h4>{c.description} {c.type && <small className="quiet">{c.type}</small>} <span className="weight">{c.weight === null ? "Weight TBC" : `${c.weight}%`}</span></h4>
@@ -268,7 +268,7 @@ export default function AssessmentsPage() {
           </section>;
         })}
         {modules.length > 0 && <section className="panel assessment-module" aria-labelledby="add-title">
-          <h3 id="add-title">Add a deadline</h3><p className="quiet">For marking and tasks QMplus does not list as dates. Dates and times are in London time.</p>
+          <h3 id="add-title">Add a deadline</h3><p className="quiet">For marking and tasks your course site does not list as dates. Dates and times are in London time.</p>
           <form className="assessment-form" onSubmit={submit}>
             <label>Module<select name="module" required>{modules.map((m) => <option key={m} value={moduleCode(m)}>{m}</option>)}</select></label>
             <label>Title<input name="title" required maxLength={500} /></label>

@@ -175,7 +175,7 @@ function sourceLabel(source: DeadlineSource): string {
     const name = source.localPath.split("/").pop();
     return source.page ? `${name}, page ${source.page}` : name || "Document";
   }
-  return { "vle-field": "QMplus deadline field", page: "QMplus page", announcement: "Announcement", document: "Document" }[
+  return { "vle-field": "Course site deadline", page: "Course site page", announcement: "Announcement", document: "Document" }[
     source.type
   ];
 }

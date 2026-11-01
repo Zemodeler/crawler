@@ -204,8 +204,40 @@ export function createBrightspaceAdapter(config: BrightspaceSiteConfig, deps: Br
   type Read<T> = (response: Response, keep: () => () => void) => Promise<T>;
   type Attempt<T> = { done: true; value: T } | { done: false; failure: string };
 
+  /**
+   * Cookies SurreyLearn renewed with Set-Cookie. A browser keeps its session
+   * alive this way; replaying only the cookies captured at sign-in lets it
+   * lapse within hours. Laid over the captured header on every request.
+   */
+  const renewed = new Map<string, string>();
+  const withRenewed = (header: string) => {
+    if (!renewed.size) return header;
+    const jar = new Map<string, string>();
+    for (const part of header.split(/;\s*/)) {
+      const at = part.indexOf("=");
+      if (at > 0) jar.set(part.slice(0, at), part.slice(at + 1));
+    }
+    for (const [name, value] of renewed) jar.set(name, value);
+    return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+  };
+  const remember = (response: Response) => {
+    const lines = typeof response.headers.getSetCookie === "function" ? response.headers.getSetCookie() : [];
+    for (const line of lines) {
+      const pair = line.split(";")[0] ?? "";
+      const at = pair.indexOf("=");
+      if (at <= 0) continue;
+      const name = pair.slice(0, at).trim();
+      const value = pair.slice(at + 1).trim();
+      // A cleared cookie is the site ending that cookie, not a renewal.
+      if (!value || /expires=Thu, 01 Jan 1970/i.test(line) || /max-age=0/i.test(line)) continue;
+      renewed.set(name, value);
+    }
+  };
+
+  /** The session cookies, renewed ones included; written back so the app can save them after a sync. */
   const cookiesOf = (credentials: Credentials) => {
     if (!credentials.cookies) throw new VleError("invalid_token", "No SurreyLearn session; sign in again.");
+    credentials.cookies = withRenewed(credentials.cookies);
     return credentials.cookies;
   };
 
@@ -228,12 +260,13 @@ export function createBrightspaceAdapter(config: BrightspaceSiteConfig, deps: Br
       let response: Response;
       try {
         const headers: Record<string, string> = { accept: "application/json" };
-        if (cookies) headers.cookie = cookies;
+        if (cookies) headers.cookie = withRenewed(cookies);
         // redirect "manual": an expired session redirects to the login page, which must not look like success.
         response = await doFetch(url, { method: "GET", headers, redirect: "manual" });
       } catch {
         return { done: false, failure: `could not reach ${site}.` };
       }
+      if (new URL(url).origin === origin) remember(response);
       if (!response.ok) {
         const status = response.status;
         await response.body?.cancel().catch(() => {});

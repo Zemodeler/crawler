@@ -110,9 +110,10 @@ export function createLoginBrowser({ BrowserWindow, session, parent }) {
     /** Same window as capture; resolves with the session's Cookie header once `donePrefix` loads. */
     captureCookies(url, donePrefix, cookieUrl) {
       return new Promise((resolve, reject) => {
-        // No "persist:" prefix: in memory only. Shared by every cookie sign-in in this run so the
-        // Microsoft sign-in from SurreyLearn carries over to Panopto without asking again.
-        const loginSession = session.fromPartition("crawler-cookie-login");
+        // Kept on disk (Chromium encrypts its cookies with the OS) so the Microsoft sign-in
+        // survives restarts: signing in again after SurreyLearn's session ends is usually just
+        // the window opening and closing. Also carries the sign-in over to Panopto.
+        const loginSession = session.fromPartition("persist:crawler-cookie-login");
         loginSession.setUserAgent(loginSession.getUserAgent().replace(/\s?Electron\/\S+/, ""));
 
         let settled = false;

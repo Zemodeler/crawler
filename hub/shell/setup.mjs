@@ -319,6 +319,11 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     }
     const panopto = panoptoOption(university.id, credentials);
     if (panopto && !panopto.cookies) run.notice = PANOPTO_PUBLIC_ONLY;
+    // Brightspace renews its session cookies as the sync talks to it; keep the renewed ones.
+    const signedInCookies = credentials.cookies;
+    const keepRenewedCookies = async () => {
+      if (credentials.cookies && credentials.cookies !== signedInCookies) await tokens.save(credentials).catch(() => {});
+    };
     Promise.resolve().then(() => runSync({
       adapter,
       credentials,
@@ -339,6 +344,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       },
     }))
       .then(async (result) => {
+        await keepRenewedCookies();
         try {
           await formatLibrary(root, result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
         } catch (error) {
@@ -356,6 +362,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
         // By name, not instanceof: the packaged app can load two copies of the crawler module.
         const expired = error?.name === "VleError" && error.code === "invalid_token";
         if (expired) await tokens.clear(adapter.site);
+        else await keepRenewedCookies();
         run = {
           ...run,
           state: "failed",

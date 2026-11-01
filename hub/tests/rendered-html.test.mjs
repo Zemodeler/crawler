@@ -40,12 +40,13 @@ test("study hub exposes the requested learning experience", async () => {
   assert.match(page, /overallPackProgress/);
   assert.match(page, /packProgress\(pack\)/);
   assert.match(page, /Source materials/);
-  assert.match(page, /Saved locally/);
-  assert.match(page, /className="flashcards-link" href="\/flashcards\?mode=smart"/);
+  assert.match(page, /\/flashcards\?mode=smart/);
   assert.match(page, /className="metric-link"/);
 
-  // The AI entry points replaced the old /ai page.
-  assert.match(page, /className="ai-button" href="\/connect"/);
+  // The AI entry points replaced the old /ai page; AI settings moved to the sidebar.
+  const shell = await read("../app/shell/AppShell.tsx");
+  assert.match(shell, /href="\/connect"/);
+  assert.match(shell, /href="\/flashcards\?mode=smart"/);
   assert.match(page, /className="convert-link" href="\/generate"/);
   assert.doesNotMatch(page, /href="\/ai"|\/api\/me|oai-authenticated/);
 
