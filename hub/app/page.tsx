@@ -486,6 +486,19 @@ export default function Home() {
     }
   };
 
+  // "/?file=<path>" (a study pack linked from practice) opens that file once the module is loaded.
+  const fileParamRef = useRef(false);
+  useEffect(() => {
+    if (fileParamRef.current || !files.length) return;
+    fileParamRef.current = true;
+    const path = new URLSearchParams(window.location.search).get("file");
+    if (!path) return;
+    window.history.replaceState(null, "", "/");
+    queueMicrotask(() => openFile(path));
+    // openFile is recreated every render; only the first loaded file list matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
+
   // Uses the shared resolver, so a link the validator calls good always opens,
   // and a link it calls broken always fails here too.
   const resolveLink = (target: string) => {
