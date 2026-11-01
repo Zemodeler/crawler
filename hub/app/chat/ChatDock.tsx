@@ -18,7 +18,7 @@ import { hasAnyConnection, isHosted, loadSettings } from "../../lib/ai/settings.
 import type { AiClient, AiError } from "../../lib/ai/types.ts";
 import { ACTIVE_MODULE_EVENT, fetchDeadlines, fetchTree, loadModule, pickModule } from "../../lib/library.ts";
 import { buildModuleScope, type ChatScope } from "./chat-context.ts";
-import { CHAT_STATE_EVENT, CHAT_TOGGLE_EVENT } from "../shell/AppShell.tsx";
+import { CHAT_ASK_EVENT, CHAT_STATE_EVENT, CHAT_TOGGLE_EVENT } from "../shell/AppShell.tsx";
 
 const OPEN_KEY = "studyhub:chat:open";
 const SUGGESTIONS = ["What's due in the next two weeks?", "What topics does this module cover?", "What should I revise first?"];
@@ -137,6 +137,25 @@ export default function ChatDock() {
     };
     window.addEventListener(CHAT_TOGGLE_EVENT, onToggle);
     return () => window.removeEventListener(CHAT_TOGGLE_EVENT, onToggle);
+  }, []);
+
+  // A page asks a question for the student: open with it typed in, never sent on its own.
+  useEffect(() => {
+    const onAsk = (event: Event) => {
+      const text = (event as CustomEvent<string>).detail;
+      if (typeof text !== "string") return;
+      setOpen(true);
+      rememberOpen(true);
+      setInput(text);
+      requestAnimationFrame(() => {
+        const box = inputRef.current;
+        if (!box) return;
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+      });
+    };
+    window.addEventListener(CHAT_ASK_EVENT, onAsk);
+    return () => window.removeEventListener(CHAT_ASK_EVENT, onAsk);
   }, []);
 
   useEffect(() => {

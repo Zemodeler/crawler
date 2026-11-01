@@ -25,11 +25,13 @@ import {
 } from "../../lib/practice.ts";
 import { COUNT_LIMITS, aiPick, autoPick, candidateSources, generatePaper, sourceRole, type AiPick } from "../../lib/practice-generate.ts";
 import { Marker, Result, Taker } from "./practice-session.tsx";
+import Tutorials from "./tutorial.tsx";
 
 type View =
   | { name: "papers" }
   | { name: "create" }
   | { name: "progress" }
+  | { name: "tutorials" }
   | { name: "take"; paper: Paper; retry: boolean }
   | { name: "mark"; paper: Paper; answers: Record<string, Answer>; seconds: number; retry: boolean }
   | { name: "result"; attempt: Attempt };
@@ -180,6 +182,7 @@ export default function Practice({ course }: { course: string }) {
             ["papers", "Papers"],
             ["create", "New paper"],
             ["progress", "Progress"],
+            ["tutorials", "Tutorial sheets"],
           ] as const
         ).map(([name, label]) => (
           <button
@@ -239,6 +242,7 @@ export default function Practice({ course }: { course: string }) {
       {view.name === "progress" && (
         <Progression attempts={store.attempts} onOpen={(attempt) => setView({ name: "result", attempt })} />
       )}
+      {view.name === "tutorials" && <Tutorials key={course} course={course} hosted={hosted} files={files} />}
     </section>
   );
 }

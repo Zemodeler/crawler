@@ -33,6 +33,8 @@ export const NAVIGATE_EVENT = "studyhub:navigate";
 export const LIBRARY_CHANGED_EVENT = "studyhub:library-changed";
 /** Fired on `window` with `true`/`false` to open or close the study assistant. */
 export const CHAT_TOGGLE_EVENT = "studyhub:chat-toggle";
+/** Fired on `window` with a question as `detail`: opens the study assistant with it typed in, not sent. */
+export const CHAT_ASK_EVENT = "studyhub:chat-ask";
 /** Fired by the study assistant with its open state. */
 export const CHAT_STATE_EVENT = "studyhub:chat-state";
 
