@@ -305,7 +305,7 @@ export function packsFor<T extends Named>(exercise: Pick<Exercise, "topic" | "ti
 
 export type MathPiece = string | { matrix: string[][] };
 
-const MATRIX = /\[\[([^\[\]]+)\]\]/g;
+const MATRIX = /\[\[([^[\]]+)\]\]/g;
 
 /** Splits text into plain runs and [[a b; c d]] matrices. A malformed matrix stays as text. */
 export function splitMath(text: string): MathPiece[] {
