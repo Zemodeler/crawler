@@ -265,3 +265,26 @@ test("the single README documents the install and both login routes", async () =
   for (const path of ["../AI.md", "../launcher", "../bridge", "../build/pack-bridge.mjs", "../companion/README.md"])
     assert.ok(await gone(path), `${path} should have been deleted`);
 });
+
+test("long AI work runs in the background runner, not in a page, and is shown from its saved list", async () => {
+  const shell = await read("../app/shell/AppShell.tsx");
+  const activity = await read("../app/shell/activity.tsx");
+  const tutorial = await read("../app/practice/tutorial.tsx");
+  const practice = await read("../app/practice/practice.tsx");
+
+  // Mounted once in the rail; every page load picks up unfinished work.
+  assert.match(shell, /<Activity \/>/);
+  assert.match(activity, /resumeOnLoad\(\)/);
+  assert.match(activity, /subscribe\(/);
+  // Notification permission is asked from a click, never on load.
+  assert.doesNotMatch(activity.replace(/export function askToNotify[\s\S]*?\n}\n/, ""), /requestPermission/);
+
+  // The pages hand the work to the runner instead of awaiting the converters.
+  assert.match(tutorial, /startTutorial\(/);
+  assert.doesNotMatch(tutorial, /convertSheet\(/);
+  assert.doesNotMatch(tutorial, /One sheet at a time/);
+  assert.match(tutorial, /TUTORIALS_CHANGED/);
+  assert.match(practice, /startPaper\(/);
+  assert.doesNotMatch(practice, /generatePaper\(/);
+  assert.match(practice, /PRACTICE_CHANGED/);
+});

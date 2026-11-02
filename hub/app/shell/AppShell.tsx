@@ -26,6 +26,7 @@ import {
   type LibraryTree,
 } from "../../lib/library.ts";
 import SyncButton from "../sync-button.tsx";
+import Activity from "./activity.tsx";
 
 /** Fired on `window` after the rail changed the URL of "/" in place. */
 export const NAVIGATE_EVENT = "studyhub:navigate";
@@ -68,7 +69,14 @@ export function ShellOff() {
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "/";
   const bare = NO_SHELL.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-  if (bare) return <>{children}</>;
+  // First-run setup still picks up unfinished work; the hidden /auto window never runs the student's tasks.
+  if (bare)
+    return (
+      <>
+        {pathname.startsWith("/welcome") && <Activity headless />}
+        {children}
+      </>
+    );
   return (
     <div className="shell">
       <Rail pathname={pathname} />
@@ -173,6 +181,8 @@ function Rail({ pathname }: { pathname: string }) {
         )}
         <a className="rail-link" href="/practice" {...current(pathname === "/practice")}>Practice</a>
       </div>
+
+      <Activity />
 
       {tree && years.length > 0 && (
         <div className="rail-group rail-modules">

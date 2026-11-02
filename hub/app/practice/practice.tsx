@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
 import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
 import { hasAnyConnection, isHosted } from "../../lib/ai/settings.ts";
-import { ERROR_COPY, type AiError, type Progress } from "../../lib/ai/types.ts";
+import { ERROR_COPY, type AiError } from "../../lib/ai/types.ts";
+import { PRACTICE_CHANGED, cancel, continueTask, isFinished, startPaper, type PaperTaskSpec, type Task } from "../../lib/background-tasks.ts";
 import { collectDirectory, loadHandles, type LocalFile } from "../../lib/course-fs.ts";
 import { fetchTree, loadModule } from "../../lib/library.ts";
 import { saveOwnNote, uploadOwnFile } from "../../lib/own-files.ts";
@@ -23,8 +24,9 @@ import {
   type PracticeStore,
   type SelfMark,
 } from "../../lib/practice.ts";
-import { COUNT_LIMITS, aiPick, autoPick, candidateSources, generatePaper, sourceRole, type AiPick } from "../../lib/practice-generate.ts";
+import { COUNT_LIMITS, aiPick, autoPick, candidateSources, sourceRole, type AiPick } from "../../lib/practice-generate.ts";
 import { focusBrief } from "../../lib/practice-view.ts";
+import { askToNotify, continueLabel, finishedLine, latestTask, liveLine, useNow, useTasks } from "../shell/activity.tsx";
 import { Marker, Result, Taker } from "./practice-session.tsx";
 import Tutorials from "./tutorial.tsx";
 
@@ -66,11 +68,14 @@ function keepPick(course: string, files: string, pick: AiPick) {
 const date = (ms: number) => new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 const bandClass = (percent: number) => `band-${gradeBand(percent).short.replace(":", "")}`;
 
-const PROGRESS_TEXT: Record<Progress["phase"], string> = {
-  connecting: "Connecting to your assistant…",
-  streaming: "Writing the questions…",
-  validating: "Checking every answer key…",
-  repairing: "Fixing the format…",
+/** The runner's latest task writing (or continuing) this paper. */
+const paperTask = (tasks: Task[], course: string, paperId: string) =>
+  latestTask(tasks, course, (t) => t.type === "paper" && t.spec.paperId === paperId);
+
+/** "Exam paper – ECS509U": how a paper being written is named in the activity list and notifications. */
+const taskLabel = (kind: PracticeKind, course: string) => {
+  const folder = course.split("/").slice(1).join("/") || course;
+  return `${KIND_LABELS[kind]} – ${folder.split(" - ")[0]}`;
 };
 
 /** What opened the Papers view with something already chosen: the sources and exam from Assessments, or a topic from the dashboard. */
@@ -102,6 +107,36 @@ export default function Practice({
   const [extra, setExtra] = useState<LocalFile[]>([]);
   const [reload, setReload] = useState(0);
   const [notice, setNotice] = useState("");
+  const tasks = useTasks();
+  const now = useNow(tasks.some((t) => t.type === "paper" && t.course === course && !isFinished(t)));
+  /** The paper task started from New paper on this visit: when it is done, its paper opens in the list. */
+  const [launched, setLaunched] = useState("");
+
+  // The background runner saved a paper or a draft: read the store again.
+  useEffect(() => {
+    const onChanged = (event: Event) => {
+      if ((event as CustomEvent<{ course: string }>).detail?.course !== course) return;
+      const next = loadStore(course);
+      storeRef.current = next;
+      setStore(next);
+    };
+    window.addEventListener(PRACTICE_CHANGED, onChanged);
+    return () => window.removeEventListener(PRACTICE_CHANGED, onChanged);
+  }, [course]);
+
+  // The paper started here is finished: show it in the list, with what was left out.
+  useEffect(() => {
+    const task = tasks.find((t) => t.id === launched);
+    if (!task || task.status !== "done") return;
+    const next = loadStore(course);
+    queueMicrotask(() => {
+      storeRef.current = next;
+      setStore(next);
+      setLaunched("");
+      setNotice(task.result?.notes.join(" ") || "");
+      setView((v) => (v.name === "create" ? { name: "papers" } : v));
+    });
+  }, [tasks, launched, course]);
 
   function commit(next: PracticeStore) {
     storeRef.current = next;
@@ -223,13 +258,38 @@ export default function Practice({
 
       {view.name === "papers" && (
         <Papers
+          course={course}
           store={store}
+          tasks={tasks}
+          now={now}
+          onContinue={(paper) => {
+            const task = paperTask(tasks, course, paper.id);
+            askToNotify();
+            if (task && isFinished(task) && task.status !== "done") continueTask(task.id);
+            else
+              startPaper(
+                course,
+                {
+                  kind: paper.kind,
+                  count: paper.draft?.target ?? paper.questions.length,
+                  brief: paper.brief,
+                  module: course.split("/").slice(1).join("/") || course,
+                  sourcePaths: paper.sources,
+                  paperId: paper.id,
+                },
+                taskLabel(paper.kind, course),
+                hosted ? undefined : sources,
+              );
+          }}
           onCreate={() => setView({ name: "create" })}
           onStart={(paper) => setView({ name: "take", paper, retry: false })}
           onOpen={(attempt) => setView({ name: "result", attempt })}
           onDelete={(paper) => {
-            if (window.confirm(`Delete "${paper.title}"? Your past attempts on it are kept.`))
-              commit({ ...storeRef.current, papers: storeRef.current.papers.filter((p) => p.id !== paper.id) });
+            if (!window.confirm(`Delete "${paper.title}"? Your past attempts on it are kept.`)) return;
+            // A draft still being written would only save itself again.
+            const task = paperTask(tasks, course, paper.id);
+            if (task && !isFinished(task)) cancel(task.id);
+            commit({ ...storeRef.current, papers: storeRef.current.papers.filter((p) => p.id !== paper.id) });
           }}
         />
       )}
@@ -238,6 +298,13 @@ export default function Practice({
           course={course}
           hosted={hosted}
           sources={sources}
+          tasks={tasks}
+          now={now}
+          launched={launched}
+          onLaunch={(spec) => {
+            const task = startPaper(course, spec, taskLabel(spec.kind, course), hosted ? undefined : sources);
+            setLaunched(task.id);
+          }}
           preselect={launch?.sources ?? []}
           exam={launch?.exam ?? ""}
           initialBrief={focusBrief(launch?.topic ?? "")}
@@ -256,11 +323,6 @@ export default function Practice({
             }
             if (hosted) setReload((n) => n + 1);
           }}
-          onCreated={(paper, notes) => {
-            addPaper(paper);
-            setNotice(notes.join(" "));
-            setView({ name: "papers" });
-          }}
         />
       )}
       {view.name === "progress" && (
@@ -274,13 +336,22 @@ export default function Practice({
 /* ---------------------------------------------------------------- papers */
 
 function Papers({
+  course,
   store,
+  tasks,
+  now,
+  onContinue,
   onCreate,
   onStart,
   onOpen,
   onDelete,
 }: {
+  course: string;
   store: PracticeStore;
+  tasks: Task[];
+  now: number;
+  /** Writes the rest of a draft paper. */
+  onContinue: (paper: Paper) => void;
   onCreate: () => void;
   onStart: (paper: Paper) => void;
   onOpen: (attempt: Attempt) => void;
@@ -328,12 +399,20 @@ function Papers({
         {store.papers.map((paper) => {
           const attempts = store.attempts.filter((a) => a.paperId === paper.id);
           const best = attempts.length ? Math.max(...attempts.map((a) => a.percent)) : null;
+          const task = paper.draft ? paperTask(tasks, course, paper.id) : undefined;
+          const working = task && !isFinished(task) ? task : undefined;
           return (
             <article className="pr-paper" key={paper.id}>
               <div>
                 <p className="eyebrow">
                   {KIND_LABELS[paper.kind]} · {paper.questions.length} questions · {date(paper.createdAt)}
                 </p>
+                {paper.draft && (
+                  <p className="pr-draft">
+                    Draft: {paper.questions.length} of {paper.draft.target} questions
+                    {working && <span className="pr-working"> · {liveLine(working, tasks, now)}</span>}
+                  </p>
+                )}
                 <h2>{paper.title}</h2>
                 {paper.brief && <p className="pr-brief">&ldquo;{paper.brief}&rdquo;</p>}
                 <p className="pr-meta">
@@ -341,9 +420,14 @@ function Papers({
                 </p>
               </div>
               <div className="pr-actions">
-                <button type="button" className="pr-primary" onClick={() => onStart(paper)}>
+                <button type="button" className="pr-primary" disabled={!paper.questions.length} onClick={() => onStart(paper)}>
                   {attempts.length ? "Retake" : "Start"}
                 </button>
+                {paper.draft && !working && (
+                  <button type="button" className="pr-quiet" onClick={() => onContinue(paper)}>
+                    {task && task.status !== "done" ? continueLabel(task) : "Continue"}
+                  </button>
+                )}
                 <button type="button" className="pr-quiet" onClick={() => onDelete(paper)}>
                   Delete
                 </button>
@@ -365,33 +449,38 @@ function Create({
   preselect,
   exam,
   initialBrief,
+  tasks,
+  now,
+  launched,
+  onLaunch,
   onUpload,
-  onCreated,
 }: {
   course: string;
   hosted: boolean;
   sources: LocalFile[];
+  tasks: Task[];
+  now: number;
+  /** The paper task started here on this visit. */
+  launched: string;
+  /** Hands the paper to the background runner. */
+  onLaunch: (spec: PaperTaskSpec) => void;
   /** Module-relative paths to tick when the screen opens (from a link on Assessments); empty means the usual picks. */
   preselect: string[];
   /** The assessment those files were picked for. */
   exam: string;
   initialBrief: string;
   onUpload: (files: File[]) => Promise<void>;
-  onCreated: (paper: Paper, notes: string[]) => void;
 }) {
   const [kind, setKind] = useState<PracticeKind>("exam");
   const [count, setCount] = useState(COUNT_LIMITS.exam.fallback);
   const [brief, setBrief] = useState(initialBrief);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [keepPreselect, setKeepPreselect] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState("");
   const [error, setError] = useState<{ title: string; detail?: string; connect?: boolean } | null>(null);
   const [uploadError, setUploadError] = useState("");
   const [aiChoice, setAiChoice] = useState<(AiPick & { files: string }) | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [chooseNote, setChooseNote] = useState("");
-  const abort = useRef<AbortController | null>(null);
   const chooseAbort = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
@@ -466,6 +555,12 @@ function Create({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileKey]);
 
+  // The paper being written for this module: the one started here, else any still running (after a page change).
+  const current =
+    tasks.find((t) => t.id === launched) ?? latestTask(tasks, course, (t) => t.type === "paper" && !isFinished(t));
+  const busy = Boolean(current && !isFinished(current));
+  const stopped = current && current.id === launched && isFinished(current) && current.status !== "done" ? current : undefined;
+
   const chosen = sources.filter(on);
   const pastPapers = sources.filter((f) => sourceRole(f) === "past-paper");
   const limits = COUNT_LIMITS[kind];
@@ -488,45 +583,18 @@ function Create({
 
   async function run() {
     setError(null);
+    askToNotify();
     if (!(await hasAnyConnection().catch(() => false))) {
       setError({ title: ERROR_COPY.no_credentials.title, detail: "Practice papers are written by your AI assistant.", connect: true });
       return;
     }
-    const controller = new AbortController();
-    abort.current = controller;
-    setBusy(true);
-    setStatus(PROGRESS_TEXT.connecting);
-    try {
-      const client = await createConfiguredAiClient();
-      const { paper, dropped, unread } = await generatePaper({
-        client,
-        kind,
-        count,
-        brief,
-        module: course.split("/").slice(1).join("/") || course,
-        sources: chosen,
-        signal: controller.signal,
-        onProgress: (p) => setStatus(PROGRESS_TEXT[p.phase]),
-      });
-      onCreated(paper, [
-        dropped ? `${dropped} generated question${dropped === 1 ? " was" : "s were"} left out because the answer key could not be checked.` : "",
-        unread.length ? `${unread.length} file${unread.length === 1 ? " was" : "s were"} too large or had no readable text and ${unread.length === 1 ? "was" : "were"} not used.` : "",
-      ].filter(Boolean));
-    } catch (e) {
-      const err = e as AiError;
-      if (err.code === "aborted" || controller.signal.aborted) setError(null);
-      else {
-        const copy = ERROR_COPY[err.code] || ERROR_COPY.unknown;
-        setError({
-          title: copy.title,
-          detail: [err.message, err.hint].filter(Boolean).join(" "),
-          connect: err.code === "no_credentials" || err.code === "invalid_key",
-        });
-      }
-    } finally {
-      setBusy(false);
-      abort.current = null;
-    }
+    onLaunch({
+      kind,
+      count,
+      brief,
+      module: course.split("/").slice(1).join("/") || course,
+      sourcePaths: chosen.map((f) => f.path),
+    });
   }
 
   const groups = [
@@ -630,18 +698,41 @@ function Create({
           {error.connect && <a href="/connect">Set up your AI connection</a>}
         </div>
       )}
+      {stopped && (
+        <div className={stopped.status === "failed" ? "pr-error" : "pr-note"} role="alert">
+          <b>{finishedLine(stopped)}</b>
+          {stopped.status === "failed" && stopped.error && (
+            <p>{[stopped.error.message, stopped.error.hint].filter(Boolean).join(" ")}</p>
+          )}
+          {(stopped.error?.code === "no_credentials" || stopped.error?.code === "invalid_key") && (
+            <a href="/connect">Set up your AI connection</a>
+          )}
+          {stopped.type === "paper" && stopped.spec.paperId && <p>The questions written so far are kept as a draft under Papers.</p>}
+          <button
+            type="button"
+            className="pr-quiet"
+            onClick={() => {
+              askToNotify();
+              continueTask(stopped.id);
+            }}
+          >
+            {continueLabel(stopped)}
+          </button>
+        </div>
+      )}
       <div className="pr-actions">
         <button type="button" className="pr-primary" disabled={busy || !chosen.length} onClick={run}>
-          {busy ? "Generating…" : `Generate ${KIND_LABELS[kind].toLowerCase()}`}
+          {busy ? "Writing your paper…" : `Generate ${KIND_LABELS[kind].toLowerCase()}`}
         </button>
-        {busy && (
-          <button type="button" className="pr-quiet" onClick={() => abort.current?.abort()}>
+        {busy && current && (
+          <button type="button" className="pr-quiet" onClick={() => cancel(current.id)}>
             Cancel
           </button>
         )}
+        {busy && current && <span className="pr-working">{liveLine(current, tasks, now)}</span>}
         <span aria-live="polite">
           {busy
-            ? `${status} This can take a minute or two.`
+            ? "You can leave this page: it carries on and you will be told when it is done."
             : chosen.length
               ? `${chosen.length} file${chosen.length === 1 ? "" : "s"} will be sent to your assistant.`
               : "Choose at least one file."}

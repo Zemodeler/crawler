@@ -6,13 +6,14 @@
  */
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 
-import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
 import { hasAnyConnection } from "../../lib/ai/settings.ts";
-import { ERROR_COPY, type AiError, type Progress } from "../../lib/ai/types.ts";
+import { ERROR_COPY } from "../../lib/ai/types.ts";
+import { TUTORIALS_CHANGED, cancel, continueTask, isFinished, startTutorial, type Task } from "../../lib/background-tasks.ts";
 import type { LocalFile } from "../../lib/course-fs.ts";
 import {
   exerciseKey,
   importLegacyProgress,
+  isPartial,
   lectureChoices,
   loadProgress,
   loadTutorials,
@@ -23,26 +24,18 @@ import {
   setupRows,
   saveTutorials,
   tally,
-  upsertSheet,
   type SheetPair,
   type TutorialFile,
   type TutorialProgress,
   type TutorialSheet,
 } from "../../lib/tutorial.ts";
 import { exerciseKeysFor, topicsForSheets } from "../../lib/practice-view.ts";
-import { convertSheet } from "../../lib/tutorial-generate.ts";
+import { askToNotify, finishedLine, latestTask, liveLine, useNow, useTasks } from "../shell/activity.tsx";
 import { TutorialSession } from "./tutorial-session.tsx";
 
 type Run = { title: string; keys: string[]; start: number };
 
 type View = { name: "home" } | { name: "setup" } | { name: "session"; run: Run };
-
-const CONVERT_TEXT: Record<Progress["phase"], string> = {
-  connecting: "Connecting to your assistant…",
-  streaming: "Reading the sheet and writing out the exercises…",
-  validating: "Checking the slide links…",
-  repairing: "Fixing the format…",
-};
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -89,17 +82,28 @@ export default function Tutorials({
   const importInput = useRef<HTMLInputElement>(null);
   const moduleName = course.split("/").slice(1).join("/") || course;
 
+  const tasks = useTasks();
+  const now = useNow(tasks.some((t) => t.type === "tutorial" && t.course === course && !isFinished(t)));
+
   useEffect(() => {
     let live = true;
-    loadTutorials(course, hosted)
-      .then((file) => {
-        if (!live) return;
-        fileRef.current = file;
-        setData(file);
-      })
-      .catch((e) => live && setLoadError((e as Error).message || "Could not read your tutorial sheets."));
+    const load = (first: boolean) =>
+      loadTutorials(course, hosted)
+        .then((file) => {
+          if (!live) return;
+          fileRef.current = file;
+          setData(file);
+        })
+        .catch((e) => live && first && setLoadError((e as Error).message || "Could not read your tutorial sheets."));
+    load(true);
+    // The background runner saved a sheet, or part of one: show it without a reload.
+    const onChanged = (event: Event) => {
+      if ((event as CustomEvent<{ course: string }>).detail?.course === course) void saving.current.then(() => load(false));
+    };
+    window.addEventListener(TUTORIALS_CHANGED, onChanged);
     return () => {
       live = false;
+      window.removeEventListener(TUTORIALS_CHANGED, onChanged);
     };
   }, [course, hosted]);
 
@@ -152,6 +156,14 @@ export default function Tutorials({
     setView({ name: "session", run: { title, keys, start: Math.max(0, at) } });
   }
 
+  /** Picks a part-converted sheet up where it stopped. */
+  function continueSheet(sheet: TutorialSheet) {
+    const task = sheetTask(tasks, course, sheet.id);
+    askToNotify();
+    if (task && isFinished(task) && task.status !== "done") continueTask(task.id);
+    else startTutorial(course, pairOf(sheet), sheet.label, hosted ? undefined : files);
+  }
+
   const keysOf = (sheets: TutorialSheet[]) => sheets.flatMap((s) => s.exercises.map((e) => exerciseKey(s, e)));
 
   // Which topic each exercise is on, and whether that topic has cards: for the topic filter and the "revise the cards" link.
@@ -195,11 +207,12 @@ export default function Tutorials({
       <>
         {banners}
         <Setup
-          moduleName={moduleName}
+          course={course}
+          hosted={hosted}
           files={files}
           sheets={data.sheets}
+          tasks={tasks}
           hasSheets={data.sheets.length > 0}
-          onConverted={(sheet) => update((file) => upsertSheet(file, sheet))}
           onBack={() => setView({ name: "home" })}
         />
       </>
@@ -297,7 +310,10 @@ export default function Tutorials({
         <section key={heading} className="tu-week">
           <h2>{heading}</h2>
           <div className="pr-list">
-            {sheets.map((sheet) => (
+            {sheets.map((sheet) => {
+              const task = sheet.pending ? sheetTask(tasks, course, sheet.id) : undefined;
+              const working = task && !isFinished(task);
+              return (
               <article className="pr-paper" key={sheet.id}>
                 <div>
                   <p className="eyebrow">
@@ -305,8 +321,19 @@ export default function Tutorials({
                   </p>
                   <h3 className="tu-sheet-title">{sheet.title || sheet.label}</h3>
                   <p className="pr-meta">{marksSummary([sheet], progress)}</p>
+                  {sheet.pending && (
+                    <p className="tu-partial-line">
+                      Partly converted: {sheet.pending.done} of {sheet.pending.total} parts
+                      {working && <span className="tu-working"> · {liveLine(task, tasks, now)}</span>}
+                    </p>
+                  )}
                 </div>
                 <div className="pr-actions">
+                  {sheet.pending && !working && (
+                    <button type="button" className="pr-quiet" onClick={() => continueSheet(sheet)}>
+                      Continue
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="pr-primary"
@@ -317,7 +344,8 @@ export default function Tutorials({
                   </button>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         </section>
       ))}
@@ -327,49 +355,72 @@ export default function Tutorials({
 
 /* ----------------------------------------------------------------- setup */
 
-type RowStatus =
-  | { state: "waiting" }
-  | { state: "converting"; text: string }
-  | { state: "done"; count: number; notes: string[] }
-  | { state: "failed"; title: string; detail: string; connect: boolean };
+/** The runner's latest task converting this sheet. */
+const sheetTask = (tasks: Task[], course: string, id: string) =>
+  latestTask(tasks, course, (t) => t.type === "tutorial" && t.spec.pair.id === id);
+
+/** A converted (possibly partial) sheet's files, as the pair that converts it again. */
+function pairOf(sheet: TutorialSheet): SheetPair {
+  return {
+    id: sheet.id,
+    label: sheet.label,
+    week: sheet.week,
+    part: sheet.part,
+    ...(sheet.sheetPath ? { sheetPath: sheet.sheetPath } : {}),
+    solutionPath: sheet.solutionPath,
+    ...(sheet.lecturePath ? { lecturePath: sheet.lecturePath } : {}),
+  };
+}
+
+/** "Continue from part 3 of 5" for a sheet whose conversion stopped part-way. */
+const partialLabel = (sheet: TutorialSheet | undefined) =>
+  sheet?.pending ? `Continue from part ${sheet.pending.done + 1} of ${sheet.pending.total}` : "";
 
 function Setup({
-  moduleName,
+  course,
+  hosted,
   files,
   sheets,
+  tasks,
   hasSheets,
-  onConverted,
   onBack,
 }: {
-  moduleName: string;
+  course: string;
+  hosted: boolean;
   files: LocalFile[];
   sheets: TutorialSheet[];
+  tasks: Task[];
   hasSheets: boolean;
-  onConverted: (sheet: TutorialSheet) => Promise<void>;
   onBack: () => void;
 }) {
   const found = useMemo(() => pairSheets(files), [files]);
   const lectures = useMemo(() => lectureChoices(files), [files]);
-  const converted = useMemo(() => new Set(sheets.map((s) => s.id)), [sheets]);
+  const converted = useMemo(() => new Set(sheets.filter((s) => !isPartial(s)).map((s) => s.id)), [sheets]);
   /** Files added by hand on this visit; once converted they come back from `sheets`. */
   const [added, setAdded] = useState<SheetPair[]>([]);
-  const pairs = useMemo(() => setupRows(found, sheets, added, files), [found, sheets, added, files]);
+  // Sheets being converted that are not found by name come back as rows too, so leaving the page loses nothing.
+  const fromTasks = useMemo(
+    () => tasks.flatMap((t) => (t.type === "tutorial" && t.course === course ? [t.spec.pair] : [])),
+    [tasks, course],
+  );
+  const pairs = useMemo(() => setupRows(found, sheets, [...added, ...fromTasks], files), [found, sheets, added, fromTasks, files]);
   const addable = useMemo(() => addableFiles(files, pairs), [files, pairs]);
   const [pick, setPick] = useState("");
   const [lecture, setLecture] = useState<Record<string, string>>({});
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
-  const [status, setStatus] = useState<Record<string, RowStatus>>({});
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ title: string; detail?: string; connect?: boolean } | null>(null);
-  const abort = useRef<AbortController | null>(null);
-
-  useEffect(() => () => abort.current?.abort(), []);
 
   const name = (path?: string) => (path ? path.split("/").pop() || path : "");
   const lectureOf = (pair: SheetPair) => lecture[pair.id] ?? pair.lecturePath ?? "";
+  const taskOf = (pair: SheetPair) => sheetTask(tasks, course, pair.id);
+  const inFlight = (pair: SheetPair) => {
+    const task = taskOf(pair);
+    return Boolean(task && !isFinished(task));
+  };
   const on = (pair: SheetPair) => ticked[pair.id] ?? !converted.has(pair.id);
-  const chosen = pairs.filter(on);
-  const setRow = (id: string, row: RowStatus) => setStatus((s) => ({ ...s, [id]: row }));
+  const chosen = pairs.filter((p) => on(p) && !inFlight(p));
+  const working = tasks.filter((t) => t.type === "tutorial" && t.course === course && !isFinished(t));
+  const now = useNow(working.length > 0);
   const isAdded = (pair: SheetPair) => !converted.has(pair.id) && added.some((a) => a.id === pair.id);
 
   function addFile() {
@@ -385,7 +436,6 @@ function Setup({
     setAdded((list) => list.filter((a) => a.id !== pair.id));
     const drop = <T,>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([id]) => id !== pair.id));
     setTicked(drop);
-    setStatus(drop);
     setLecture(drop);
   }
 
@@ -399,78 +449,34 @@ function Setup({
     return [...groups];
   }, [addable]);
 
+  /** Hands each sheet to the background runner, which carries on if the student leaves the page. */
   async function convert(list: SheetPair[]) {
     setError(null);
     if (!list.length) return;
+    askToNotify();
     if (!(await hasAnyConnection().catch(() => false))) {
       setError({ title: ERROR_COPY.no_credentials.title, detail: "Tutorial sheets are converted by your AI assistant.", connect: true });
       return;
     }
-    const controller = new AbortController();
-    abort.current = controller;
-    setBusy(true);
-    setStatus((s) => ({ ...s, ...Object.fromEntries(list.map((p) => [p.id, { state: "waiting" } as RowStatus])) }));
-    try {
-      const client = await createConfiguredAiClient();
-      for (const pair of list) {
-        if (controller.signal.aborted) break;
-        setRow(pair.id, { state: "converting", text: CONVERT_TEXT.connecting });
-        const target: SheetPair = { ...pair };
-        if (lectureOf(pair)) target.lecturePath = lectureOf(pair);
-        else delete target.lecturePath;
-        try {
-          const result = await convertSheet({
-            client,
-            module: moduleName,
-            pair: target,
-            files,
-            signal: controller.signal,
-            onProgress: (p) => setRow(pair.id, { state: "converting", text: CONVERT_TEXT[p.phase] }),
-          });
-          await onConverted(result.sheet);
-          setRow(pair.id, {
-            state: "done",
-            count: result.sheet.exercises.length,
-            notes: [
-              result.dropped ? `${plural(result.dropped, "exercise")} left out because the answer could not be read.` : "",
-              result.droppedRefs
-                ? `${plural(result.droppedRefs, "slide link")} removed because ${result.droppedRefs === 1 ? "it" : "they"} did not match the slides.`
-                : "",
-              result.unread.length ? `Could not read ${result.unread.map((p) => name(p)).join(", ")}.` : "",
-            ].filter(Boolean),
-          });
-        } catch (e) {
-          const err = e as AiError;
-          if (err.code === "aborted" || controller.signal.aborted) {
-            setRow(pair.id, { state: "waiting" });
-            break;
-          }
-          const copy = ERROR_COPY[err.code] || ERROR_COPY.unknown;
-          setRow(pair.id, {
-            state: "failed",
-            title: copy.title,
-            detail: [err.message, err.hint].filter(Boolean).join(" "),
-            connect: err.code === "no_credentials" || err.code === "invalid_key",
-          });
-        }
-      }
-    } catch (e) {
-      const err = e as AiError;
-      const copy = ERROR_COPY[err.code] || ERROR_COPY.unknown;
-      setError({ title: copy.title, detail: [err.message, err.hint].filter(Boolean).join(" ") });
-    } finally {
-      // After Cancel, rows that were never reached go back to having no status.
-      if (controller.signal.aborted)
-        setStatus((s) => Object.fromEntries(Object.entries(s).filter(([, row]) => row.state !== "waiting")));
-      setBusy(false);
-      abort.current = null;
+    for (const pair of list) {
+      const target: SheetPair = { ...pair };
+      if (lectureOf(pair)) target.lecturePath = lectureOf(pair);
+      else delete target.lecturePath;
+      startTutorial(course, target, pair.label, hosted ? undefined : files);
     }
+    const started = new Set(list.map((p) => p.id));
+    setTicked((t) => Object.fromEntries(Object.entries(t).filter(([id]) => !started.has(id))));
+  }
+
+  function again(task: Task) {
+    askToNotify();
+    continueTask(task.id);
   }
 
   return (
     <div className="tu-setup">
       {hasSheets && (
-        <button type="button" className="pr-quiet" disabled={busy} onClick={onBack}>
+        <button type="button" className="pr-quiet" onClick={onBack}>
           ← Back to my sheets
         </button>
       )}
@@ -506,14 +512,17 @@ function Setup({
             </thead>
             <tbody>
               {pairs.map((pair) => {
-                const row = status[pair.id];
+                const task = taskOf(pair);
+                const busy = inFlight(pair);
+                const partial = sheets.find((s) => s.id === pair.id && isPartial(s));
+                const err = task?.error;
                 return (
                   <tr key={pair.id}>
                     <td>
                       <input
                         type="checkbox"
                         aria-label={`Convert ${pair.label}`}
-                        checked={on(pair)}
+                        checked={!busy && on(pair)}
                         disabled={busy}
                         onChange={(e) => setTicked((t) => ({ ...t, [pair.id]: e.target.checked }))}
                       />
@@ -521,6 +530,11 @@ function Setup({
                     <td>
                       <b>{pair.label}</b>
                       {converted.has(pair.id) && <small className="tu-converted">Converted</small>}
+                      {partial?.pending && (
+                        <small className="tu-converted tu-partial">
+                          Partly converted: {partial.pending.done} of {partial.pending.total} parts
+                        </small>
+                      )}
                       {isAdded(pair) && (
                         <button
                           type="button"
@@ -550,26 +564,30 @@ function Setup({
                         ))}
                       </select>
                     </td>
-                    <td className="tu-status" aria-live="polite">
-                      {row?.state === "waiting" && <span className="pr-meta">Waiting</span>}
-                      {row?.state === "converting" && <span className="tu-working">{row.text}</span>}
-                      {row?.state === "done" && (
+                    <td className="tu-status">
+                      {task && busy && <span className="tu-working">{liveLine(task, tasks, now)}</span>}
+                      {task?.status === "done" && (
                         <>
-                          <span className="tu-done">Done: {plural(row.count, "exercise")}</span>
-                          {row.notes.map((note) => (
+                          <span className="tu-done">Done: {plural(task.result?.count ?? 0, "exercise")}</span>
+                          {task.result?.notes.map((note) => (
                             <small key={note}>{note}</small>
                           ))}
                         </>
                       )}
-                      {row?.state === "failed" && (
+                      {task && isFinished(task) && task.status !== "done" && (
                         <>
-                          <span className="tu-failed">{row.title}</span>
-                          {row.detail && <small>{row.detail}</small>}
-                          {row.connect && <a href="/connect">Set up your AI connection</a>}
-                          <button type="button" className="pr-quiet tu-small" disabled={busy} onClick={() => convert([pair])}>
-                            Retry
+                          <span className={task.status === "failed" ? "tu-failed" : "pr-meta"}>{finishedLine(task)}</span>
+                          {task.status === "failed" && err && <small>{[err.message, err.hint].filter(Boolean).join(" ")}</small>}
+                          {(err?.code === "no_credentials" || err?.code === "invalid_key") && <a href="/connect">Set up your AI connection</a>}
+                          <button type="button" className="pr-quiet tu-small" onClick={() => again(task)}>
+                            {partialLabel(partial) || "Retry"}
                           </button>
                         </>
+                      )}
+                      {!task && partial && (
+                        <button type="button" className="pr-quiet tu-small" onClick={() => convert([pair])}>
+                          {partialLabel(partial)}
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -587,7 +605,7 @@ function Setup({
             Any exercise file not listed above, such as extra exercises. Choose the file with the answers: it usually repeats the questions.
           </p>
           <div className="tu-add-row">
-            <select id="tu-add-file" value={pick} disabled={busy} onChange={(e) => setPick(e.target.value)}>
+            <select id="tu-add-file" value={pick} onChange={(e) => setPick(e.target.value)}>
               <option value="">Choose a file…</option>
               {addGroups.map(([folder, list]) => (
                 <optgroup key={folder} label={folder}>
@@ -599,7 +617,7 @@ function Setup({
                 </optgroup>
               ))}
             </select>
-            <button type="button" className="pr-quiet" disabled={busy || !pick} onClick={addFile}>
+            <button type="button" className="pr-quiet" disabled={!pick} onClick={addFile}>
               Add
             </button>
           </div>
@@ -615,17 +633,17 @@ function Setup({
       )}
       {pairs.length > 0 && (
         <div className="pr-actions">
-          <button type="button" className="pr-primary" disabled={busy || !chosen.length} onClick={() => convert(chosen)}>
-            {busy ? "Converting…" : `Convert ${plural(chosen.length, "sheet")}`}
+          <button type="button" className="pr-primary" disabled={!chosen.length} onClick={() => convert(chosen)}>
+            {`Convert ${plural(chosen.length, "sheet")}`}
           </button>
-          {busy && (
-            <button type="button" className="pr-quiet" onClick={() => abort.current?.abort()}>
+          {working.length > 0 && (
+            <button type="button" className="pr-quiet" onClick={() => working.forEach((t) => cancel(t.id))}>
               Cancel
             </button>
           )}
           <span aria-live="polite">
-            {busy
-              ? "One sheet at a time. Each can take a minute or two."
+            {working.length
+              ? "You can leave this page: conversion carries on and you will be told when it is done."
               : chosen.length
                 ? "Each sheet, its solutions and its lecture will be sent to your assistant."
                 : "Tick at least one sheet."}

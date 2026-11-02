@@ -81,3 +81,7 @@
   .pv-bar-row{grid-template-columns:72px minmax(0,1fr)}
   .pv-bar-text{grid-column:2}
 }
+
+/* A paper still being written, and the live line while the assistant writes it. */
+.pr-draft{margin:var(--space-1) 0 0;font-size:var(--text-sm);color:var(--warn)}
+.pr-working{color:var(--accent-text);font-size:var(--text-sm);font-variant-numeric:tabular-nums}

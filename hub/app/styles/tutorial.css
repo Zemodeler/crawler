@@ -40,6 +40,9 @@
 .tu-add-row{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center}
 .tu-add select{font:inherit;font-size:var(--text-sm);color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 8px;flex:1 1 260px;min-width:0;max-width:520px}
 .tu-converted{display:block;color:var(--accent-text);font-size:var(--text-xs);margin-top:2px}
+.tu-converted.tu-partial{color:var(--warn)}
+.tu-partial-line{margin:var(--space-1) 0 0;font-size:var(--text-sm);color:var(--warn)}
+.tu-working{font-variant-numeric:tabular-nums}
 .tu-status{min-width:180px}
 .tu-status>*{display:block}
 .tu-status small{color:var(--text-muted);margin-top:2px;line-height:1.45}
