@@ -388,18 +388,36 @@ export type GenerateOptions = {
   signal?: AbortSignal;
   onProgress?: (progress: Progress) => void;
   random?: () => number;
+  /** A draft paper from an earlier, interrupted run: its questions are kept and the run continues to its target. */
+  resume?: Paper;
+  /** Awaited after each batch of a long paper with the draft so far (carrying `draft` until the paper is complete). */
+  onBatch?: (paper: Paper, state: PaperBatchState) => void | Promise<void>;
 };
+
+export type PaperBatchState = { batch: number; batches: number; questions: number };
 
 export type GeneratedPaper = { paper: Paper; dropped: number; unread: string[] };
 
+/** Papers longer than BATCH_ABOVE questions are written about BATCH_SIZE questions per model call. */
+const BATCH_ABOVE = 6;
+const BATCH_SIZE = 5;
+const STEM_CHARS = 120;
+
+const dedupeKey = (prompt: string) => prompt.toLowerCase().replace(/\W+/g, " ");
+
 export async function generatePaper(options: GenerateOptions): Promise<GeneratedPaper> {
   const limits = COUNT_LIMITS[options.kind];
-  const count = Math.min(limits.max, Math.max(limits.min, Math.round(options.count) || limits.fallback));
+  const resume = options.resume?.draft && options.resume.kind === options.kind ? options.resume : undefined;
+  const count = resume
+    ? Math.min(limits.max, Math.max(1, resume.draft!.target))
+    : Math.min(limits.max, Math.max(limits.min, Math.round(options.count) || limits.fallback));
   const block = await readSources(options.sources);
   if (!block.used.length)
     throw new AiError("unknown", "None of the chosen files could be read.", {
       hint: "Pick a PDF, Word, PowerPoint or text file that contains text, or upload one.",
     });
+
+  if (count > BATCH_ABOVE || resume) return generateInBatches(options, count, block, resume);
 
   const result = await options.client.generate<RawPaper>({
     system: buildPaperPrompt({
@@ -436,4 +454,81 @@ export async function generatePaper(options: GenerateOptions): Promise<Generated
     dropped: dropped + Math.max(0, questions.length - count),
     unread: block.unread,
   };
+}
+
+/**
+ * A long paper, about BATCH_SIZE questions per model call. Each later call
+ * sees the earlier questions' stems so it does not repeat them, asks for
+ * what is still missing spread over the batches left, and the draft goes to
+ * onBatch so an interrupted run keeps its questions and can resume.
+ */
+async function generateInBatches(options: GenerateOptions, count: number, block: SourceBlock, resume: Paper | undefined): Promise<GeneratedPaper> {
+  const total = Math.ceil(count / BATCH_SIZE);
+  const questions: Question[] = resume ? [...resume.questions] : [];
+  const firstBatch = resume ? Math.min(total - 1, Math.floor((questions.length * total) / count)) + 1 : 1;
+  const id = resume?.id ?? newId("paper");
+  const createdAt = resume?.createdAt ?? Date.now();
+  const sources = [...new Set([...(resume?.sources ?? []), ...block.used])];
+  let title = resume?.title ?? "";
+  let dropped = 0;
+
+  const paperNow = (complete: boolean): Paper => ({
+    id,
+    title,
+    kind: options.kind,
+    brief: resume?.brief ?? options.brief.trim(),
+    createdAt,
+    sources,
+    questions: questions.slice(0, count),
+    ...(complete ? {} : { draft: { target: count } }),
+  });
+
+  for (let index = firstBatch; index <= total && questions.length < count; index++) {
+    const ask = Math.max(1, Math.ceil((count - questions.length) / (total - index + 1)));
+    const earlier = questions.map((q) => `- ${q.prompt.replace(/\s+/g, " ").slice(0, STEM_CHARS)}`);
+    const content = [
+      `This is part ${index} of ${total} of the paper. Write exactly ${ask} questions now; the other parts are written separately.`,
+      earlier.length
+        ? `Questions already in this paper (do not repeat or closely paraphrase these):\n${fenceUntrusted("earlier questions", earlier.join("\n"))}`
+        : "",
+      `Source files:\n\n${block.text}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const onProgress = options.onProgress;
+    const result = await options.client.generate<RawPaper>({
+      system: buildPaperPrompt({
+        kind: options.kind,
+        count: ask,
+        brief: options.brief,
+        module: options.module,
+        pastPapers: block.pastPapers,
+      }),
+      messages: [{ role: "user", content }],
+      schema: PAPER_SCHEMA,
+      schemaName: "practice_paper",
+      maxOutputTokens: 4_000 + ask * 700,
+      effort: "medium",
+      signal: options.signal,
+      onProgress: onProgress ? (progress) => onProgress({ ...progress, batch: { index, total } }) : undefined,
+    });
+
+    const usable = usableQuestions(result.data?.questions ?? [], options.kind, options.random);
+    const seen = new Set(questions.map((q) => dedupeKey(q.prompt)));
+    const fresh = usable.questions.filter((q) => !seen.has(dedupeKey(q.prompt)));
+    const kept = fresh.slice(0, ask);
+    dropped += usable.dropped + (usable.questions.length - kept.length);
+    questions.push(...kept);
+    if (!title) title = clean(result.data?.title ?? "");
+
+    const complete = (index === total || questions.length >= count) && questions.length >= MIN_USABLE;
+    if (options.onBatch) await options.onBatch(paperNow(complete),{ batch: index, batches: total, questions: Math.min(count, questions.length) });
+  }
+
+  if (questions.length < MIN_USABLE)
+    throw new AiError("unknown", "The model did not return enough usable questions.", {
+      hint: "Try again, add more source material, or use a stronger model.",
+    });
+  return { paper: paperNow(true), dropped, unread: block.unread };
 }

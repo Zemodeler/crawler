@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   addableFiles,
   importLegacyProgress,
+  isPartial,
   lectureFor,
   packsFor,
   pairFor,
@@ -182,6 +183,26 @@ test("a damaged tutorial file reads as empty", () => {
   assert.deepEqual(parseTutorialFile(null).sheets, []);
   assert.deepEqual(parseTutorialFile({ version: 2, sheets: [] }).sheets, []);
   assert.equal(parseTutorialFile({ version: 1, sheets: [sheet("a", 1, "", [1]), { nope: true }] }).sheets.length, 1);
+});
+
+test("a partly converted sheet keeps a valid pending marker and loses a malformed one", () => {
+  const parsed = parseTutorialFile({
+    version: 1,
+    sheets: [
+      { ...sheet("a", 1, "", [1]), pending: { done: 1, total: 3 } },
+      { ...sheet("b", 2, "", [1]), pending: { done: 3, total: 3 } },
+      { ...sheet("c", 3, "", [1]), pending: "half" },
+      { ...sheet("d", 4, "", [1]), pending: { done: -1, total: 2 } },
+      sheet("e", 5, "", [1]),
+    ],
+  }).sheets;
+  const byId = Object.fromEntries(parsed.map((s) => [s.id, s]));
+  assert.deepEqual(byId.a.pending, { done: 1, total: 3 });
+  assert.equal(isPartial(byId.a), true);
+  for (const id of ["b", "c", "d", "e"]) {
+    assert.equal("pending" in byId[id], false, id);
+    assert.equal(isPartial(byId[id]), false, id);
+  }
 });
 
 test("progress from the stand-alone practice page is imported by week, part and number", () => {

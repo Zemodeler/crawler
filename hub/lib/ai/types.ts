@@ -41,11 +41,14 @@ export type JsonSchema = {
 
 export type AiTarget = { provider: ProviderId; transport: TransportId; model: string };
 
+/** Which batch of a long run the progress belongs to (1-based), when the run is split. */
+export type ProgressBatch = { index: number; total: number };
+
 export type Progress =
-  | { phase: "connecting" }
-  | { phase: "streaming"; chars: number }
-  | { phase: "validating" }
-  | { phase: "repairing"; attempt: number };
+  | { phase: "connecting"; batch?: ProgressBatch }
+  | { phase: "streaming"; chars: number; batch?: ProgressBatch }
+  | { phase: "validating"; batch?: ProgressBatch }
+  | { phase: "repairing"; attempt: number; batch?: ProgressBatch };
 
 export type GenerateRequest = {
   /** Trusted operator instructions. Never contains course text. */
