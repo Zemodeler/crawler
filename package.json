@@ -26,6 +26,8 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "pdfjs-dist": "6.2.108"
+    "@tesseract.js-data/eng": "1.0.0",
+    "pdfjs-dist": "6.2.108",
+    "tesseract.js": "7.0.0"
   }
 }

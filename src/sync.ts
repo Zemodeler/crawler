@@ -88,6 +88,12 @@ export type SyncOptions = {
 
 export type SyncEvent =
   | { type: "course-start"; course: string; folder: string }
+  /** The module's files are on disk; its captions and deadlines come in the second pass. */
+  | { type: "course-files-done"; course: string; folder: string }
+  /** Every module's files are done: the slow second pass (captions, reading for deadlines) begins. */
+  | { type: "phase"; phase: "reading" }
+  | { type: "course-reading"; course: string; folder: string }
+  /** The module is fully synced: files, captions and deadlines. */
   | { type: "course-done"; course: string }
   | { type: "course-failed"; course: string; message: string }
   | { type: "file"; course: string; path: string; result: FileResult };
@@ -242,6 +248,20 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
   const readText = options.textDeadlines !== false;
   if (readText) await rm(join(root, STATE_DIR, "rejected.json"), { force: true });
 
+  // A failed course keeps what it had; an expired sign-in stops the whole sync.
+  const failCourse = async (report: CourseReport, course: Course, error: unknown) => {
+    if (error instanceof VleError && error.code === "invalid_token") {
+      await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
+      throw error;
+    }
+    report.status = "failed";
+    report.error = error instanceof Error ? error.message : String(error);
+    emit({ type: "course-failed", course: course.shortname, message: report.error });
+  };
+
+  // Pass 1: every chosen module's files, so the student can start studying
+  // while the slow work (captions, reading documents for deadlines) follows.
+  const downloaded: { course: Course; placement: ModulePlacement; label: string; report: CourseReport; items: VleItem[]; plan: ReturnType<typeof planFiles> }[] = [];
   for (const course of courses) {
     const placement = placeCourse(course);
     const wanted = options.select ? options.select(course, placement) : (state.courses[course.shortname]?.enabled ?? select(course, placement));
@@ -261,7 +281,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
       const label = placement.code ?? course.shortname;
       // Every forum was read; only the relevant posts go on, the rest is thrown away here.
       const forum = selectForumPosts(listed);
-      const items = forum.items;
+      const items = forum.items as VleItem[];
       await writeForumHighlights(root, placement, forum.highlights);
       const plan = planFiles(items, placement);
       report.files.videosSkipped = plan.skipped.length;
@@ -275,6 +295,21 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
         else if (result.line) fileChanges.push(`${label} · ${result.line}`);
         emit({ type: "file", course: course.shortname, path: job.relativePath, result: result.result });
       });
+      fileChanges.push(...describeNewFiles(label, added));
+      newFiles.push({ module: label, added: added.length });
+      await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
+      downloaded.push({ course, placement, label, report, items, plan });
+      emit({ type: "course-files-done", course: course.shortname, folder: report.folder });
+    } catch (error) {
+      await failCourse(report, course, error);
+    }
+  }
+
+  // Pass 2: lecture captions, deadlines in the documents, assessment overviews.
+  if (downloaded.length > 0) emit({ type: "phase", phase: "reading" });
+  for (const { course, placement, label, report, items, plan } of downloaded) {
+    emit({ type: "course-reading", course: course.shortname, folder: report.folder });
+    try {
       const panoptoSite = PANOPTO_SITES[adapter.id];
       const panopto = options.panopto ?? (panoptoSite ? { site: panoptoSite } : undefined);
       if (options.transcripts !== false && (adapter.ltiLaunch || panopto)) {
@@ -283,7 +318,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
           credentials,
           course,
           placement,
-          items: items as VleItem[],
+          items,
           root,
           manifest,
           now,
@@ -297,10 +332,8 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
         report.files.new += got.added.length;
         newFiles.push({ module: label, added: got.added.length });
       }
-      fileChanges.push(...describeNewFiles(label, added));
-      newFiles.push({ module: label, added: added.length });
 
-      let deadlines = deadlinesFromItems(items as VleItem[], course, placement, now);
+      let deadlines = deadlinesFromItems(items, course, placement, now);
       if (readText) {
         try {
           const currentFiles = new Set(plan.jobs.map((job) => job.vleId));
@@ -309,7 +342,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
             root,
             course,
             placement,
-            items: items as VleItem[],
+            items,
             // Spoken lectures are not read for deadlines: too easy to misquote.
             manifest: [...manifest.values()].filter((e) => e.module === course.shortname && e.category !== "Transcripts" && currentFiles.has(e.vleId)),
             deadlines,
@@ -354,13 +387,7 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
         report.assessmentsError = error instanceof Error ? error.message : String(error);
       }
     } catch (error) {
-      if (error instanceof VleError && error.code === "invalid_token") {
-        await writeJson(join(root, STATE_DIR, "manifest.json"), [...manifest.values()]);
-        throw error;
-      }
-      report.status = "failed";
-      report.error = error instanceof Error ? error.message : String(error);
-      emit({ type: "course-failed", course: course.shortname, message: report.error });
+      await failCourse(report, course, error);
     }
   }
 

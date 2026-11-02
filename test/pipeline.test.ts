@@ -454,16 +454,17 @@ test("a same-kind candidate on the same London day attaches even when the titles
   }
 });
 
-test("documents are read from the folder, in the cache, and big or non-text files are skipped", async () => {
+test("documents are read from the folder, in the cache, and big, media or unreadable files are reported", async () => {
   const t = await setup();
   try {
     const dir = join(t.root, "2026-27", "TST101U - Testing Basics", "Course Materials", "Reference");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "Brief.txt"), "The lab test is due on 3 December 2026 at 16:00 and counts for 10% of the module.");
     await writeFile(join(dir, "Picture.png"), "not text");
+    await writeFile(join(dir, "Lecture.mp4"), "not text");
     await writeFile(join(dir, "Broken.docx"), "not an Office archive");
     const big = await open(join(dir, "Huge.txt"), "w");
-    await big.truncate(51 * 1024 * 1024);
+    await big.truncate(201 * 1024 * 1024);
     await big.close();
     const entry = (name: string, id: number): ManifestEntry => ({
       vleId: `moodle:file:${id}`,
@@ -476,9 +477,10 @@ test("documents are read from the folder, in the cache, and big or non-text file
       sha256: "x",
       writtenAt: NOW.toISOString(),
     });
-    const manifest = [entry("Brief.txt", 1), entry("Picture.png", 2), entry("Huge.txt", 3), entry("Missing.txt", 4), entry("Broken.docx", 5)];
+    const manifest = [entry("Brief.txt", 1), entry("Picture.png", 2), entry("Huge.txt", 3), entry("Missing.txt", 4), entry("Broken.docx", 5), entry("Lecture.mp4", 6), entry("Picture.png", 7), entry("Broken.docx", 8)];
     const { deadlines, counts, issues } = await t.run([], { manifest });
-    assert.deepEqual(issues.map((i) => [i.file, i.reason]), [["Broken.docx", "no-text"], ["Huge.txt", "too-large"], ["Missing.txt", "read-failed"], ["Picture.png", "unsupported"]]);
+    assert.deepEqual(issues.map((i) => [i.file, i.reason]), [["Broken.docx", "no-text"], ["Huge.txt", "too-large"], ["Lecture.mp4", "unsupported"], ["Missing.txt", "read-failed"]]);
+    // A picture OCR finds no words in is not a problem, and a file linked twice is not reported twice.
     assert.ok(issues.every((i) => !JSON.stringify(i).includes(SITE)), "diagnostics contain filenames, not authenticated source URLs");
     assert.equal(counts.sources, 1);
     assert.equal(deadlines.length, 1);

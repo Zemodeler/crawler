@@ -8,12 +8,12 @@
 
 import type { Deadline, Instant } from "./types.ts";
 
-/** One page of extracted text: a PDF page, a slide, a sheet, or 1 for flat text. */
+/** One page of extracted text: a PDF page, a slide, a sheet, a notebook cell, a database table, or 1 for flat text. */
 export type PageText = { page: number; text: string };
 
 export type ExtractedDocument = {
   sha256: string; // of the file bytes; the cache key
-  format: "pdf" | "pptx" | "docx" | "xlsx" | "html" | "text";
+  format: "pdf" | "pptx" | "docx" | "xlsx" | "html" | "text" | "notebook" | "image" | "other";
   pages: PageText[];
 };
 

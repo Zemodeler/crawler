@@ -23,7 +23,7 @@ import type { AiRunner, Course, Deadline, ManifestEntry, ModulePlacement, Source
 import { londonInstant, resolveWeek, weekMapFor } from "./weeks.ts";
 
 const STATE_DIR = ".crawler";
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_FILE_BYTES = 200 * 1024 * 1024;
 /** More sources than this on a course's first AI run need the student's go-ahead. */
 export const AI_CONFIRM_ABOVE = 20;
 const OVERLAP = 0.6;
@@ -153,15 +153,24 @@ async function documentSources(root: string, entries: ManifestEntry[]): Promise<
   const issues: ExtractionIssue[] = [];
   for (const entry of [...latest.values()].sort((a, b) => a.localPath.localeCompare(b.localPath))) {
     const filename = entry.localPath.split("/").slice(-1)[0] ?? entry.localPath;
-    const issue = (reason: ExtractionIssue["reason"], message: string) => issues.push({ file: filename, reason, message });
-    if (!detectFormat(filename).readable) { issue("unsupported", "This file format cannot be checked for deadlines."); continue; }
+    const issue = (reason: ExtractionIssue["reason"], message: string) => {
+      // The same file is often linked from two places in a module: report it once.
+      if (!issues.some((seen) => seen.file === filename && seen.reason === reason)) issues.push({ file: filename, reason, message });
+    };
+    const { format, readable } = detectFormat(filename);
+    if (!readable) { issue("unsupported", "Audio and video files cannot be checked for deadlines."); continue; }
     const full = resolve(base, ...entry.localPath.split("/"));
     if (!full.startsWith(base + sep)) { issue("unsafe-path", "The saved file path is outside the study folder."); continue; }
     try {
-      if ((await stat(full)).size > MAX_FILE_BYTES) { issue("too-large", "The file exceeds the 50 MiB text extraction limit."); continue; }
+      if ((await stat(full)).size > MAX_FILE_BYTES) { issue("too-large", "The file exceeds the 200 MiB text extraction limit."); continue; }
       const bytes = await readFile(full);
       const doc = await cachedExtract(join(base, STATE_DIR), bytes, filename);
-      if (!doc.pages.some((p) => isPage(p.text))) { issue("no-text", "No text could be extracted. The file may be blank, scanned or damaged."); continue; }
+      if (!doc.pages.some((p) => isPage(p.text))) {
+        // OCR found no words in the picture: there is nothing in it to check.
+        if (format === "pdf") issue("no-text", "No text could be read, even with OCR. The file may be blank or damaged.");
+        else if (format !== "image") issue("no-text", "No text could be extracted. The file may be blank or damaged.");
+        continue;
+      }
       out.push({ type: "document", title: filename, url: entry.sourceUrl, localPath: entry.localPath, pages: doc.pages });
     } catch {
       issue("read-failed", "The file could not be read or extracted. It will be retried on the next sync.");

@@ -104,6 +104,12 @@ test("staging retains direct src imports and crawler self-reference without modi
     await import('pdfjs-dist/legacy/build/pdf.mjs');
     const pdf = await extractText(await readFile(${JSON.stringify(fileURLToPath(new URL("../../test/fixtures/extract/handbook.pdf", import.meta.url)))}), 'handbook.pdf');
     assert.ok(pdf.pages.length > 0, 'PDF text extraction must work in the staged runtime');
+    const { createRequire } = await import('node:module');
+    const { existsSync } = await import('node:fs');
+    const local = createRequire(process.cwd() + '/package.json');
+    assert.equal(typeof local('tesseract.js').createWorker, 'function', 'OCR must ship in the staged runtime');
+    const eng = local('@tesseract.js-data/eng');
+    assert.ok(existsSync(eng.langPath + '/eng.traineddata.gz'), 'the English OCR model must ship in the staged runtime');
   `], { cwd: stage, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   await assert.rejects(stageRuntime({ destination: stage, dist }), { code: "EEXIST" });

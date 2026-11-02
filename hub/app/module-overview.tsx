@@ -185,8 +185,14 @@ function SettingsPanel({
       if (alive.current) setBusy(null);
       return;
     }
+    let filesIn = false;
     watchSync((run) => {
-      if (run.state === "running") say(`Syncing… ${run.newFiles} new ${run.newFiles === 1 ? "file" : "files"} so far.`);
+      if (run.state === "running" && run.phase === "reading") {
+        say("Files are in. Reading them for deadlines; you can study meanwhile.");
+        // Show the new files now rather than after the slow part.
+        if (!filesIn) window.dispatchEvent(new CustomEvent(LIBRARY_CHANGED_EVENT));
+        filesIn = true;
+      } else if (run.state === "running") say(`Syncing… ${run.newFiles} new ${run.newFiles === 1 ? "file" : "files"} so far.`);
       else if (run.state === "done") {
         say(`Synced. ${run.newFiles} new ${run.newFiles === 1 ? "file" : "files"}.`);
         if (alive.current) setBusy(null);

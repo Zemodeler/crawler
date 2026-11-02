@@ -218,3 +218,39 @@ test("deadlines due within 48 hours are reminded once", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("while the slow reading runs, the status says which modules' files are ready", async (t) => {
+  let release;
+  const reading = new Promise((resolve) => { release = resolve; });
+  const setup = await setupSync(t, {
+    sync: async ({ onProgress }) => {
+      onProgress({ type: "course-start", course: "TST101U", folder: "2026-27/TST101U - Testing" });
+      onProgress({ type: "course-files-done", course: "TST101U", folder: "2026-27/TST101U - Testing" });
+      onProgress({ type: "course-start", course: "TST202U", folder: "2026-27/TST202U - More" });
+      onProgress({ type: "course-files-done", course: "TST202U", folder: "2026-27/TST202U - More" });
+      onProgress({ type: "phase", phase: "reading" });
+      onProgress({ type: "course-reading", course: "TST101U", folder: "2026-27/TST101U - Testing" });
+      await reading;
+      onProgress({ type: "course-done", course: "TST101U" });
+      onProgress({ type: "course-done", course: "TST202U" });
+      return syncResult;
+    },
+  });
+  assert.equal((await setup.status()).sync.phase, null);
+  assert.deepEqual(await setup.startSync(), { ok: true });
+  await setImmediate();
+  const running = (await setup.status()).sync;
+  assert.equal(running.state, "running");
+  assert.equal(running.phase, "reading");
+  assert.equal(running.course, "TST101U");
+  assert.equal(running.filesReady, 2);
+  assert.equal(running.coursesDone, 0);
+  // Only changes to the module list (and updates) wait for the sync; building study packs never checks this.
+  assert.equal(setup.libraryBusy(), "Wait for the sync to finish first.");
+  release();
+  for (let i = 0; i < 20 && (await setup.status()).sync.state === "running"; i++) await setImmediate();
+  const done = (await setup.status()).sync;
+  assert.equal(done.state, "done");
+  assert.equal(done.phase, null);
+  assert.equal(done.coursesDone, 2);
+});

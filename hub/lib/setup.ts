@@ -10,8 +10,13 @@ const GUARD = { "x-study-hub-host": "1" };
 
 export type SyncRun = {
   state: "idle" | "running" | "done" | "failed";
+  /** While running: "downloading" every module's files, then "reading" them (lecture captions, deadlines). */
+  phase?: "downloading" | "reading" | null;
   course: string | null;
+  /** Modules fully synced: files, captions and deadlines. */
   coursesDone: number;
+  /** Modules whose files are on disk, so Study Hub can open them while the sync carries on. */
+  filesReady?: number;
   newFiles: number;
   files: number;
   failedCourses: string[];

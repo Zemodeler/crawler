@@ -1,6 +1,6 @@
 /** Isolated, inspectable unsigned release builds. Never cleans an existing path. */
 import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -51,10 +51,27 @@ export async function stageRuntime({ root = ROOT, destination, dist, pdfPackage 
     description: crawler.description, private: true, type: "module",
     main: "hub/shell/main.mjs", packageManager: "npm@10.9.2",
     exports: Object.fromEntries(Object.entries(crawler.exports).map(([key, value]) => [key, value.replace(/\.ts$/, ".js")])),
-    dependencies: { "pdfjs-dist": "6.2.108" },
+    dependencies: crawler.dependencies,
   }, null, 2) + "\n");
-  const pdf = pdfPackage ?? dirname(require.resolve("pdfjs-dist/package.json"));
-  await copyRuntimePackage(pdf, join(destination, "node_modules"));
+  // Every runtime dependency of the crawler (PDF.js, OCR) ships with its own dependencies, flattened.
+  const fromRoot = createRequire(join(root, "package.json"));
+  const copied = new Map();
+  for (const name of Object.keys(crawler.dependencies ?? {})) {
+    const source = name === "pdfjs-dist" && pdfPackage ? pdfPackage : packageRoot(fromRoot, name);
+    await copyRuntimePackage(source, join(destination, "node_modules"), copied);
+  }
+}
+
+/** A package's real folder as Node would find it from `from`, even when its exports hide package.json. */
+function packageRoot(from, name) {
+  for (const dir of from.resolve.paths(name) ?? []) {
+    const candidate = join(dir, name);
+    // The real path, so a pnpm package finds its own dependencies beside it.
+    if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
+  }
+  const error = new Error(`Cannot find module ${name}`);
+  error.code = "MODULE_NOT_FOUND";
+  throw error;
 }
 
 async function copyRuntimePackage(source, modules, copied = new Map()) {
@@ -70,13 +87,13 @@ async function copyRuntimePackage(source, modules, copied = new Map()) {
   });
   const localRequire = createRequire(join(source, "package.json"));
   for (const name of Object.keys({ ...metadata.dependencies, ...metadata.optionalDependencies })) {
-    let manifest;
-    try { manifest = localRequire.resolve(`${name}/package.json`); }
+    let dependency;
+    try { dependency = packageRoot(localRequire, name); }
     catch (error) {
       if (error.code === "MODULE_NOT_FOUND" && metadata.optionalDependencies?.[name]) continue;
       throw error;
     }
-    await copyRuntimePackage(dirname(manifest), modules, copied);
+    await copyRuntimePackage(dependency, modules, copied);
   }
   // PDF.js needs the canvas DOMMatrix polyfill even for text extraction in Node.
   if (metadata.name === "pdfjs-dist" && !copied.has("@napi-rs/canvas"))

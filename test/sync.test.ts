@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -991,4 +992,50 @@ test("direct sync claims a fresh library and refuses unknown legacy data", async
     await sync({ root, adapter: vle, credentials: CREDENTIALS });
     assert.equal(JSON.parse(await read(join(root, ".crawler", "university.json"))).version, 2);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("every module's files are downloaded before the slow reading pass starts", async () => {
+  const t = await setup();
+  try {
+    const events: string[] = [];
+    const notes = t.path("2026-27", "TST202U - Advanced Testing", "Course Materials", "Reference", "Notes.pdf");
+    let notesOnDiskWhenReadingStarted = false;
+    await t.run(NOW, {
+      onProgress: (event) => {
+        if (event.type === "file") return;
+        if (event.type === "course-reading" && event.course === "TST101U 2026/27") notesOnDiskWhenReadingStarted = existsSync(notes);
+        events.push(`${event.type}${"course" in event ? ` ${event.course}` : ""}`);
+      },
+      textDeadlines: true,
+    });
+    // The files of the last module are on disk by the time the first one is read.
+    assert.ok(notesOnDiskWhenReadingStarted);
+    assert.deepEqual(events, [
+      "course-start TST101U 2026/27",
+      "course-files-done TST101U 2026/27",
+      "course-start TST202U 2026/27",
+      "course-files-done TST202U 2026/27",
+      "phase",
+      "course-reading TST101U 2026/27",
+      "course-done TST101U 2026/27",
+      "course-reading TST202U 2026/27",
+      "course-done TST202U 2026/27",
+    ]);
+  } finally {
+    await t.cleanup();
+  }
+});
+
+test("a module that fails to download is not read, and the others still are", async () => {
+  const t = await setup();
+  try {
+    t.vle.failing.add(2);
+    const events: string[] = [];
+    const result = await t.run(NOW, { onProgress: (event) => { if (event.type !== "file") events.push(`${event.type}${"course" in event ? ` ${event.course}` : ""}`); } });
+    assert.deepEqual(result.courses.map((c) => [c.shortname, c.status]), [["TST101U 2026/27", "synced"], ["TST202U 2026/27", "failed"]]);
+    assert.ok(!events.includes("course-reading TST202U 2026/27"));
+    assert.ok(events.includes("course-done TST101U 2026/27"));
+  } finally {
+    await t.cleanup();
+  }
 });

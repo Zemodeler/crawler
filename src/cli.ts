@@ -243,6 +243,8 @@ function fail(env: CliEnv, message: string): number {
 
 function progress(env: CliEnv, event: SyncEvent): void {
   if (event.type === "course-start") env.out(`${event.course}  →  ${event.folder}`);
+  else if (event.type === "phase") env.out("Files done. Reading lecture captions and documents for deadlines…");
+  else if (event.type === "course-reading") env.out(`${event.course}  reading for deadlines`);
   else if (event.type === "course-failed") env.err(`  ${event.course} failed: ${event.message}`);
   else if (event.type === "file" && event.result !== "unchanged") env.out(`  ${event.result.padEnd(14)} ${event.path.split("/").slice(2).join("/")}`);
 }

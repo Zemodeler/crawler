@@ -71,7 +71,8 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
   let calendarState = { busy: false, lastReport: null, error: null };
 
   function emptyRun(state) {
-    return { state, course: null, coursesDone: 0, newFiles: 0, files: 0, failedCourses: [], error: null, finishedAt: null, summary: null, notice: null };
+    // phase: "downloading" files first, then "reading" (captions, deadlines). filesReady counts modules whose files are on disk.
+    return { state, phase: state === "running" ? "downloading" : null, course: null, coursesDone: 0, filesReady: 0, newFiles: 0, files: 0, failedCourses: [], error: null, finishedAt: null, summary: null, notice: null };
   }
 
   function prefs() {
@@ -324,6 +325,11 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     const keepRenewedCookies = async () => {
       if (credentials.cookies && credentials.cookies !== signedInCookies) await tokens.save(credentials).catch(() => {});
     };
+    // A module is browsable as soon as its files are in: index it then, not after the whole sync.
+    let indexing = Promise.resolve();
+    const indexModule = (folder) => {
+      indexing = indexing.then(() => formatLibrary(root, [folder])).catch((error) => console.error(`Study Hub materials index: ${error.message}`));
+    };
     Promise.resolve().then(() => runSync({
       adapter,
       credentials,
@@ -333,6 +339,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
       ...(assistant ? { ai: createHostAiRunner(assistant), confirmAi: confirmAiFor(origin, assistant) } : {}),
       onProgress(event) {
         if (event.type === "course-start") run.course = event.course;
+        else if (event.type === "course-files-done") {
+          run.filesReady++;
+          indexModule(event.folder);
+        } else if (event.type === "phase") {
+          run.phase = event.phase;
+          run.course = null;
+        } else if (event.type === "course-reading") run.course = event.course;
         else if (event.type === "course-done") run.coursesDone++;
         else if (event.type === "course-failed") {
           run.coursesDone++;
@@ -345,12 +358,13 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
     }))
       .then(async (result) => {
         await keepRenewedCookies();
+        await indexing;
         try {
           await formatLibrary(root, result.courses.filter((c) => c.status === "synced").map((c) => c.folder));
         } catch (error) {
           console.error(`Study Hub materials index: ${error.message}`);
         }
-        run = { ...run, state: "done", course: null, finishedAt: new Date().toISOString(), summary: summarize(result) };
+        run = { ...run, state: "done", phase: null, course: null, finishedAt: new Date().toISOString(), summary: summarize(result) };
         try {
           onSynced(result);
         } catch (error) {
@@ -366,6 +380,7 @@ export function createSetup({ app, BrowserWindow, safeStorage, session, shell, d
         run = {
           ...run,
           state: "failed",
+          phase: null,
           course: null,
           error: expired ? "Your sign-in has expired. Sign in again to sync." : error instanceof Error ? error.message : String(error),
           finishedAt: new Date().toISOString(),

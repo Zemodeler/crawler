@@ -190,7 +190,11 @@ test("format comes from the extension, then the mimetype", async () => {
   assert.deepEqual(detectFormat("download", "application/pdf"), { format: "pdf", readable: true });
   assert.deepEqual(detectFormat("page", "text/html; charset=utf-8"), { format: "html", readable: true });
   assert.deepEqual(detectFormat("notes.txt"), { format: "text", readable: true });
-  assert.deepEqual(detectFormat("photo.jpg", "image/jpeg"), { format: "text", readable: false });
+  assert.deepEqual(detectFormat("photo.jpg", "image/jpeg"), { format: "image", readable: true });
+  assert.deepEqual(detectFormat("Lab.ipynb"), { format: "notebook", readable: true });
+  assert.deepEqual(detectFormat("tables.sql"), { format: "other", readable: true });
+  assert.deepEqual(detectFormat("Lecture.mp4"), { format: "other", readable: false });
+  assert.deepEqual(detectFormat("download", "video/mp4"), { format: "other", readable: false });
   assert.deepEqual((await extractText(utf8("Line one\r\nLine two\n"), "notes.txt")).pages, [{ page: 1, text: "Line one\nLine two" }]);
   assert.deepEqual((await extractText(new Uint8Array([0xff, 0xd8, 0x00]), "photo.jpg", "image/jpeg")).pages, []);
 });
@@ -292,4 +296,89 @@ test("concurrent cachedExtract writes never share a temporary file", async () =>
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
+});
+
+test("Jupyter notebooks come out one cell per page, with printed output", async () => {
+  const notebook = {
+    cells: [
+      { cell_type: "markdown", source: ["# Lab sheet 1 (deadline: week 2)\n", "Submit on QMplus."] },
+      { cell_type: "code", source: "print('hello')", outputs: [{ output_type: "stream", text: ["hello\n"] }] },
+      { cell_type: "code", source: [], outputs: [] },
+    ],
+  };
+  const doc = await extractText(utf8(JSON.stringify(notebook)), "lab1.ipynb");
+  assert.equal(doc.format, "notebook");
+  assert.deepEqual(doc.pages, [
+    { page: 1, text: "# Lab sheet 1 (deadline: week 2)\nSubmit on QMplus." },
+    { page: 2, text: "print('hello')\n\nOutput:\nhello" },
+  ]);
+  assert.deepEqual((await extractText(utf8("{not json"), "lab.ipynb")).pages, []);
+});
+
+test("files of no known format are read as text, or by their printable strings", async () => {
+  const sql = await extractText(utf8("-- Coursework due 5 December 2026\r\nCREATE TABLE t (id int);\n"), "tables.sql");
+  assert.equal(sql.format, "other");
+  assert.deepEqual(sql.pages, [{ page: 1, text: "-- Coursework due 5 December 2026\nCREATE TABLE t (id int);" }]);
+
+  const utf16 = Buffer.from("Hand in by Friday", "utf16le");
+  const binary = new Uint8Array([0, 1, 2, ...utf8("Report due 9 March 2027"), 0, 255, 0, ...utf16, 0, 0]);
+  const doc = await extractText(binary, "Legacy.doc");
+  assert.deepEqual(doc.pages, [{ page: 1, text: "Report due 9 March 2027\nHand in by Friday" }]);
+});
+
+test("SQLite files such as Visual Paradigm projects give the text in their tables, gzip blobs included", async (t) => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { gzipSync } = await import("node:zlib");
+  const dir = await mkdtemp(join(tmpdir(), "crawler-vpp-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "Lab.vpp");
+  const database = new DatabaseSync(path);
+  database.exec("CREATE TABLE MODEL_ELEMENT (ID text, NAME text, DEFINITION blob)");
+  database.exec("CREATE TABLE PROJECT_FILE (PATH text, CONTENT blob)");
+  database.prepare("INSERT INTO MODEL_ELEMENT VALUES (?, ?, ?)").run("a1", "Submit the diagram by 12 November 2026", utf8("plain blob"));
+  database.prepare("INSERT INTO PROJECT_FILE VALUES (?, ?)").run("documentation", gzipSync(Buffer.from("Deadline: week 9")));
+  database.close();
+  const doc = await extractText(new Uint8Array(await readFile(path)), "Lab.vpp");
+  assert.equal(doc.format, "other");
+  assert.deepEqual(doc.pages, [
+    { page: 1, text: "a1\nSubmit the diagram by 12 November 2026\nplain blob" },
+    { page: 2, text: "documentation\nDeadline: week 9" },
+  ]);
+});
+
+test("ZIP archives give the text of their members, each headed by its name", async () => {
+  const archive = zip({ "brief/README.md": "Due 1 May 2027", "data.bin": "", "lab.ipynb": JSON.stringify({ cells: [{ source: "Week 5 lab" }] }) });
+  const doc = await extractText(archive, "Coursework.zip");
+  assert.deepEqual(doc.pages, [
+    { page: 1, text: "brief/README.md\nDue 1 May 2027" },
+    { page: 2, text: "lab.ipynb\nWeek 5 lab" },
+  ]);
+});
+
+test("images go through OCR; a picture with no words gives no pages", async () => {
+  const { toBmp } = await import("../src/extract/ocr.ts");
+  const white = toBmp({ width: 200, height: 120, kind: 3, data: new Uint8Array(200 * 120 * 4).fill(255) })!;
+  assert.equal(white.length, 54 + 600 * 120);
+  assert.equal(String.fromCharCode(white[0]!, white[1]!), "BM");
+  const doc = await extractText(white, "blank.bmp");
+  assert.equal(doc.format, "image");
+  assert.deepEqual(doc.pages, []);
+  assert.deepEqual((await extractText(new Uint8Array([0xff, 0xd8, 0x00]), "photo.jpg", "image/jpeg")).pages, []);
+  // A transparent pixel is drawn over white; 1-bit images unpack to black and white.
+  const clear = toBmp({ width: 1, height: 1, kind: 3, data: new Uint8Array([0, 0, 0, 0]) })!;
+  assert.deepEqual([...clear.subarray(54, 57)], [255, 255, 255]);
+  const bits = toBmp({ width: 2, height: 1, kind: 1, data: new Uint8Array([0b10000000]) })!;
+  assert.deepEqual([...bits.subarray(54, 60)], [255, 255, 255, 0, 0, 0]);
+});
+
+test("PDFs are cached under a reader version, so files read before OCR are read again", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "crawler-pdf-cache-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const bytes = new Uint8Array(await fixture("handbook.pdf"));
+  const old = join(stateDir, "text", `${sha256(bytes)}.pdf.json`);
+  await mkdir(join(stateDir, "text"));
+  await writeFile(old, JSON.stringify({ sha256: sha256(bytes), format: "pdf", pages: [{ page: 1, text: "stale" }] }));
+  const doc = await cachedExtract(stateDir, bytes, "handbook.pdf");
+  assert.notEqual(doc.pages[0]?.text, "stale");
+  assert.ok((await readdir(join(stateDir, "text"))).includes(`${sha256(bytes)}.pdf.v2.json`));
 });

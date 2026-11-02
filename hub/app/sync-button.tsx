@@ -15,31 +15,55 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
   const [error, setError] = useState("");
   const [library, setLibrary] = useState<{ status: SetupStatus; open: boolean } | null>(null);
 
+  /**
+   * Follows a running sync, whoever started it (this button, setup, the tray).
+   * Each module whose files land shows up straight away, so the student can
+   * study it while the slow reading for deadlines carries on.
+   */
+  const follow = (refreshFirst: boolean) => {
+    let ready = refreshFirst ? 0 : -1;
+    return watchSync((next) => {
+      setRun(next);
+      const nowReady = next.filesReady ?? 0;
+      if (next.state === "running" && nowReady !== ready) {
+        if (ready >= 0 && nowReady > ready) onSynced();
+        ready = nowReady;
+      }
+      if (next.state === "done") {
+        setFreshness("last synced just now");
+        onSynced();
+      }
+      // An expired sign-in is cleared by the sync; show the way back in.
+      if (next.state === "failed") setupStatus().then((s) => setSignedIn(s.signedIn)).catch(() => {});
+    });
+  };
+
   useEffect(() => {
+    let stop: (() => void) | undefined;
+    let alive = true;
     setupStatus()
       .then((s) => {
+        if (!alive) return;
         setRun(s.sync);
         if (s.library?.legacy) setLibrary({ status: s, open: false });
         setSignedIn(s.signedIn);
         setFreshness(s.freshness);
-        if (s.sync.state === "running") watchSync(setRun);
+        if (s.sync.state === "running") stop = follow(false);
       })
       .catch(() => {});
+    return () => {
+      alive = false;
+      stop?.();
+    };
+    // follow only reads setters and onSynced; one watcher per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const begin = async () => {
     setError("");
     try {
       await startSync();
-      watchSync((next) => {
-        setRun(next);
-        if (next.state === "done") {
-          setFreshness("last synced just now");
-          onSynced();
-        }
-        // An expired sign-in is cleared by the sync; show the way back in.
-        if (next.state === "failed") setupStatus().then((s) => setSignedIn(s.signedIn)).catch(() => {});
-      });
+      follow(true);
     } catch (e) {
       if ((e as { code?: string }).code === LEGACY_LIBRARY) {
         setError("");
@@ -117,11 +141,17 @@ export default function SyncButton({ onSynced }: { onSynced: () => void }) {
   return (
     <div className="sync-status" aria-live="polite">
       <button className="switch sync-button" onClick={begin} disabled={run?.state === "running"}>
-        {run?.state === "running" ? `Syncing… ${run.newFiles} new` : "Sync now"}
+        {run?.state === "running" ? (run.phase === "reading" ? "Reading for deadlines…" : `Syncing… ${run.newFiles} new`) : "Sync now"}
       </button>
       <small>
         {error ||
-          (run?.state === "failed" ? run.error : run?.state === "done" ? `Synced at ${time}, ${findings}` : freshness)}
+          (run?.state === "failed"
+            ? run.error
+            : run?.state === "done"
+              ? `Synced at ${time}, ${findings}`
+              : run?.phase === "reading"
+                ? "Your files are in. You can study while this runs."
+                : freshness)}
       </small>
       {run?.state === "done" && run.notice && <small className="sync-notice">{run.notice}</small>}
       {run?.state === "done" && <ExtractionWarnings summary={run.summary} />}

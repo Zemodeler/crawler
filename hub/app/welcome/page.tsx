@@ -110,6 +110,8 @@ export default function Welcome() {
   };
 
   const index = STEPS.findIndex((s) => s.id === step);
+  const reading = run?.state === "running" && run.phase === "reading";
+  const filesReady = run?.filesReady ?? run?.coursesDone ?? 0;
   const universityName = status?.university.name || "your university";
 
   return (
@@ -225,23 +227,39 @@ export default function Welcome() {
             {step === "sync" && (
               <>
                 <p className="eyebrow">Step 4 of 4</p>
-                <h1>{run?.state === "done" ? "Your modules are ready." : run?.state === "failed" ? "The sync stopped." : "Fetching your modules…"}</h1>
+                <h1>
+                  {run?.state === "done"
+                    ? "Your modules are ready."
+                    : run?.state === "failed"
+                      ? "The sync stopped."
+                      : reading
+                        ? "Your files are in."
+                        : "Fetching your modules…"}
+                </h1>
                 {(!run || run.state === "running" || run.state === "idle") && (
                   <>
                     <p className="lede">
-                      The first sync downloads every file for the modules you chose, which can take a few minutes. You can leave this window open.
+                      {reading
+                        ? "Study Hub is now reading your lecture captions and documents for deadlines. This is the slow part and it carries on in the background, so you can start studying now. Deadlines appear in the Calendar as it finishes."
+                        : "The first sync downloads every file for the modules you chose, which can take a few minutes. Reading them for deadlines comes after, in the background."}
                     </p>
-                    <div className="sync-progress" role="progressbar" aria-label="Sync progress" aria-valuetext={`${run?.files || 0} files`}>
+                    <div className="sync-progress" role="progressbar" aria-label="Sync progress" aria-valuetext={reading ? "Reading for deadlines" : `${run?.files || 0} files`}>
                       <span />
                     </div>
                     <p className="sync-line">
-                      {run?.course ? <>Now: <b>{run.course}</b> · </> : null}
-                      {run?.coursesDone || 0} module{run?.coursesDone === 1 ? "" : "s"} done · {run?.newFiles || 0} new files
+                      {run?.course ? <>{reading ? "Reading" : "Now"}: <b>{run.course}</b> · </> : null}
+                      {reading
+                        ? <>{run?.coursesDone || 0} of {filesReady} module{filesReady === 1 ? "" : "s"} read</>
+                        : <>{filesReady} module{filesReady === 1 ? "" : "s"} downloaded · {run?.newFiles || 0} new files</>}
                     </p>
-                    {/* Once a module is on disk the hub can open it; the sync keeps running in the desktop app. */}
-                    {run?.coursesDone ? (
+                    {/* Once a module's files are on disk the hub can open it; the sync keeps running in the desktop app. */}
+                    {reading ? (
                       <div className="welcome-actions">
-                        <button className="text-link" onClick={finish}>Open Study Hub now; the sync carries on</button>
+                        <button className="primary large" onClick={finish}>Start using Study Hub</button>
+                      </div>
+                    ) : filesReady ? (
+                      <div className="welcome-actions">
+                        <button className="text-link" onClick={finish}>Open Study Hub now; the downloads carry on</button>
                       </div>
                     ) : null}
                   </>
