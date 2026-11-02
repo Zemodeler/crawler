@@ -107,14 +107,22 @@ export default function Tutorials({
     };
   }, [course, hosted]);
 
-  /** Changes the sheets from the latest copy and saves them, one save after another. */
+  /**
+   * Changes the sheets and saves them, one save after another. The change is
+   * shown at once, then applied again to the copy on disk read just before
+   * writing, so a sheet the background runner saved meanwhile is never lost.
+   */
   function update(change: (file: TutorialFile) => TutorialFile): Promise<void> {
-    const next = change(fileRef.current || { version: 1, sheets: [] });
-    fileRef.current = next;
-    setData(next);
+    const shown = change(fileRef.current || { version: 1, sheets: [] });
+    fileRef.current = shown;
+    setData(shown);
     const run = saving.current.then(async () => {
       try {
-        await saveTutorials(course, hosted, fileRef.current!);
+        const latest = await loadTutorials(course, hosted).catch(() => null);
+        const next = latest ? change(latest) : fileRef.current!;
+        await saveTutorials(course, hosted, next);
+        fileRef.current = next;
+        setData(next);
         setSaveError("");
       } catch (e) {
         setSaveError((e as Error).message || "Could not save your tutorial sheets.");
