@@ -44,11 +44,19 @@ export type AiTarget = { provider: ProviderId; transport: TransportId; model: st
 /** Which batch of a long run the progress belongs to (1-based), when the run is split. */
 export type ProgressBatch = { index: number; total: number };
 
+/** `elapsedMs`: time since this attempt's job was started, when the transport knows it. */
 export type Progress =
-  | { phase: "connecting"; batch?: ProgressBatch }
-  | { phase: "streaming"; chars: number; batch?: ProgressBatch }
-  | { phase: "validating"; batch?: ProgressBatch }
-  | { phase: "repairing"; attempt: number; batch?: ProgressBatch };
+  | { phase: "connecting"; batch?: ProgressBatch; elapsedMs?: number }
+  | {
+      phase: "streaming";
+      chars: number;
+      batch?: ProgressBatch;
+      /** The answer so far, when the transport can report it (subscription jobs). */
+      text?: string;
+      elapsedMs?: number;
+    }
+  | { phase: "validating"; batch?: ProgressBatch; elapsedMs?: number }
+  | { phase: "repairing"; attempt: number; batch?: ProgressBatch; elapsedMs?: number };
 
 export type GenerateRequest = {
   /** Trusted operator instructions. Never contains course text. */
@@ -62,6 +70,14 @@ export type GenerateRequest = {
   effort?: "low" | "medium" | "high";
   signal?: AbortSignal;
   onProgress?: (progress: Progress) => void;
+  /**
+   * A stable key for this call, so a run interrupted by a page load can
+   * reattach to the same host job instead of starting (and paying for) a new
+   * one. Only the subscription transport uses it.
+   */
+  jobKey?: string;
+  /** Shown in the host's activity list. */
+  label?: string;
 };
 
 export type Usage = { inputTokens: number | null; outputTokens: number | null };
