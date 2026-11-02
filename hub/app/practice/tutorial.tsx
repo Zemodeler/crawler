@@ -26,6 +26,7 @@ import {
   type TutorialProgress,
   type TutorialSheet,
 } from "../../lib/tutorial.ts";
+import { exerciseKeysFor, topicsForSheets } from "../../lib/practice-view.ts";
 import { convertSheet } from "../../lib/tutorial-generate.ts";
 import { TutorialSession } from "./tutorial-session.tsx";
 
@@ -56,8 +57,23 @@ function marksSummary(sheets: TutorialSheet[], progress: TutorialProgress): stri
     .join(" · ");
 }
 
-export default function Tutorials({ course, hosted, files }: { course: string; hosted: boolean; files: LocalFile[] }) {
+export default function Tutorials({
+  course,
+  hosted,
+  files,
+  topic = "",
+  onOpenCards,
+}: {
+  course: string;
+  hosted: boolean;
+  files: LocalFile[];
+  /** Show only the exercises on this topic, until the student asks for all of them. */
+  topic?: string;
+  /** Opens the Cards view, study tab, filtered to a topic. Without it there is no cross-link. */
+  onOpenCards?: (topic: string) => void;
+}) {
   const [data, setData] = useState<TutorialFile | null>(null);
+  const [topicFilter, setTopicFilter] = useState(topic);
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [view, setView] = useState<View>({ name: "home" });
@@ -135,6 +151,9 @@ export default function Tutorials({ course, hosted, files }: { course: string; h
 
   const keysOf = (sheets: TutorialSheet[]) => sheets.flatMap((s) => s.exercises.map((e) => exerciseKey(s, e)));
 
+  // Which topic each exercise is on, and whether that topic has cards: for the topic filter and the "revise the cards" link.
+  const topics = useMemo(() => (data ? topicsForSheets(files, data.sheets, progress) : []), [files, data, progress]);
+
   if (loadError) return <p className="pr-error">{loadError}</p>;
   if (!data) return <p className="pr-meta">Loading your tutorial sheets…</p>;
 
@@ -159,6 +178,8 @@ export default function Tutorials({ course, hosted, files }: { course: string; h
           keys={view.run.keys}
           start={view.run.start}
           progress={progress}
+          topics={topics}
+          onRevise={onOpenCards}
           onProgress={updateProgress}
           onUpdate={update}
           onExit={() => setView({ name: "home" })}
@@ -193,12 +214,20 @@ export default function Tutorials({ course, hosted, files }: { course: string; h
       </div>
     );
 
-  const overall = tally(data.sheets, progress);
-  const missed = data.sheets.flatMap((s) =>
+  // With a topic filter, only that topic's exercises are listed, counted and practised.
+  const topicKeys = topicFilter ? exerciseKeysFor(topics, topicFilter) : null;
+  const scope = topicKeys && topicKeys.length ? new Set(topicKeys) : null;
+  const shown = scope
+    ? data.sheets
+        .map((s) => ({ ...s, exercises: s.exercises.filter((e) => scope.has(exerciseKey(s, e))) }))
+        .filter((s) => s.exercises.length)
+    : data.sheets;
+  const overall = tally(shown, progress);
+  const missed = shown.flatMap((s) =>
     s.exercises.filter((e) => ["wrong", "partly"].includes(progress.marks[exerciseKey(s, e)] || "")).map((e) => exerciseKey(s, e)),
   );
   const weeks = new Map<string, TutorialSheet[]>();
-  for (const sheet of data.sheets) {
+  for (const sheet of shown) {
     const heading = sheet.week === null ? "Other sheets" : `Week ${sheet.week}`;
     weeks.set(heading, [...(weeks.get(heading) || []), sheet]);
   }
@@ -207,9 +236,23 @@ export default function Tutorials({ course, hosted, files }: { course: string; h
   return (
     <div className="tu-home">
       {banners}
+      {topicFilter && (
+        <p className="pr-note pv-filter" role="status">
+          {scope
+            ? `Showing only the ${plural(scope.size, "exercise")} on ${topicFilter}.`
+            : files.length
+              ? `No tutorial exercises are filed under ${topicFilter}, so every sheet is shown.`
+              : `Finding the exercises on ${topicFilter}…`}{" "}
+          {scope && (
+            <button type="button" className="pv-link" onClick={() => setTopicFilter("")}>
+              Show all sheets
+            </button>
+          )}
+        </p>
+      )}
       <div className="tu-overall">
         <div className="tu-overall-head">
-          <h2>Your progress</h2>
+          <h2>{scope ? topicFilter : "Your progress"}</h2>
           <span className="pr-meta">
             {overall.done} of {plural(overall.total, "exercise")} marked
           </span>
@@ -230,8 +273,8 @@ export default function Tutorials({ course, hosted, files }: { course: string; h
           <span>{overall.total - overall.done} to do</span>
         </p>
         <div className="pr-actions">
-          <button type="button" className="pr-primary" onClick={() => start("Every sheet", keysOf(data.sheets))}>
-            Practise everything
+          <button type="button" className="pr-primary" onClick={() => start(scope ? topicFilter : "Every sheet", keysOf(shown))}>
+            {scope ? `Practise ${topicFilter}` : "Practise everything"}
           </button>
           <button type="button" className="pr-quiet" disabled={!missed.length} onClick={() => start("The ones you missed", missed)}>
             {missed.length ? `Review the ${plural(missed.length, "one")} I missed` : "Review the ones I missed"}
