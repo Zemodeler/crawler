@@ -583,7 +583,9 @@ export default function PracticeHub() {
           {view === "dashboard" && <Dashboard key={course} course={course} onOpen={openView} />}
           {(view === "papers" || view === "tutorials") && (
             <Practice
-              key={`${course}:${view}`}
+              // What the address asked for is part of the key, so choosing the same tab again (which
+              // clears the topic or the preselected files) starts it afresh and the page matches the address.
+              key={`${course}:${view}:${view === "tutorials" ? topic : launch ? JSON.stringify(launch) : ""}`}
               course={course}
               initialView={view === "tutorials" ? "tutorials" : launch ? "create" : "papers"}
               launch={launch}
