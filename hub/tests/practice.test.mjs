@@ -197,6 +197,117 @@ test("generatePaper fails clearly with no readable source or too few usable ques
   );
 });
 
+/** Answers each batch with as many distinct MCQs as its message asks for; `fail` makes that call throw, `dupes` repeats an earlier prompt. */
+function quizClient({ fail, dupes = 0, start = 0 } = {}) {
+  const seen = [];
+  let made = start;
+  return {
+    seen,
+    target: { provider: "anthropic", transport: "apikey", model: "fake" },
+    async generate(request) {
+      seen.push(request);
+      request.onProgress?.({ phase: "streaming", chars: 10 });
+      if (fail === seen.length) throw new Error("timed out");
+      const ask = Number((request.messages[0].content.match(/Write exactly (\d+) questions now/) ?? request.system.match(/exactly (\d+) /))[1]);
+      const questions = [];
+      for (let i = 0; i < ask; i++) questions.push(raw({ prompt: `Question number ${++made}: what is the mean of ${made}, ${made + 2}?` }));
+      if (dupes && seen.length === 1) questions.splice(0, dupes, ...Array.from({ length: dupes }, () => raw({ prompt: "Question number 99: the same one?" })));
+      return { data: { title: `Quiz ${seen.length}`, questions }, raw: "", usage: {}, costUsd: null, model: "fake", transport: "apikey", repaired: false };
+    },
+  };
+}
+const quizSources = () => [file("Course Materials/Past Papers/2023.txt", "Q1. What is the mean of 3 numbers? ".repeat(5))];
+
+test("a long paper is written in batches of about five, each later batch told the earlier stems", async () => {
+  const client = quizClient();
+  const progress = [];
+  const drafts = [];
+  const { paper, dropped } = await generatePaper({
+    client, kind: "mcq", count: 15, brief: "", module: "M", sources: quizSources(),
+    onProgress: (p) => progress.push(p.batch),
+    onBatch: (p, state) => drafts.push({ p: structuredClone(p), state }),
+  });
+  assert.equal(client.seen.length, 3);
+  for (const r of client.seen) {
+    assert.match(r.messages[0].content, /Write exactly 5 questions now/);
+    assert.match(r.system, /Write exactly 5 multiple-choice questions/);
+    assert.equal(r.maxOutputTokens, 4_000 + 5 * 700);
+    assert.match(r.messages[0].content, /### PAST PAPER: 2023\.txt/);
+  }
+  assert.match(client.seen[0].messages[0].content, /This is part 1 of 3 of the paper/);
+  assert.doesNotMatch(client.seen[0].messages[0].content, /do not repeat/);
+  const second = client.seen[1].messages[0].content;
+  assert.match(second, /part 2 of 3/);
+  assert.match(second, /do not repeat or closely paraphrase these/);
+  assert.match(second, /- Question number 5: what is the mean of 5, 7\?/);
+  assert.doesNotMatch(second, /Question number 6/);
+  assert.match(client.seen[2].messages[0].content, /- Question number 10:/);
+
+  assert.deepEqual(progress, [{ index: 1, total: 3 }, { index: 2, total: 3 }, { index: 3, total: 3 }]);
+  assert.deepEqual(drafts.map((d) => d.state), [
+    { batch: 1, batches: 3, questions: 5 },
+    { batch: 2, batches: 3, questions: 10 },
+    { batch: 3, batches: 3, questions: 15 },
+  ]);
+  assert.deepEqual(drafts[0].p.draft, { target: 15 });
+  assert.deepEqual(drafts[1].p.draft, { target: 15 });
+  assert.equal("draft" in drafts[2].p, false);
+  assert.equal("draft" in paper, false);
+  assert.equal(new Set(drafts.map((d) => d.p.id).concat(paper.id)).size, 1, "the paper id is stable");
+  assert.equal(paper.questions.length, 15);
+  assert.equal(paper.title, "Quiz 1");
+  assert.equal(dropped, 0);
+});
+
+test("a long paper drops repeats per batch and asks the next batch for the shortfall", async () => {
+  const client = quizClient({ dupes: 2 });
+  const { paper, dropped } = await generatePaper({ client, kind: "mcq", count: 10, brief: "", module: "M", sources: quizSources() });
+  assert.equal(client.seen.length, 2);
+  assert.match(client.seen[1].messages[0].content, /Write exactly 6 questions now/);
+  assert.equal(client.seen[1].maxOutputTokens, 4_000 + 6 * 700);
+  assert.equal(paper.questions.length, 10);
+  assert.equal(dropped, 1);
+});
+
+test("a failing middle batch leaves the earlier draft delivered, and resume continues it", async () => {
+  const drafts = [];
+  await assert.rejects(
+    generatePaper({ client: quizClient({ fail: 2 }), kind: "mcq", count: 15, brief: "", module: "M", sources: quizSources(), onBatch: (p) => drafts.push(p) }),
+    /timed out/,
+  );
+  assert.equal(drafts.length, 1);
+  const draft = drafts[0];
+  assert.deepEqual(draft.draft, { target: 15 });
+  assert.equal(draft.questions.length, 5);
+
+  const client = quizClient({ start: 100 });
+  const states = [];
+  const { paper } = await generatePaper({
+    client, kind: "mcq", count: 15, brief: "", module: "M", sources: quizSources(), resume: draft,
+    onBatch: (p, state) => states.push({ state, draft: p.draft }),
+  });
+  assert.equal(client.seen.length, 2, "the finished batch is not written again");
+  assert.match(client.seen[0].messages[0].content, /part 2 of 3/);
+  assert.match(client.seen[0].messages[0].content, /do not repeat or closely paraphrase these/);
+  assert.deepEqual(states, [
+    { state: { batch: 2, batches: 3, questions: 10 }, draft: { target: 15 } },
+    { state: { batch: 3, batches: 3, questions: 15 }, draft: undefined },
+  ]);
+  assert.equal(paper.id, draft.id);
+  assert.equal(paper.createdAt, draft.createdAt);
+  assert.equal(paper.questions.length, 15);
+  assert.deepEqual(paper.questions.slice(0, 5), draft.questions);
+});
+
+test("a paper of six or fewer questions is still one call with no draft", async () => {
+  const client = quizClient();
+  const { paper } = await generatePaper({ client, kind: "exam", count: 6, brief: "", module: "M", sources: quizSources(), onBatch: () => assert.fail("no batches") });
+  assert.equal(client.seen.length, 1);
+  assert.equal(client.seen[0].maxOutputTokens, 4_000 + 6 * 700);
+  assert.equal(paper.questions.length, 6);
+  assert.equal("draft" in paper, false);
+});
+
 test("sources: past papers and own files are always ticked, then the most useful material while it fits", () => {
   const f = (path, category, size = 5_000) => ({
     path, name: path.split("/").pop(), ext: path.split(".").pop(), category, topic: "", file: { size },

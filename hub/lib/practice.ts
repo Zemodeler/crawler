@@ -43,6 +43,8 @@ export type Paper = {
   /** Paths of the files the questions were written from. */
   sources: string[];
   questions: Question[];
+  /** Present only while a batched run is unfinished: how many questions the paper is meant to have. */
+  draft?: { target: number };
 };
 
 export type SelfMark = "right" | "partly" | "wrong";

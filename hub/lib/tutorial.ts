@@ -70,6 +70,24 @@ export type TutorialSheet = {
   lecturePath?: string;
   convertedAt: number;
   exercises: Exercise[];
+  /** Present only while a batched conversion is unfinished: batches converted so far out of all. */
+  pending?: { done: number; total: number };
+};
+
+/** True for a sheet whose batched conversion stopped before its last batch. */
+export const isPartial = (sheet: Pick<TutorialSheet, "pending">): boolean => Boolean(sheet.pending);
+
+const validPending = (p: unknown): p is { done: number; total: number } => {
+  const v = p as { done?: unknown; total?: unknown } | null;
+  return (
+    Boolean(v) &&
+    typeof v === "object" &&
+    Number.isInteger(v!.done) &&
+    Number.isInteger(v!.total) &&
+    (v!.done as number) >= 0 &&
+    (v!.total as number) >= 1 &&
+    (v!.done as number) < (v!.total as number)
+  );
 };
 
 export type TutorialFile = { version: 1; sheets: TutorialSheet[] };
@@ -512,7 +530,14 @@ export function parseTutorialFile(raw: unknown): TutorialFile {
     (s): s is TutorialSheet =>
       Boolean(s) && typeof s.id === "string" && typeof s.label === "string" && typeof s.solutionPath === "string" && Array.isArray(s.exercises),
   );
-  return { version: 1, sheets: sortSheets(sheets) };
+  const kept = sheets.map((s) => {
+    if (!("pending" in s)) return s;
+    if (validPending(s.pending)) return { ...s, pending: { done: s.pending.done, total: s.pending.total } };
+    const rest = { ...s };
+    delete rest.pending;
+    return rest;
+  });
+  return { version: 1, sheets: sortSheets(kept) };
 }
 
 /**
