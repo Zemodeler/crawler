@@ -28,7 +28,8 @@ import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { CLI_SETTINGS, cliSearchDirs, findCli, probeAuth, runCli } from "./cli.mjs";
+import { CLI_SETTINGS, cliSearchDirs, findCli, probeAuth, startCli } from "./cli.mjs";
+import { createJobManager, isJobId } from "./jobs.mjs";
 import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, removeOwnFile, resolveDeadline, writeModuleFile, writeOwnFile, writeOwnNote, MAX_OWN_FILE_BYTES } from "./library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -215,10 +216,107 @@ function currentCli(kind) {
 }
 
 /**
- * One CLI run at a time per lane. Automatic study packs run in the background
- * lane, so a request the student starts never waits behind them or is refused.
+ * AI runs are jobs (see jobs.mjs): one at a time per lane, the rest queued.
+ * Automatic study packs run in the background lane, so a request the student
+ * starts never waits behind them. startHost replaces this memory-only manager
+ * with one that saves jobs under its `jobsDir`.
  */
-const running = { foreground: 0, background: 0 };
+let jobs = createJobManager({ start: startJobRun });
+
+const kindFor = (provider) => (provider === "openai" ? "codex" : provider === "google" ? "gemini" : "claude");
+
+/**
+ * Runs one job's CLI. If the executable moved since it was found (a desktop
+ * app updated itself), search again and retry once.
+ */
+function startJobRun(spec, hooks) {
+  const { kind } = spec;
+  let current = null;
+  let cancelled = false;
+  const run = (found) => {
+    current = startCli(found, kind, spec.prompt, spec.model, spec.webAccess, hooks);
+    return current.promise;
+  };
+  const label = new Date().toTimeString().slice(0, 8);
+  const promise = (async () => {
+    console.log(`[${label}] ${kind}: ${spec.prompt.length} chars in (${spec.lane})…`);
+    try {
+      let text;
+      try {
+        text = await run(currentCli(kind));
+      } catch (error) {
+        if (error?.code !== "cli_moved" || cancelled) throw error;
+        // Moved since it was found: search again and retry once.
+        console.log(`[${label}] ${kind} moved; searching again…`);
+        const found = detect(kind);
+        if (!found.path)
+          throw { code: "cli_not_found", message: found.error || `Could not find the \`${kind}\` command any more.`, detail: `Searched: ${found.searched.join(", ")}` };
+        text = await run(found);
+      }
+      console.log(`[${label}] ${kind}: ${text.length} chars out.`);
+      return text;
+    } catch (error) {
+      console.log(`[${label}] ${kind} ${error?.code === "aborted" ? "cancelled" : `failed: ${error?.message ?? error}`}`);
+      throw error;
+    }
+  })();
+  return {
+    promise,
+    cancel() {
+      cancelled = true;
+      current?.cancel();
+    },
+  };
+}
+
+/** A request body as a job spec; the manager throws `{ code, message }` on bad input. */
+function startJob(body, label) {
+  return jobs.start({
+    kind: kindFor(body.provider),
+    lane: body.background === true ? "background" : "foreground",
+    prompt: body.prompt,
+    model: typeof body.model === "string" ? body.model : "",
+    webAccess: body.webAccess === true,
+    label: typeof body.label === "string" ? body.label : label,
+    meta: body.meta,
+  });
+}
+
+/**
+ * POST /api/ai/v1/jobs           start a job -> 202 { job }
+ * GET  /api/ai/v1/jobs           -> { jobs } (no text)
+ * GET  /api/ai/v1/jobs/<id>      -> { job } (?partial=1 adds partialText)
+ * DELETE /api/ai/v1/jobs/<id>    cancel -> { job }
+ */
+async function handleJobs(request, response, url) {
+  if (url.pathname === "/api/ai/v1/jobs") {
+    if (request.method === "GET") return sendJson(response, 200, { jobs: jobs.list() });
+    if (request.method !== "POST") return sendJson(response, 405, { code: "bad_request", message: "Use GET or POST." });
+    let body;
+    try {
+      body = await readBody(request);
+    } catch (error) {
+      return sendJson(response, 400, { code: "bad_request", message: error.message });
+    }
+    try {
+      return sendJson(response, 202, { job: startJob(body && typeof body === "object" ? body : {}, "") });
+    } catch (error) {
+      return sendJson(response, 400, { code: error?.code || "bad_request", message: error?.message || String(error) });
+    }
+  }
+  const id = url.pathname.slice("/api/ai/v1/jobs/".length);
+  const missing = () => sendJson(response, 404, { code: "not_found", message: "No such job." });
+  if (!isJobId(id)) return missing();
+  if (request.method === "GET") {
+    const job = jobs.get(id, { partial: url.searchParams.get("partial") === "1" });
+    return job ? sendJson(response, 200, { job }) : missing();
+  }
+  if (request.method === "DELETE") {
+    const job = jobs.cancel(id);
+    return job ? sendJson(response, 200, { job }) : missing();
+  }
+  sendJson(response, 405, { code: "bad_request", message: "Use GET or DELETE." });
+}
 
 async function handleAi(request, response, url) {
   if (url.pathname === "/api/ai/healthz" && request.method === "GET") {
@@ -243,6 +341,9 @@ async function handleAi(request, response, url) {
     return;
   }
 
+  if (url.pathname === "/api/ai/v1/jobs" || url.pathname.startsWith("/api/ai/v1/jobs/"))
+    return handleJobs(request, response, url);
+
   if (url.pathname !== "/api/ai/v1/generate" || request.method !== "POST") {
     sendJson(response, 404, { code: "not_found", message: "No such endpoint." });
     return;
@@ -256,9 +357,9 @@ async function handleAi(request, response, url) {
     return;
   }
 
-  const kind = body.provider === "openai" ? "codex" : body.provider === "google" ? "gemini" : "claude";
-  const cli = currentCli(kind);
+  const kind = kindFor(body.provider);
   if (body.probe) {
+    const cli = currentCli(kind);
     if (!cli?.path) {
       sendJson(response, 200, {
         code: "cli_not_found",
@@ -274,39 +375,30 @@ async function handleAi(request, response, url) {
     sendJson(response, 400, { code: "bad_request", message: "No prompt supplied." });
     return;
   }
-  const lane = body.background === true ? "background" : "foreground";
-  if (running[lane] > 0) {
-    sendJson(response, 429, { code: "rate_limited", message: "Already running a request." });
+
+  // The same run as a job, answered when it ends. A page that gives up
+  // (Retry, navigation, a closed window) cancels it, so its lane frees up.
+  let job;
+  try {
+    job = startJob(body, "generate");
+  } catch (error) {
+    sendJson(response, 400, { code: error?.code || "bad_request", message: error?.message || String(error) });
     return;
   }
-
-  running[lane]++;
-  const label = new Date().toTimeString().slice(0, 8);
-  console.log(`[${label}] ${kind}: ${body.prompt.length} chars in…`);
-  const run = (found) =>
-    runCli(found, kind, body.prompt, typeof body.model === "string" ? body.model : "", body.webAccess === true);
-  try {
-    let text;
-    try {
-      text = await run(cli);
-    } catch (error) {
-      if (error?.code !== "cli_moved") throw error;
-      // Moved since it was found: search again and retry once.
-      console.log(`[${label}] ${kind} moved; searching again…`);
-      const found = detect(kind);
-      if (!found.path)
-        throw { code: "cli_not_found", message: found.error || `Could not find the \`${kind}\` command any more.`, detail: `Searched: ${found.searched.join(", ")}` };
-      text = await run(found);
-    }
-    console.log(`[${label}] ${kind}: ${text.length} chars out.`);
-    sendJson(response, 200, { text, model: kind });
-  } catch (error) {
-    const failure = error && error.code ? error : { code: "cli_incompatible", message: String(error) };
-    console.log(`[${label}] ${kind} failed: ${failure.message}`);
-    sendJson(response, 500, failure);
-  } finally {
-    running[lane]--;
-  }
+  const abandon = () => {
+    if (!response.writableFinished) jobs.cancel(job.id);
+  };
+  request.on("aborted", abandon);
+  response.on("close", abandon);
+  const finished = await jobs.wait(job.id);
+  if (response.destroyed || response.writableEnded) return;
+  if (finished?.status === "done") sendJson(response, 200, { text: finished.text, model: kind });
+  else
+    sendJson(
+      response,
+      500,
+      finished?.error ?? { code: "aborted", message: `The \`${kind}\` run was ${finished?.status ?? "lost"}.` },
+    );
 }
 
 /** A raw (non-JSON) request body, refused past `limit` bytes before it is all read. */
@@ -566,9 +658,10 @@ async function writeWebResponse(response, web) {
   response.end();
 }
 
-export async function startHost({ port: preferred, setup } = {}) {
+export async function startHost({ port: preferred, setup, jobsDir } = {}) {
   const site = await loadSite();
   detectClis();
+  jobs = createJobManager({ dir: jobsDir, start: startJobRun });
 
   const env = {
     ASSETS: {

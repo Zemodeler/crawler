@@ -163,7 +163,7 @@ app.whenReady().then(async () => {
   try {
     await formatLibrary(libraryRoot()).catch((error) => console.error(`Study Hub materials index: ${error.message}`));
     setup = createSetup({ app, BrowserWindow, safeStorage, session, shell, dialog, libraryRoot, parent: () => mainWindow });
-    host = await startHost({ setup });
+    host = await startHost({ setup, jobsDir: join(app.getPath("userData"), "ai-jobs") });
   } catch (error) {
     console.error(`Could not start Study Hub: ${error.message}`);
     app.exit(1);

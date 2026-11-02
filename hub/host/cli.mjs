@@ -14,7 +14,10 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } 
 import { homedir, tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 
-const RUN_TIMEOUT_MS = 180_000;
+/** A run that says nothing at all for this long is stopped. */
+export const IDLE_TIMEOUT_MS = 90_000;
+/** No run goes on longer than this, however chatty. */
+export const MAX_RUN_MS = 15 * 60_000;
 // A first start of a freshly installed exe can sit behind antivirus for a while.
 const VERSION_TIMEOUT_MS = 20_000;
 const AUTH_TIMEOUT_MS = 10_000;
@@ -28,7 +31,9 @@ export const CLI_SETTINGS = {
     args: [
       "--print",
       "--output-format",
-      "text",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
       "--disallowed-tools",
       "Bash,PowerShell,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,NotebookEdit,Task",
     ],
@@ -37,7 +42,9 @@ export const CLI_SETTINGS = {
     webArgs: [
       "--print",
       "--output-format",
-      "text",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
       "--disallowed-tools",
       "Bash,PowerShell,Read,Write,Edit,Glob,Grep,NotebookEdit,Task",
     ],
@@ -496,9 +503,109 @@ function childEnv(extra = {}) {
   return env;
 }
 
-/** Runs the CLI once; the prompt goes on stdin, never argv. */
-export function runCli(cli, kind, prompt, model, webAccess) {
-  return new Promise((resolve, reject) => {
+/** What a failed run's output says went wrong: signed out, out of quota, or something else. */
+function classifyFailure(kind, output, failed) {
+  const said = summariseFailure(output);
+  const noise = output.toLowerCase();
+  const code = /log ?in|logged in|auth|credential|session expired|not signed|unauthori[sz]ed|invalid api key|oauth|\b401\b/.test(noise)
+    ? "cli_not_authenticated"
+    : /rate.?limit|quota|too many requests|usage limit/.test(noise)
+      ? "rate_limited"
+      : "cli_incompatible";
+  const revoked = /invalidated|revoked|expired|\b401\b|unauthori[sz]ed/.test(noise);
+  return {
+    code,
+    message:
+      code === "cli_not_authenticated"
+        ? revoked
+          ? `Your ${CLI_APPS[kind] || kind} sign-in has expired or was signed out, so \`${kind}\` was refused.`
+          : `\`${kind}\` is not signed in${said ? ` (${said})` : ""}. Sign in to ${CLI_APPS[kind] || kind}, then retry.`
+        : code === "rate_limited"
+          ? `\`${kind}\` hit a usage limit${said ? `: ${said}` : ""}.`
+          : `\`${kind}\` ${failed}${said ? `: ${said}` : ""}.`,
+    ...(code === "cli_not_authenticated" && revoked ? { hint: SIGN_IN_HINTS[kind] } : {}),
+    detail: output.slice(0, 900),
+  };
+}
+
+/**
+ * Reads claude's `--output-format stream-json --include-partial-messages`
+ * stdout: one JSON event per line, with lines split across chunks. Text deltas
+ * build the running answer; the final `result` event is the real answer.
+ */
+function claudeStream(onText) {
+  let pending = "";
+  let text = "";
+  let result = null;
+  let resultError = null;
+  let other = "";
+  const line = (raw) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    let event;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      // An older CLI, or an error printed as plain text.
+      if (other.length < 200_000) other += `${raw}\n`;
+      return;
+    }
+    if (event?.type === "stream_event") {
+      const inner = event.event;
+      if (inner?.type === "message_start" && text && !text.endsWith("\n\n")) text += "\n\n";
+      if (inner?.type === "content_block_delta" && inner.delta?.type === "text_delta" && typeof inner.delta.text === "string") {
+        text += inner.delta.text;
+        onText?.(text);
+      }
+    } else if (event?.type === "result") {
+      const said = typeof event.result === "string" ? event.result : "";
+      if (event.is_error) {
+        const errors = Array.isArray(event.errors) ? event.errors.map(String).join("\n") : "";
+        resultError = [said, errors].filter(Boolean).join("\n") || String(event.subtype || "error");
+      } else result = said;
+    } else if (typeof event === "object" && event && !event.type && other.length < 200_000) other += `${raw}\n`;
+  };
+  return {
+    push(chunk) {
+      pending += chunk;
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const raw of lines) line(raw);
+    },
+    end() {
+      if (pending) line(pending);
+      pending = "";
+    },
+    get text() {
+      return text;
+    },
+    get result() {
+      return result;
+    },
+    get resultError() {
+      return resultError;
+    },
+    /** stdout that was not a stream event, for error messages and old CLIs. */
+    get other() {
+      return other;
+    },
+  };
+}
+
+/**
+ * Starts the CLI once; the prompt goes on stdin, never argv. Returns
+ * `{ promise, cancel }`: `promise` resolves to the final text or rejects with
+ * `{ code, message, detail?, hint? }`. `onText(textSoFar)` follows claude's
+ * answer as it streams; `onActivity()` fires on any output at all.
+ *
+ * A run is stopped when it has said nothing for IDLE_TIMEOUT_MS (claude's
+ * stream includes keep-alive events while it thinks) or has run MAX_RUN_MS.
+ * `cancel()` kills it and rejects with code "aborted".
+ * `spawn` replaces child_process.spawn in tests.
+ */
+export function startCli(cli, kind, prompt, model, webAccess, { onText, onActivity, spawn: spawnChild = spawn } = {}) {
+  let cancelRun = () => {};
+  const promise = new Promise((resolve, reject) => {
     if (!cli?.path)
       return reject({
         code: "cli_not_found",
@@ -509,11 +616,12 @@ export function runCli(cli, kind, prompt, model, webAccess) {
     const settings = CLI_SETTINGS[kind];
     const args = [...cli.prefixArgs, ...(webAccess && settings.webArgs ? settings.webArgs : settings.args)];
     if (model && settings.modelFlag) args.push(settings.modelFlag, model);
+    const streaming = args.includes("stream-json");
 
     const cwd = mkdtempSync(join(tmpdir(), "studyhub-host-"));
     let child;
     try {
-      child = spawn(cli.command, args, {
+      child = spawnChild(cli.command, args, {
         shell: false,
         cwd,
         env: childEnv(cli.prefixArgs.length ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
@@ -527,78 +635,120 @@ export function runCli(cli, kind, prompt, model, webAccess) {
 
     let stdout = "";
     let stderr = "";
-    let killed = false;
-    const timer = setTimeout(() => {
-      killed = true;
-      child.kill("SIGKILL");
-    }, RUN_TIMEOUT_MS);
+    /** Why we killed it: "idle", "max", "output" or "cancel". */
+    let killed = null;
+    let settled = false;
+    const stream = streaming ? claudeStream(onText) : null;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+    const kill = (why) => {
+      if (killed) return;
+      killed = why;
+      clearTimeout(idleTimer);
+      clearTimeout(maxTimer);
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    };
+    let idleTimer = setTimeout(() => kill("idle"), IDLE_TIMEOUT_MS);
+    const maxTimer = setTimeout(() => kill("max"), MAX_RUN_MS);
+    const activity = () => {
+      if (killed) return;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => kill("idle"), IDLE_TIMEOUT_MS);
+      try {
+        onActivity?.();
+      } catch {
+        /* a listener's problem is not the run's */
+      }
+    };
+    cancelRun = () => {
+      if (settled) return;
+      settle(reject, { code: "aborted", message: `The \`${kind}\` run was cancelled.` });
+      kill("cancel");
+    };
 
     child.stdout.on("data", (chunk) => {
-      if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk.toString("utf8");
-      else if (!killed) {
-        killed = true;
-        child.kill("SIGKILL");
-      }
+      if (killed === "cancel") return;
+      activity();
+      const piece = chunk.toString("utf8");
+      if (stream) {
+        stream.push(piece);
+        if (stream.text.length > MAX_OUTPUT_BYTES) kill("output");
+      } else if (stdout.length < MAX_OUTPUT_BYTES) stdout += piece;
+      else kill("output");
     });
     child.stderr.on("data", (chunk) => {
+      activity();
       if (stderr.length < 200_000) stderr += chunk.toString("utf8");
     });
     child.on("error", (error) => {
-      clearTimeout(timer);
+      clearTimeout(idleTimer);
+      clearTimeout(maxTimer);
       rmSync(cwd, { recursive: true, force: true });
       // ENOENT: the executable vanished since it was found — typically the
       // desktop app updated itself into a new version folder.
       if (error.code === "ENOENT")
-        return reject({ code: "cli_moved", message: `\`${kind}\` is no longer where it was found.` });
-      reject({ code: "cli_incompatible", message: `\`${kind}\` could not be started: ${redactSecrets(error.message)}` });
+        return settle(reject, { code: "cli_moved", message: `\`${kind}\` is no longer where it was found.` });
+      settle(reject, { code: "cli_incompatible", message: `\`${kind}\` could not be started: ${redactSecrets(error.message)}` });
     });
     child.on("close", (status) => {
-      clearTimeout(timer);
+      clearTimeout(idleTimer);
+      clearTimeout(maxTimer);
       rmSync(cwd, { recursive: true, force: true });
+      if (settled) return;
+      if (stream) stream.end();
+      const plain = stream ? stream.other : stdout;
       // Some CLIs print their error on stdout (claude: "Invalid API key · Please run /login").
-      const output = redactSecrets(stderr.trim() || stdout.trim());
+      const output = redactSecrets(stderr.trim() || plain.trim() || stream?.resultError || "");
       const said = summariseFailure(output);
-      if (killed)
-        return reject({
+      const last = said ? `; its last message was: ${said}` : "";
+      if (killed === "idle")
+        return settle(reject, {
           code: "timeout",
-          message: `\`${kind}\` did not finish within 3 minutes${said ? `; its last message was: ${said}` : ""}.`,
+          message: `\`${kind}\` stopped responding for ${IDLE_TIMEOUT_MS / 1000} seconds${last}.`,
           detail: output.slice(0, 900),
         });
-      if (status !== 0) {
-        const noise = output.toLowerCase();
-        const code = /log ?in|logged in|auth|credential|session expired|not signed|unauthori[sz]ed|invalid api key|oauth|\b401\b/.test(noise)
-          ? "cli_not_authenticated"
-          : /rate.?limit|quota|too many requests|usage limit/.test(noise)
-            ? "rate_limited"
-            : "cli_incompatible";
-        const revoked = /invalidated|revoked|expired|\b401\b|unauthori[sz]ed/.test(noise);
-        return reject({
-          code,
+      if (killed === "max" || killed === "output")
+        return settle(reject, {
+          code: "timeout",
           message:
-            code === "cli_not_authenticated"
-              ? revoked
-                ? `Your ${CLI_APPS[kind] || kind} sign-in has expired or was signed out, so \`${kind}\` was refused.`
-                : `\`${kind}\` is not signed in${said ? ` (${said})` : ""}. Sign in to ${CLI_APPS[kind] || kind}, then retry.`
-              : code === "rate_limited"
-                ? `\`${kind}\` hit a usage limit${said ? `: ${said}` : ""}.`
-                : `\`${kind}\` failed with exit code ${status}${said ? `: ${said}` : ""}.`,
-          ...(code === "cli_not_authenticated" && revoked ? { hint: SIGN_IN_HINTS[kind] } : {}),
+            killed === "max"
+              ? `\`${kind}\` did not finish within ${MAX_RUN_MS / 60_000} minutes${last}.`
+              : `\`${kind}\` produced more output than Study Hub accepts${last}.`,
           detail: output.slice(0, 900),
         });
+      if (stream?.resultError != null) {
+        const reported = redactSecrets(stream.resultError.trim());
+        return settle(reject, classifyFailure(kind, reported, status ? `failed with exit code ${status}` : "reported an error"));
       }
-      const text = extractText(stdout);
+      if (status !== 0) return settle(reject, classifyFailure(kind, output, `failed with exit code ${status}`));
+      const text = stream
+        ? (stream.result?.trim() || stream.text.trim() || extractText(stream.other))
+        : extractText(stdout);
       if (!text)
-        return reject({
+        return settle(reject, {
           code: "cli_incompatible",
           message: `\`${kind}\` finished but returned no text${said ? `: ${said}` : ""}.`,
           detail: redactSecrets(stderr.trim()).slice(0, 900),
         });
-      resolve(text);
+      settle(resolve, text);
     });
 
     child.stdin.on("error", () => {});
     child.stdin.end(prompt, "utf8");
   });
+  return { promise, cancel: () => cancelRun() };
+}
+
+/** Runs the CLI once and resolves to its final text (see startCli). */
+export function runCli(cli, kind, prompt, model, webAccess) {
+  return startCli(cli, kind, prompt, model, webAccess).promise;
 }
 
 /** Plain text or a stream of JSON envelopes, depending on CLI version and flags. */

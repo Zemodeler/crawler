@@ -7,12 +7,23 @@
  */
 
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { cliSearchDirs, findCli, probeAuth, redactSecrets, runCli, summariseFailure } from "../host/cli.mjs";
+import {
+  IDLE_TIMEOUT_MS,
+  MAX_RUN_MS,
+  cliSearchDirs,
+  findCli,
+  probeAuth,
+  redactSecrets,
+  runCli,
+  startCli,
+  summariseFailure,
+} from "../host/cli.mjs";
 
 const { describeCli } = await import("../lib/ai/cli-diagnostics.ts");
 
@@ -421,4 +432,152 @@ test("a broken desktop-app or WinGet copy is not sent to npm to be fixed", () =>
   const winget = brokenAt("codex", join(LOCALAPPDATA, "Microsoft", "WinGet", "Links", "codex.exe"));
   assert.match(winget.fix.text, /WinGet/);
   assert.doesNotMatch(winget.fix.command, /npm/);
+});
+
+/* ------------------------------------------------------------- startCli: streaming, timeouts, cancel */
+
+/** A child process that says only what the test makes it say. `kill` ends it at once. */
+function fakeSpawn() {
+  const children = [];
+  const spawn = (command, args, options) => {
+    const child = new EventEmitter();
+    Object.assign(child, { command, args, options, kills: [], prompt: null });
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on() {}, end: (text) => (child.prompt = text) };
+    child.say = (text) => child.stdout.emit("data", Buffer.from(text, "utf8"));
+    child.kill = (signal) => {
+      child.kills.push(signal);
+      child.emit("close", null);
+    };
+    children.push(child);
+    return child;
+  };
+  return { spawn, children };
+}
+
+const FAKE_CLAUDE = { path: "claude.exe", command: "claude.exe", prefixArgs: [], searched: [] };
+const ndjson = (...events) => events.map((event) => `${JSON.stringify(event)}\n`).join("");
+const delta = (text) => ({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+
+test("claude streams NDJSON: text deltas arrive as they come, even split mid-line, and the result line wins", async () => {
+  const { spawn, children } = fakeSpawn();
+  const seen = [];
+  let activity = 0;
+  const run = startCli(FAKE_CLAUDE, "claude", "the prompt", "opus", false, {
+    spawn,
+    onText: (text) => seen.push(text),
+    onActivity: () => activity++,
+  });
+  const [child] = children;
+  assert.deepEqual(child.args.slice(0, 5), ["--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
+  assert.deepEqual(child.args.slice(-2), ["--model", "opus"]);
+  assert.equal(child.prompt, "the prompt");
+  assert.ok(!child.args.includes("the prompt"));
+
+  const stream = ndjson(
+    { type: "system", subtype: "init" },
+    { type: "stream_event", event: { type: "message_start" } },
+    { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "hmm" } } },
+    delta("Hel"),
+    delta("lo, "),
+    delta("world"),
+    { type: "assistant", message: { content: [{ type: "text", text: "Hello, world" }] } },
+    { type: "result", subtype: "success", is_error: false, result: "Hello, world!" },
+  );
+  // Cut the stream into awkward pieces, including inside a JSON string.
+  const cut = [17, 90, 91, 200, 260];
+  let from = 0;
+  for (const at of [...cut, stream.length]) {
+    child.say(stream.slice(from, at));
+    from = at;
+  }
+  child.emit("close", 0);
+
+  assert.equal(await run.promise, "Hello, world!");
+  assert.deepEqual(seen, ["Hel", "Hello, ", "Hello, world"]);
+  assert.equal(activity, cut.length + 1);
+});
+
+test("claude: without a result line the streamed text is the answer", async () => {
+  const { spawn, children } = fakeSpawn();
+  const run = startCli(FAKE_CLAUDE, "claude", "p", "", false, { spawn });
+  children[0].say(ndjson(delta("partial "), delta("answer")));
+  children[0].emit("close", 0);
+  assert.equal(await run.promise, "partial answer");
+});
+
+test("claude: an is_error result is classified like any other failure", async () => {
+  const signedOut = fakeSpawn();
+  const run = startCli(FAKE_CLAUDE, "claude", "p", "", false, { spawn: signedOut.spawn });
+  signedOut.children[0].say(ndjson({ type: "result", subtype: "success", is_error: true, result: "Invalid API key · Please run /login" }));
+  signedOut.children[0].emit("close", 1);
+  await assert.rejects(run.promise, (error) => {
+    assert.equal(error.code, "cli_not_authenticated");
+    assert.match(error.message, /Invalid API key/);
+    return true;
+  });
+
+  const limited = fakeSpawn();
+  const second = startCli(FAKE_CLAUDE, "claude", "p", "", false, { spawn: limited.spawn });
+  limited.children[0].say(ndjson(delta("Some"), { type: "result", is_error: true, result: "Claude AI usage limit reached|1761000000" }));
+  limited.children[0].emit("close", 0);
+  await assert.rejects(second.promise, (error) => error.code === "rate_limited" && /usage limit/.test(error.message));
+
+  const other = fakeSpawn();
+  const third = startCli(FAKE_CLAUDE, "claude", "p", "", false, { spawn: other.spawn });
+  other.children[0].say(ndjson({ type: "result", subtype: "error_during_execution", is_error: true }));
+  other.children[0].emit("close", 0);
+  await assert.rejects(third.promise, (error) => error.code === "cli_incompatible" && /reported an error: error_during_execution/.test(error.message));
+});
+
+test("a run that goes quiet for 90 seconds is stopped; any output, thinking included, keeps it alive", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { spawn, children } = fakeSpawn();
+  const run = startCli(FAKE_CLAUDE, "claude", "p", "", false, { spawn });
+  const [child] = children;
+  t.mock.timers.tick(IDLE_TIMEOUT_MS - 1_000);
+  child.say(ndjson({ type: "stream_event", event: { type: "ping" } }));
+  t.mock.timers.tick(IDLE_TIMEOUT_MS - 1_000);
+  child.stderr.emit("data", Buffer.from("still thinking\n"));
+  t.mock.timers.tick(IDLE_TIMEOUT_MS - 1_000);
+  assert.deepEqual(child.kills, []);
+  t.mock.timers.tick(1_000);
+  assert.deepEqual(child.kills, ["SIGKILL"]);
+  await assert.rejects(run.promise, (error) => {
+    assert.equal(error.code, "timeout");
+    assert.match(error.message, /^`claude` stopped responding for 90 seconds/);
+    return true;
+  });
+});
+
+test("a chatty run is still stopped after 15 minutes", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { spawn, children } = fakeSpawn();
+  const run = startCli({ ...FAKE_CLAUDE, command: "gemini" }, "gemini", "p", "", false, { spawn });
+  const [child] = children;
+  assert.deepEqual(child.args.slice(0, 2), ["--output-format", "text"]);
+  for (let elapsed = 0; elapsed < MAX_RUN_MS - 60_000; elapsed += 60_000) {
+    child.say("working…\n");
+    t.mock.timers.tick(60_000);
+  }
+  assert.deepEqual(child.kills, []);
+  child.say("almost\n");
+  t.mock.timers.tick(60_000);
+  assert.deepEqual(child.kills, ["SIGKILL"]);
+  await assert.rejects(run.promise, (error) => error.code === "timeout" && /did not finish within 15 minutes/.test(error.message));
+});
+
+test("cancel kills the child and rejects with `aborted`; later output changes nothing", async () => {
+  const { spawn, children } = fakeSpawn();
+  const seen = [];
+  const run = startCli(FAKE_CLAUDE, "claude", "p", "", false, { spawn, onText: (text) => seen.push(text) });
+  children[0].say(ndjson(delta("Hi")));
+  run.cancel();
+  children[0].say(ndjson(delta(" there")));
+  assert.deepEqual(children[0].kills, ["SIGKILL"]);
+  await assert.rejects(run.promise, (error) => error.code === "aborted");
+  run.cancel();
+  assert.deepEqual(children[0].kills, ["SIGKILL"]);
+  assert.deepEqual(seen, ["Hi"]);
 });
