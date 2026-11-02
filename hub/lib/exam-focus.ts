@@ -6,9 +6,13 @@
  * opened-file progress and flashcard reviews (all already stored by the hub)
  * and passes them in.
  *
- * URL contract for the pages the practice buttons open (`/flashcards?tab=practice`
- * and `/generate`), built by `practiceHref` and read by `parseSourceParams`:
+ * URL contract for the pages the practice buttons open (`/practice` and
+ * `/generate`), built by `practiceHref` and read by `parseSourceParams` and
+ * `parsePracticeParams`:
  *
+ *   view=dashboard|cards|papers|tutorials   (`/practice` only) which part of Practice
+ *   mode=<card mode>                        (view=cards) smart, weak, due, ...
+ *   topic=<topic name>                      (`/practice`) open filtered to this topic
  *   module=<year>/<module folder>   which module to practise
  *   source=<module-relative path>   repeated, one per auto-picked file
  *   auto=1                          the sources were picked automatically
@@ -89,7 +93,7 @@ function stem(word: string): string {
 }
 
 /** How many of `words` appear in `text` (whole stems, or a shared prefix of 5+ letters). */
-function overlap(words: string[], text: string): number {
+export function overlap(words: string[], text: string): number {
   if (!words.length) return 0;
   const found = new Set((text.toLowerCase().match(/[a-z][a-z0-9]*/g) || []).map(stem));
   let hits = 0;
@@ -248,14 +252,32 @@ export function buildFocus(input: FocusInput): FocusItem[] {
 
 /* --------------------------------------------------------------- practice URL */
 
-export type PracticeTarget = "flashcards" | "generate";
+export type PracticeTarget = "practice" | "generate";
+
+/** The sub-views of the Practice section. "dashboard" is its landing page. */
+export const PRACTICE_VIEWS = ["dashboard", "cards", "papers", "tutorials"] as const;
+export type PracticeView = (typeof PRACTICE_VIEWS)[number];
+
+export type PracticeLinkOptions = {
+  module: string;
+  sources: string[];
+  exam: string;
+  auto?: boolean;
+  /** Which Practice view to open; defaults to "papers", where the sources are used. */
+  view?: PracticeView;
+  /** A topic name (not a key) to open the view filtered to. */
+  topic?: string;
+  /** A card mode for view=cards: smart, weak, due, ... */
+  mode?: string;
+};
 
 /** The link a "Practise for this" button follows, carrying the auto selection. */
-export function practiceHref(target: PracticeTarget, opts: { module: string; sources: string[]; exam: string; auto?: boolean }): string {
+export function practiceHref(target: PracticeTarget, opts: PracticeLinkOptions): string {
   const query = new URLSearchParams();
-  if (target === "flashcards") {
-    query.set("tab", "practice");
-    query.set("mode", "smart");
+  if (target === "practice") {
+    query.set("view", opts.view ?? "papers");
+    if (opts.mode) query.set("mode", opts.mode);
+    if (opts.topic) query.set("topic", opts.topic);
   }
   query.set("module", opts.module);
   for (const source of opts.sources) query.append("source", source);
@@ -275,4 +297,33 @@ export function parseSourceParams(search: string): SourceParams {
     auto: query.get("auto") === "1",
     exam: query.get("exam") || "",
   };
+}
+
+export type PracticeParams = SourceParams & { view: PracticeView; mode: string; topic: string };
+
+/**
+ * Everything `/practice` reads from its address. Older links (`?tab=practice`,
+ * a bare `?mode=weak`) still resolve: `tab=practice` is the papers view, a card
+ * mode on its own is the cards view, and no parameters at all is the dashboard.
+ */
+export function parsePracticeParams(search: string): PracticeParams {
+  const query = new URLSearchParams(search);
+  const asked = query.get("view") as PracticeView | null;
+  const mode = query.get("mode") || "";
+  const view: PracticeView =
+    asked && PRACTICE_VIEWS.includes(asked) ? asked : query.get("tab") === "practice" ? "papers" : mode ? "cards" : "dashboard";
+  return { ...parseSourceParams(search), view, mode, topic: query.get("topic") || "" };
+}
+
+/**
+ * Where an old `/flashcards` address now lives. It was the card app with a
+ * practice tab, so a bare link is the cards view and `tab=practice` is papers;
+ * every other parameter carries over unchanged.
+ */
+export function legacyPracticeUrl(search: string): string {
+  const query = new URLSearchParams(search);
+  const view = query.get("view") || (query.get("tab") === "practice" ? "papers" : "cards");
+  query.delete("tab");
+  query.set("view", view);
+  return `/practice?${query.toString()}`;
 }

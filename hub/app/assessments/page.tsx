@@ -164,7 +164,7 @@ export default function AssessmentsPage() {
       const current = all[d.id] ?? auto;
       return { ...all, [d.id]: on ? [...new Set([...current, path])] : current.filter((p) => p !== path) };
     });
-    const href = (target: "flashcards" | "generate") =>
+    const href = (target: "practice" | "generate") =>
       practiceHref(target, { module: key, sources, exam: d.title, auto: chosen === undefined });
     return <li key={d.id} className="exam-card">
       <div className="exam-card-head">
@@ -202,8 +202,8 @@ export default function AssessmentsPage() {
           onClick={() => setManual((all) => { const rest = { ...all }; delete rest[d.id]; return rest; })}>Use the automatic pick again</button>}
       </fieldset>}
       <div className="exam-actions">
-        {/* A full page load: the flashcards and generate pages read their query string on mount. */}
-        <a className="btn btn-primary" href={href("flashcards")} onClick={() => saveActiveModule(key)}>Practise for this</a>
+        {/* A full page load: the practice and generate pages read their query string on mount. */}
+        <a className="btn btn-primary" href={href("practice")} onClick={() => saveActiveModule(key)}>Practise for this</a>
         <a className="text-link" href={href("generate")} onClick={() => saveActiveModule(key)}>Build study packs from these files</a>
       </div>
     </li>;

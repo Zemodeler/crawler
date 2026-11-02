@@ -3,7 +3,7 @@
 
 /**
  * The one frame every page sits in: a navigation rail on the left (modules,
- * Today, Calendar, Assessments, Flashcards, sync, AI settings) and the page
+ * Today, Calendar, Assessments, Practice, sync, AI settings) and the page
  * beside it. First-run setup and the hidden /auto window get no rail, and a
  * page can drop it for a full-screen state with <ShellOff />.
  *
@@ -171,7 +171,7 @@ function Rail({ pathname }: { pathname: string }) {
             <a className="rail-link" href="/assessments" {...current(pathname === "/assessments")}>Assessments</a>
           </>
         )}
-        <a className="rail-link" href="/flashcards?mode=smart" {...current(pathname === "/flashcards")}>Flashcards</a>
+        <a className="rail-link" href="/practice" {...current(pathname === "/practice")}>Practice</a>
       </div>
 
       {tree && years.length > 0 && (
