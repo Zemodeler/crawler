@@ -24,6 +24,7 @@ import {
   type SelfMark,
 } from "../../lib/practice.ts";
 import { COUNT_LIMITS, aiPick, autoPick, candidateSources, generatePaper, sourceRole, type AiPick } from "../../lib/practice-generate.ts";
+import { focusBrief } from "../../lib/practice-view.ts";
 import { Marker, Result, Taker } from "./practice-session.tsx";
 import Tutorials from "./tutorial.tsx";
 
@@ -72,11 +73,30 @@ const PROGRESS_TEXT: Record<Progress["phase"], string> = {
   repairing: "Fixing the format…",
 };
 
-export default function Practice({ course }: { course: string }) {
+/** What opened the Papers view with something already chosen: the sources and exam from Assessments, or a topic from the dashboard. */
+export type PapersLaunch = { sources: string[]; auto: boolean; exam: string; topic: string };
+
+export default function Practice({
+  course,
+  initialView = "papers",
+  launch,
+  topic = "",
+  onOpenCards,
+}: {
+  course: string;
+  /** Which screen opens first: the paper list, the New paper screen, or the tutorial sheets. */
+  initialView?: "papers" | "create" | "tutorials";
+  /** For the New paper screen: files to tick, the exam they were picked for, and a topic to focus the brief on. */
+  launch?: PapersLaunch | null;
+  /** For the tutorial sheets: show only the exercises on this topic. */
+  topic?: string;
+  /** Opens the Cards view, study tab, filtered to a topic (the cross-link from an exercise). */
+  onOpenCards?: (topic: string) => void;
+}) {
   const hosted = isHosted();
   const [store, setStore] = useState<PracticeStore>(() => loadStore(course));
   const storeRef = useRef(store);
-  const [view, setView] = useState<View>({ name: "papers" });
+  const [view, setView] = useState<View>({ name: initialView } as View);
   const [warning, setWarning] = useState("");
   const [files, setFiles] = useState<LocalFile[]>([]);
   const [extra, setExtra] = useState<LocalFile[]>([]);
@@ -176,27 +196,28 @@ export default function Practice({ course }: { course: string }) {
 
   return (
     <section className="pr-page">
-      <div className="pr-tabs" role="tablist">
-        {(
-          [
-            ["papers", "Papers"],
-            ["create", "New paper"],
-            ["progress", "Progress"],
-            ["tutorials", "Tutorial sheets"],
-          ] as const
-        ).map(([name, label]) => (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view.name === name}
-            className={view.name === name ? "active" : ""}
-            key={name}
-            onClick={() => setView({ name } as View)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {view.name !== "tutorials" && (
+        <div className="pr-tabs" role="tablist" aria-label="Papers">
+          {(
+            [
+              ["papers", "Papers"],
+              ["create", "New paper"],
+              ["progress", "Progress"],
+            ] as const
+          ).map(([name, label]) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view.name === name}
+              className={view.name === name ? "active" : ""}
+              key={name}
+              onClick={() => setView({ name } as View)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       {warning && <p className="pr-error">{warning}</p>}
       {notice && view.name === "papers" && <p className="pr-note">{notice}</p>}
 
@@ -217,6 +238,9 @@ export default function Practice({ course }: { course: string }) {
           course={course}
           hosted={hosted}
           sources={sources}
+          preselect={launch?.sources ?? []}
+          exam={launch?.exam ?? ""}
+          initialBrief={focusBrief(launch?.topic ?? "")}
           onUpload={async (list) => {
             for (const file of list) {
               if (hosted) await uploadOwnFile(course, file);
@@ -242,7 +266,7 @@ export default function Practice({ course }: { course: string }) {
       {view.name === "progress" && (
         <Progression attempts={store.attempts} onOpen={(attempt) => setView({ name: "result", attempt })} />
       )}
-      {view.name === "tutorials" && <Tutorials key={course} course={course} hosted={hosted} files={files} />}
+      {view.name === "tutorials" && <Tutorials key={course} course={course} hosted={hosted} files={files} topic={topic} onOpenCards={onOpenCards} />}
     </section>
   );
 }
@@ -338,19 +362,28 @@ function Create({
   course,
   hosted,
   sources,
+  preselect,
+  exam,
+  initialBrief,
   onUpload,
   onCreated,
 }: {
   course: string;
   hosted: boolean;
   sources: LocalFile[];
+  /** Module-relative paths to tick when the screen opens (from a link on Assessments); empty means the usual picks. */
+  preselect: string[];
+  /** The assessment those files were picked for. */
+  exam: string;
+  initialBrief: string;
   onUpload: (files: File[]) => Promise<void>;
   onCreated: (paper: Paper, notes: string[]) => void;
 }) {
   const [kind, setKind] = useState<PracticeKind>("exam");
   const [count, setCount] = useState(COUNT_LIMITS.exam.fallback);
-  const [brief, setBrief] = useState("");
+  const [brief, setBrief] = useState(initialBrief);
   const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [keepPreselect, setKeepPreselect] = useState(true);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<{ title: string; detail?: string; connect?: boolean } | null>(null);
@@ -366,13 +399,21 @@ function Create({
   const auto = useMemo(() => autoPick(sources), [sources]);
   const chosenByAi = aiChoice?.files === fileKey ? aiChoice : null;
   const base = useMemo(() => (chosenByAi ? new Set(chosenByAi.paths) : auto), [chosenByAi, auto]);
-  const on = (file: LocalFile) => picked[file.path] ?? base.has(file.path);
+  // The files a link asked for, kept to those this module really has; the picks only apply until the student asks the assistant instead.
+  const preselected = useMemo(() => {
+    if (!keepPreselect) return null;
+    const known = new Set(sources.map((f) => f.path));
+    const valid = preselect.filter((path) => known.has(path));
+    return valid.length ? new Set(valid) : null;
+  }, [keepPreselect, preselect, sources]);
+  const on = (file: LocalFile) => picked[file.path] ?? (preselected ? preselected.has(file.path) : base.has(file.path));
 
   /** Lets the assistant look at the module's files and tick the ones to write from. */
   async function choose(fresh: boolean) {
     chooseAbort.current?.abort();
     setChooseNote("");
     if (!sources.length) return;
+    if (fresh) setKeepPreselect(false);
     const saved = fresh ? null : savedPick(course, fileKey);
     if (saved) {
       setAiChoice({ ...saved, files: fileKey });
@@ -415,6 +456,8 @@ function Create({
   // Once per set of files: the assistant's choice replaces the by-name guess.
   // The short wait lets a module's files finish arriving before it is asked.
   useEffect(() => {
+    // Files a link already picked are not second-guessed by the assistant.
+    if (preselect.some((path) => sources.some((f) => f.path === path))) return;
     const timer = setTimeout(() => void choose(false), 400);
     return () => {
       clearTimeout(timer);
@@ -554,7 +597,9 @@ function Create({
         <p className="pr-meta" aria-live="polite">
           {choosing
             ? "Your assistant is looking through the files to choose what to write from…"
-            : chosenByAi
+            : preselected
+              ? `Ticked for ${exam || "this paper"}, from the files that match it. Tick or untick any to change it.`
+              : chosenByAi
               ? `Chosen by your assistant${chosenByAi.reason ? `: ${chosenByAi.reason}` : "."} Tick or untick any to change it.`
               : "The most useful files are ticked for you, by their names. Tick or untick any to change what the paper is written from."}
         </p>

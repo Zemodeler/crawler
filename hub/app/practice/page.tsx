@@ -3,8 +3,20 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { loadHandles } from "../../lib/course-fs.ts";
 import { isHosted } from "../../lib/ai/settings.ts";
 import { fetchTree, loadModule, pickModule } from "../../lib/library.ts";
-import { parsePracticeParams } from "../../lib/exam-focus.ts";
-import Practice from "./practice.tsx";
+import { parsePracticeParams, type PracticeView } from "../../lib/exam-focus.ts";
+import {
+  CARD_TABS,
+  VIEW_LABEL,
+  VIEW_ORDER,
+  exercisesByCategory,
+  isCardMode,
+  practiceSearch,
+  topicCategories,
+  type CardTab,
+} from "../../lib/practice-view.ts";
+import { loadTutorials, type TutorialSheet } from "../../lib/tutorial.ts";
+import Dashboard from "./dashboard.tsx";
+import Practice, { type PapersLaunch } from "./practice.tsx";
 type Confidence = 1 | 2 | 3 | 4 | 5;
 type Card = {
   id: string;
@@ -134,7 +146,13 @@ export default function PracticeHub() {
   const [course, setCourse] = useState("");
   const [cards, setCards] = useState<Card[]>([]);
   const [stats, setStats] = useState<Stats>(EMPTY);
-  const [tab, setTab] = useState<"home" | "study" | "browse" | "stats" | "practice">("home");
+  // Which part of Practice is open, and which screen of the card app inside Cards.
+  const [view, setView] = useState<PracticeView>("dashboard");
+  const [tab, setTab] = useState<CardTab>("home");
+  // A topic to show the tutorial sheets for, and what the Papers view opens with.
+  const [topic, setTopic] = useState("");
+  const [launch, setLaunch] = useState<PapersLaunch | null>(null);
+  const [sheets, setSheets] = useState<TutorialSheet[]>([]);
   const [selectedCats, setSelectedCats] = useState<string[]>([]);
   const [selectedDecks, setSelectedDecks] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("smart");
@@ -156,8 +174,10 @@ export default function PracticeHub() {
   const [reconnect, setReconnect] = useState<DirectoryHandle>();
   const input = useRef<HTMLInputElement>(null);
   const started = useRef(0);
-  // A link straight to the practice tab must survive the course loading, which otherwise resets to home.
-  const wantPractice = useRef(false);
+  // A link straight to the study tab (a card mode, or a topic) must survive the course
+  // loading, which otherwise resets the card app to its overview. Used once, by the first load.
+  const wantStudy = useRef(false);
+  const wantTopic = useRef("");
   // `now` comes from a ticking effect and the shuffle seed is derived, rather
   // than either being read during render. Reading the clock or the RNG while
   // rendering made the due-filter and the random order change on every
@@ -191,33 +211,41 @@ export default function PracticeHub() {
     }
     setCourse(courseName);
     setCards(all);
-    setSelectedCats([]);
-    setTab(wantPractice.current ? "practice" : "home");
-    setNotice(`${all.length} cards loaded automatically from ${courseName}.`);
+    const asked = wantTopic.current
+      ? topicCategories([...new Set(all.map((c) => c.category))], wantTopic.current)
+      : [];
+    setSelectedCats(asked);
+    setTab(wantStudy.current ? "study" : "home");
+    setNotice(
+      wantTopic.current && !asked.length
+        ? `${all.length} cards loaded from ${courseName}. None are filed under ${wantTopic.current}.`
+        : `${all.length} cards loaded automatically from ${courseName}.`,
+    );
+    wantStudy.current = false;
+    wantTopic.current = "";
   }
   useEffect(() => {
-    // The view decides the tab. A card mode only applies to the cards view, so a link
-    // to papers that also carries mode=smart is no longer overridden by the study tab.
+    // The view decides what opens. A card mode and a topic only apply to the cards view, so a
+    // link to papers that also carries mode=smart is not turned into the study tab.
     const params = parsePracticeParams(window.location.search);
-    if (params.view === "papers" || params.view === "tutorials") {
-      wantPractice.current = true;
-      queueMicrotask(() => setTab("practice"));
-    }
-    const requested = params.view === "cards" ? params.mode : "";
-    const allowed: Mode[] = [
-      "smart", "random", "progressive", "due", "weak", "unseen", "starred",
-    ];
-    if (requested && allowed.includes(requested as Mode)) {
-      queueMicrotask(() => {
-        setMode(requested as Mode);
-        setTab("study");
-      });
-    }
+    const requested = params.view === "cards" && isCardMode(params.mode) ? params.mode : "";
+    const forCards = params.view === "cards" ? params.topic : "";
+    wantStudy.current = Boolean(requested || forCards);
+    wantTopic.current = forCards;
+    queueMicrotask(() => {
+      setView(params.view);
+      setTopic(params.view === "tutorials" ? params.topic : "");
+      // Sources from Assessments, or a topic from a link, open the New paper screen already filled in.
+      if (params.view === "papers" && (params.sources.length || params.topic))
+        setLaunch({ sources: params.sources, auto: params.auto, exam: params.exam, topic: params.topic });
+      if (requested) setMode(requested as Mode);
+      if (wantStudy.current) setTab("study");
+    });
     if (isHosted()) {
-      // Under the desktop app the course is the module chosen on the hub.
+      // Under the desktop app the course is the module chosen on the hub, or the one a link names.
       fetchTree()
         .then(async (tree) => {
-          const picked = pickModule(tree);
+          const picked = pickModule(tree, params.module || undefined);
           if (!picked) return;
           const files = await loadModule(tree, picked.year, picked.module);
           await applyFiles(
@@ -268,10 +296,25 @@ export default function PracticeHub() {
         JSON.stringify(stats),
       );
   }, [course, stats]);
+  // The converted tutorial sheets, only to say which topics have exercises (the link on a card).
+  // Read again whenever the Cards view opens, so sheets converted meanwhile are seen. Missing or
+  // unreadable sheets just mean no link.
+  const onCards = view === "cards";
+  useEffect(() => {
+    if (!course || !onCards) return;
+    let live = true;
+    loadTutorials(course, isHosted())
+      .then((file) => live && setSheets(file.sheets))
+      .catch(() => live && setSheets([]));
+    return () => {
+      live = false;
+    };
+  }, [course, onCards]);
   const categories = useMemo(
     () => [...new Set(cards.map((c) => c.category))],
     [cards],
   );
+  const exerciseCounts = useMemo(() => exercisesByCategory(categories, sheets), [categories, sheets]);
   const decks = useMemo(
     () => [
       ...new Set(
@@ -339,6 +382,38 @@ export default function PracticeHub() {
     return list;
   }, [cards, selectedCats, selectedDecks, mode, stats, now, shuffleSeed]);
   const current = pool[index % Math.max(pool.length, 1)];
+  /**
+   * Opens a part of Practice without reloading. Cards can arrive with a topic (only that
+   * topic's categories) and a mode, and then land on the study tab; Papers and Tutorial
+   * sheets take a topic too. The address is rewritten so a reload shows the same part.
+   */
+  function openView(next: PracticeView, options: { topic?: string; mode?: string; launch?: PapersLaunch | null } = {}) {
+    const wanted = options.topic || "";
+    setView(next);
+    setTopic(next === "tutorials" ? wanted : "");
+    setLaunch(next === "papers" ? (options.launch ?? (wanted ? { sources: [], auto: false, exam: "", topic: wanted } : null)) : null);
+    if (next === "cards" && (wanted || options.mode)) {
+      if (wanted) {
+        const asked = topicCategories(categories, wanted);
+        setSelectedCats(asked);
+        setSelectedDecks([]);
+        setNotice(asked.length ? "" : `No cards are filed under ${wanted}.`);
+      }
+      if (options.mode && isCardMode(options.mode)) setMode(options.mode);
+      setIndex(0);
+      setRevealed(false);
+      setTab("study");
+    }
+    try {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${practiceSearch(window.location.search, { view: next, topic: wanted, mode: options.mode })}`,
+      );
+    } catch {
+      /* the address is only a convenience */
+    }
+  }
   async function load(e: ChangeEvent<HTMLInputElement>) {
     const files = [...(e.target.files || [])].filter((f) =>
       f.name.toLowerCase().endsWith(".csv"),
@@ -486,25 +561,54 @@ export default function PracticeHub() {
             </button>
           ) : (
             <button onClick={() => input.current?.click()}>
-              Open flashcard library
+              Open course library
             </button>
           )}
         </section>
       ) : (
         <>
-          <nav className="fc-nav">
-            {(["home", "study", "browse", "stats", "practice"] as const).map((t) => (
+          <nav className="pv-tabs" aria-label="Practice sections">
+            {VIEW_ORDER.map((v) => (
               <button
-                className={tab === t ? "active" : ""}
-                key={t}
-                onClick={() => setTab(t)}
+                type="button"
+                className={view === v ? "active" : ""}
+                aria-current={view === v ? "page" : undefined}
+                key={v}
+                onClick={() => openView(v)}
               >
-                {t}
+                {VIEW_LABEL[v]}
               </button>
             ))}
           </nav>
-          {tab === "practice" && <Practice key={course} course={course} />}
-          {tab === "home" && (
+          {view === "dashboard" && <Dashboard key={course} course={course} onOpen={openView} />}
+          {(view === "papers" || view === "tutorials") && (
+            <Practice
+              // What the address asked for is part of the key, so choosing the same tab again (which
+              // clears the topic or the preselected files) starts it afresh and the page matches the address.
+              key={`${course}:${view}:${view === "tutorials" ? topic : launch ? JSON.stringify(launch) : ""}`}
+              course={course}
+              initialView={view === "tutorials" ? "tutorials" : launch ? "create" : "papers"}
+              launch={launch}
+              topic={topic}
+              onOpenCards={(name) => openView("cards", { topic: name })}
+            />
+          )}
+          {view === "cards" && (
+            <nav className="pv-subtabs" aria-label="Cards">
+              {CARD_TABS.map((t) => (
+                <button
+                  type="button"
+                  className={tab === t.id ? "active" : ""}
+                  aria-pressed={tab === t.id}
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </nav>
+          )}
+          {view === "cards" && tab === "home" && (
             <section className="fc-page">
               <div className="fc-hero">
                 <div>
@@ -576,7 +680,7 @@ export default function PracticeHub() {
               </div>
             </section>
           )}
-          {tab === "study" && (
+          {view === "cards" && tab === "study" && (
             <section className="fc-study">
               <aside>
                 <h3>Study Mix</h3>
@@ -736,6 +840,17 @@ export default function PracticeHub() {
                         Skip
                       </button>
                     </div>
+                    {exerciseCounts[current.category] > 0 && (
+                      <p className="pv-crosslink">
+                        <button
+                          type="button"
+                          className="pv-link"
+                          onClick={() => openView("tutorials", { topic: current.category })}
+                        >
+                          Practise exercises on this topic
+                        </button>
+                      </p>
+                    )}
                   </>
                 ) : (
                   <div className="fc-checkpoint">
@@ -746,7 +861,7 @@ export default function PracticeHub() {
               </div>
             </section>
           )}
-          {tab === "browse" && (
+          {view === "cards" && tab === "browse" && (
             <section className="fc-page">
               <div className="fc-browse-head">
                 <h1>Browse and edit</h1>
@@ -866,7 +981,7 @@ export default function PracticeHub() {
               )}
             </section>
           )}
-          {tab === "stats" && (
+          {view === "cards" && tab === "stats" && (
             <section className="fc-page">
               <h1>Learning statistics</h1>
               <div className="fc-stats-grid">
