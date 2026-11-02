@@ -138,6 +138,28 @@ export type SheetPair = {
 const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, "");
 const SOLUTION = /solutions?|answers?|worked/i;
 const READABLE = /\.(pdf|docx|pptx|txt|md)$/i;
+/** Practice sets outside the weekly sheets: "extra exercises - probabilities", "Additional problems". */
+const EXTRA = /\b(?:extra|additional|further|practice|bonus|optional|more)\s*[-_ ]*(?:exercises?|problems?|questions?)\b/i;
+const MODULE_CODE = /\b(?:ecs|com|[a-z]{2,4})\d{3,4}[a-z]?\b/gi;
+
+/** Study Hub's own folders and files in a module (revision guides, flashcards, the start page): never a tutorial sheet by name. */
+const isOwn = (f: Named) => /^(?:Revision|Flashcards|\.study-hub|\.crawler)\//i.test(f.path) || /^0 - START HERE\.md$/i.test(f.path);
+
+/** A readable, visible course file. */
+const isReadable = (f: Named) => READABLE.test(f.name) && !/^\./.test(f.name) && !/(?:^|\/)\./.test(f.path);
+
+/** A sheet's display name from its file name: "ecs509u-extra exercises - probabilities.pdf" → "Extra exercises – probabilities". */
+export function sheetLabel(name: string): string {
+  const text = stem(name)
+    .replace(/_+/g, " ")
+    .replace(MODULE_CODE, " ")
+    .replace(/[- ]*\b(?:solutions?|answers?)\b/gi, " ")
+    .replace(/^[\s\-–]+|[\s\-–]+$/g, "")
+    .replace(/\s*[-–]\s+|\s+[-–]\s*/g, " – ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text[0].toUpperCase() + text.slice(1) : stem(name);
+}
 
 /** The part of a name both a sheet and its solution share. */
 function baseOf(name: string): string {
@@ -198,28 +220,79 @@ export const sheetId = (pair: Pick<SheetPair, "solutionPath">) => `s-${baseOf(pa
  * solution sheets normally repeat the questions.
  */
 export function pairSheets(files: Named[]): SheetPair[] {
-  const readable = files.filter((f) => READABLE.test(f.name) && !/^\./.test(f.name));
+  const readable = files.filter((f) => isReadable(f) && !isOwn(f));
   const solutions = readable.filter((f) => SOLUTION.test(stem(f.name)) && !isLecture(f) && !/past paper|exam paper/i.test(f.path));
-  const sheets = readable.filter((f) => !SOLUTION.test(stem(f.name)) && sheetNumber(f.name).week !== null && !isLecture(f));
+  const sheets = readable.filter(
+    (f) => !SOLUTION.test(stem(f.name)) && (sheetNumber(f.name).week !== null || EXTRA.test(stem(f.name))) && !isLecture(f),
+  );
   const pairs: SheetPair[] = [];
   for (const solution of solutions) {
     const base = baseOf(solution.name);
-    const number = sheetNumber(solution.name);
     const sheet = sheets.find((s) => baseOf(s.name) === base);
-    const label = number.week !== null ? `Week ${number.week}${number.part}` : stem(solution.name);
-    pairs.push({
-      id: sheetId({ solutionPath: solution.path }),
-      label,
-      week: number.week,
-      part: number.part,
-      ...(sheet ? { sheetPath: sheet.path } : {}),
-      solutionPath: solution.path,
-      ...(lectureFor(number.week, files) ? { lecturePath: lectureFor(number.week, files) } : {}),
-    });
+    pairs.push(pairFor(solution, files, sheet));
   }
-  return pairs.sort(
+  // Extra exercise sets usually print the answers under each question, so
+  // one without a separate solutions file is a sheet of its own.
+  const used = new Set(pairs.flatMap((p) => [p.solutionPath, p.sheetPath]));
+  for (const extra of sheets) if (EXTRA.test(stem(extra.name)) && !used.has(extra.path)) pairs.push(pairFor(extra, files));
+  return sortPairs(pairs);
+}
+
+/** One row of the table for a file holding the answers (and usually the questions), with an optional separate question sheet. */
+export function pairFor(solution: Named, files: Named[], sheet?: Named): SheetPair {
+  const number = sheetNumber(solution.name);
+  const extra = EXTRA.test(stem(solution.name));
+  const label = number.week !== null && !extra ? `Week ${number.week}${number.part}` : sheetLabel(solution.name);
+  const lecturePath = lectureFor(number.week, files);
+  return {
+    id: sheetId({ solutionPath: solution.path }),
+    label,
+    week: number.week,
+    part: number.part,
+    ...(sheet ? { sheetPath: sheet.path } : {}),
+    solutionPath: solution.path,
+    ...(lecturePath ? { lecturePath } : {}),
+  };
+}
+
+const sortPairs = (pairs: SheetPair[]) =>
+  pairs.sort(
     (a, b) => (a.week ?? 999) - (b.week ?? 999) || a.part.localeCompare(b.part) || a.label.localeCompare(b.label, undefined, { numeric: true }),
   );
+
+/**
+ * The rows of the "Find my tutorial sheets" table: the pairs found by name,
+ * then converted sheets whose files were not found by name (added by hand
+ * earlier, and still in the module), then files added by hand this time.
+ */
+export function setupRows(found: SheetPair[], converted: TutorialSheet[], added: SheetPair[], files: Named[]): SheetPair[] {
+  const present = new Set(files.map((f) => f.path));
+  const rows = [...found];
+  const ids = new Set(rows.map((r) => r.id));
+  const back: SheetPair[] = [];
+  for (const s of converted) {
+    if (ids.has(s.id) || !present.has(s.solutionPath)) continue;
+    ids.add(s.id);
+    back.push({
+      id: s.id,
+      label: s.label,
+      week: s.week,
+      part: s.part,
+      ...(s.sheetPath ? { sheetPath: s.sheetPath } : {}),
+      solutionPath: s.solutionPath,
+      ...(s.lecturePath ? { lecturePath: s.lecturePath } : {}),
+    });
+  }
+  const extra = added.filter((a) => !ids.has(a.id));
+  return [...rows, ...sortPairs(back), ...extra];
+}
+
+/** Files a student can add by hand: every readable course file not already in a row, in folder order. */
+export function addableFiles<T extends Named>(files: T[], rows: SheetPair[]): T[] {
+  const used = new Set(rows.flatMap((r) => [r.solutionPath, r.sheetPath]));
+  return files
+    .filter((f) => isReadable(f) && !/^\.study-hub\//.test(f.path) && !used.has(f.path))
+    .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
 }
 
 /** Lecture decks a student can pick from when a pair's lecture is wrong. */

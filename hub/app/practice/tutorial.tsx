@@ -16,8 +16,11 @@ import {
   lectureChoices,
   loadProgress,
   loadTutorials,
+  addableFiles,
+  pairFor,
   pairSheets,
   saveProgress,
+  setupRows,
   saveTutorials,
   tally,
   upsertSheet,
@@ -194,7 +197,7 @@ export default function Tutorials({
         <Setup
           moduleName={moduleName}
           files={files}
-          converted={new Set(data.sheets.map((s) => s.id))}
+          sheets={data.sheets}
           hasSheets={data.sheets.length > 0}
           onConverted={(sheet) => update((file) => upsertSheet(file, sheet))}
           onBack={() => setView({ name: "home" })}
@@ -333,20 +336,26 @@ type RowStatus =
 function Setup({
   moduleName,
   files,
-  converted,
+  sheets,
   hasSheets,
   onConverted,
   onBack,
 }: {
   moduleName: string;
   files: LocalFile[];
-  converted: Set<string>;
+  sheets: TutorialSheet[];
   hasSheets: boolean;
   onConverted: (sheet: TutorialSheet) => Promise<void>;
   onBack: () => void;
 }) {
-  const pairs = useMemo(() => pairSheets(files), [files]);
+  const found = useMemo(() => pairSheets(files), [files]);
   const lectures = useMemo(() => lectureChoices(files), [files]);
+  const converted = useMemo(() => new Set(sheets.map((s) => s.id)), [sheets]);
+  /** Files added by hand on this visit; once converted they come back from `sheets`. */
+  const [added, setAdded] = useState<SheetPair[]>([]);
+  const pairs = useMemo(() => setupRows(found, sheets, added, files), [found, sheets, added, files]);
+  const addable = useMemo(() => addableFiles(files, pairs), [files, pairs]);
+  const [pick, setPick] = useState("");
   const [lecture, setLecture] = useState<Record<string, string>>({});
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState<Record<string, RowStatus>>({});
@@ -361,6 +370,34 @@ function Setup({
   const on = (pair: SheetPair) => ticked[pair.id] ?? !converted.has(pair.id);
   const chosen = pairs.filter(on);
   const setRow = (id: string, row: RowStatus) => setStatus((s) => ({ ...s, [id]: row }));
+  const isAdded = (pair: SheetPair) => !converted.has(pair.id) && added.some((a) => a.id === pair.id);
+
+  function addFile() {
+    const file = addable.find((f) => f.path === pick);
+    if (!file) return;
+    const pair = pairFor(file, files);
+    setAdded((list) => [...list.filter((a) => a.id !== pair.id), pair]);
+    setTicked((t) => ({ ...t, [pair.id]: true }));
+    setPick("");
+  }
+
+  function removeAdded(pair: SheetPair) {
+    setAdded((list) => list.filter((a) => a.id !== pair.id));
+    const drop = <T,>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([id]) => id !== pair.id));
+    setTicked(drop);
+    setStatus(drop);
+    setLecture(drop);
+  }
+
+  /** Readable files grouped by folder, for the "Add another file" list. */
+  const addGroups = useMemo(() => {
+    const groups = new Map<string, LocalFile[]>();
+    for (const file of addable) {
+      const folder = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "Module folder";
+      groups.set(folder, [...(groups.get(folder) || []), file]);
+    }
+    return [...groups];
+  }, [addable]);
 
   async function convert(list: SheetPair[]) {
     setError(null);
@@ -439,16 +476,18 @@ function Setup({
       )}
       <h1>Find my tutorial sheets</h1>
       <p className="pr-lede">
-        Each solutions file is matched with its exercise sheet and the week&apos;s lecture by their names. Check the lecture is right, then
-        convert the sheets you want. Your assistant reads each one and links every exercise to the slides it comes from.
+        Each solutions file is matched with its exercise sheet and the week&apos;s lecture by their names, and extra exercise sets are
+        listed too. Check the lecture is right, then convert the sheets you want. Your assistant reads each one and links every exercise
+        to the slides it comes from. Missing a file? Add it below the table.
       </p>
 
       {!files.length ? (
         <p className="pr-note">Loading this module&apos;s files…</p>
       ) : !pairs.length ? (
         <p className="pr-note">
-          No tutorial solutions were found in this module. They are found by their names: a file with &ldquo;solutions&rdquo; or
-          &ldquo;answers&rdquo; in its name, such as &ldquo;Exercise 3 solutions.pdf&rdquo;.
+          No tutorial solutions were found in this module by name. They are found by a name with &ldquo;solutions&rdquo; or
+          &ldquo;answers&rdquo; in it, such as &ldquo;Exercise 3 solutions.pdf&rdquo;, or one like &ldquo;Extra exercises.pdf&rdquo;. If yours
+          are named differently, add them below.
         </p>
       ) : (
         <div className="tu-table-wrap">
@@ -482,6 +521,17 @@ function Setup({
                     <td>
                       <b>{pair.label}</b>
                       {converted.has(pair.id) && <small className="tu-converted">Converted</small>}
+                      {isAdded(pair) && (
+                        <button
+                          type="button"
+                          className="pr-quiet tu-small tu-remove"
+                          disabled={busy}
+                          aria-label={`Remove ${pair.label}`}
+                          onClick={() => removeAdded(pair)}
+                        >
+                          Remove
+                        </button>
+                      )}
                     </td>
                     <td className="tu-file">{name(pair.solutionPath)}</td>
                     <td className="tu-file">{pair.sheetPath ? name(pair.sheetPath) : "—"}</td>
@@ -527,6 +577,32 @@ function Setup({
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {files.length > 0 && addable.length > 0 && (
+        <div className="tu-add">
+          <label htmlFor="tu-add-file">Add another file</label>
+          <p className="pr-meta">
+            Any exercise file not listed above, such as extra exercises. Choose the file with the answers: it usually repeats the questions.
+          </p>
+          <div className="tu-add-row">
+            <select id="tu-add-file" value={pick} disabled={busy} onChange={(e) => setPick(e.target.value)}>
+              <option value="">Choose a file…</option>
+              {addGroups.map(([folder, list]) => (
+                <optgroup key={folder} label={folder}>
+                  {list.map((f) => (
+                    <option key={f.path} value={f.path}>
+                      {f.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <button type="button" className="pr-quiet" disabled={busy || !pick} onClick={addFile}>
+              Add
+            </button>
+          </div>
         </div>
       )}
 

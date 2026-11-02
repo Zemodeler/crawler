@@ -33,6 +33,12 @@
 .tu-table td:first-child,.tu-table th:first-child{width:28px;padding-right:0}
 .tu-table select{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;max-width:240px}
 .tu-file{color:var(--text-2);overflow-wrap:anywhere}
+.tu-remove{display:block;margin-top:var(--space-2)}
+.tu-add{margin-top:var(--space-4);display:grid;gap:var(--space-2)}
+.tu-add label{font-weight:var(--weight-semibold)}
+.tu-add .pr-meta{margin:0}
+.tu-add-row{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center}
+.tu-add select{font:inherit;font-size:var(--text-sm);color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 8px;flex:1 1 260px;min-width:0;max-width:520px}
 .tu-converted{display:block;color:var(--accent-text);font-size:var(--text-xs);margin-top:2px}
 .tu-status{min-width:180px}
 .tu-status>*{display:block}
