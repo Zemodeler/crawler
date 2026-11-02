@@ -277,7 +277,7 @@ test("long AI work runs in the background runner, not in a page, and is shown fr
   assert.match(activity, /resumeOnLoad\(\)/);
   assert.match(activity, /subscribe\(/);
   // Notification permission is asked from a click, never on load.
-  assert.doesNotMatch(activity.replace(/export function askToNotify[\s\S]*?\n}\n/, ""), /requestPermission/);
+  assert.doesNotMatch(activity.replace(/export function askToNotify[\s\S]*?\r?\n}\r?\n/, ""), /requestPermission/);
 
   // The pages hand the work to the runner instead of awaiting the converters.
   assert.match(tutorial, /startTutorial\(/);
