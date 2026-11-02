@@ -21,6 +21,8 @@ import {
   type TutorialProgress,
   type TutorialSheet,
 } from "../../lib/tutorial.ts";
+import { reviseTarget } from "../../lib/practice-view.ts";
+import type { TopicReadiness } from "../../lib/readiness.ts";
 import { explainPart } from "../../lib/tutorial-generate.ts";
 import { CHAT_ASK_EVENT } from "../shell/AppShell.tsx";
 import { MathText } from "./math-text.tsx";
@@ -83,6 +85,8 @@ export function TutorialSession({
   keys,
   start,
   progress,
+  topics,
+  onRevise,
   onProgress,
   onUpdate,
   onExit,
@@ -96,6 +100,10 @@ export function TutorialSession({
   keys: string[];
   start: number;
   progress: TutorialProgress;
+  /** The module's topics, to find the cards on an exercise's topic. */
+  topics: TopicReadiness[];
+  /** Opens the Cards view filtered to a topic; without it there is no link. */
+  onRevise?: (topic: string) => void;
   onProgress: (change: (p: TutorialProgress) => TutorialProgress) => void;
   onUpdate: (change: (file: TutorialFile) => TutorialFile) => Promise<void>;
   onExit: () => void;
@@ -209,6 +217,7 @@ export function TutorialSession({
     );
 
   const { sheet, exercise } = entry;
+  const reviseTopic = onRevise ? reviseTarget(topics, entry.key) : null;
   const packs = packsFor(
     exercise,
     files.filter((f) => f.category === "Study packs" && f.ext === "md"),
@@ -338,6 +347,13 @@ export function TutorialSession({
                   </ul>
                 ) : (
                   <p className="pr-meta">No study pack on this topic yet.</p>
+                )}
+                {reviseTopic && (
+                  <p className="pv-crosslink">
+                    <button type="button" className="pv-link" onClick={() => onRevise?.(reviseTopic)}>
+                      Revise the cards for this topic
+                    </button>
+                  </p>
                 )}
               </div>
 

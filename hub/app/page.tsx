@@ -476,7 +476,7 @@ export default function Home() {
       setSelected(path);
       show("reader");
     } else if (f.ext === "csv") {
-      window.location.assign("/flashcards?mode=smart");
+      window.location.assign("/practice?view=cards&mode=smart");
     } else if (f.url) {
       window.open(f.url, "_blank", "noopener,noreferrer");
     } else {
@@ -745,7 +745,7 @@ export default function Home() {
                   reading, review weak cards, or follow your revision checklist.
                 </p>
                 <div className="hero-actions">
-                  <button className="primary" onClick={() => { window.location.assign("/flashcards?mode=smart"); }}>
+                  <button className="primary" onClick={() => { window.location.assign("/practice?view=cards&mode=smart"); }}>
                     Start a card session
                   </button>
                   {selected && (
@@ -780,7 +780,7 @@ export default function Home() {
               <button
                 className="metric-link"
                 onClick={() => {
-                  window.location.assign("/flashcards?mode=smart");
+                  window.location.assign("/practice?view=cards&mode=smart");
                 }}
               >
                 <span>CARDS</span>
@@ -790,7 +790,7 @@ export default function Home() {
               <button
                 className="metric-link"
                 onClick={() => {
-                  window.location.assign("/flashcards?mode=weak");
+                  window.location.assign("/practice?view=cards&mode=weak");
                 }}
               >
                 <span>WEAK</span>
@@ -844,8 +844,8 @@ export default function Home() {
                   onClick={() => {
                     window.location.assign(
                       weak
-                        ? "/flashcards?mode=weak"
-                        : "/flashcards?mode=progressive",
+                        ? "/practice?view=cards&mode=weak"
+                        : "/practice?view=cards&mode=progressive",
                     );
                   }}
                 >

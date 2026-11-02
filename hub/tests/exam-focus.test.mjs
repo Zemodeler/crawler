@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildFocus, countdown, isExamLike, keywords, parseSourceParams, pickSources, practiceHref, rankSources } from "../lib/exam-focus.ts";
+import { buildFocus, countdown, isExamLike, keywords, legacyPracticeUrl, parsePracticeParams, parseSourceParams, pickSources, practiceHref, rankSources } from "../lib/exam-focus.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
 const at = (iso) => Date.parse(iso);
@@ -104,10 +104,42 @@ test("focus lists unopened source files and says nothing about what is already o
 
 test("the practice link round-trips the module, sources and exam", () => {
   const sources = ["Lectures/Week 4 Design & Patterns.pdf", "Past Papers/2024.pdf"];
-  const href = practiceHref("flashcards", { module: "2026-27/ECS505U - Software Engineering", sources, exam: "Final Exam" });
-  assert.ok(href.startsWith("/flashcards?tab=practice&mode=smart&module="));
+  const href = practiceHref("practice", { module: "2026-27/ECS505U - Software Engineering", sources, exam: "Final Exam" });
+  assert.ok(href.startsWith("/practice?view=papers&module="));
   const parsed = parseSourceParams(href.slice(href.indexOf("?")));
   assert.deepEqual(parsed, { module: "2026-27/ECS505U - Software Engineering", sources, auto: true, exam: "Final Exam" });
   assert.ok(practiceHref("generate", { module: "m", sources: [], exam: "x" }).startsWith("/generate?module=m"));
   assert.deepEqual(parseSourceParams(""), { module: "", sources: [], auto: false, exam: "" });
+});
+
+test("the practice link can open a view, a card mode and a topic", () => {
+  const href = practiceHref("practice", { module: "m", sources: [], exam: "Final", view: "cards", mode: "weak", topic: "Design & Patterns" });
+  const parsed = parsePracticeParams(href.slice(href.indexOf("?")));
+  assert.equal(parsed.view, "cards");
+  assert.equal(parsed.mode, "weak");
+  assert.equal(parsed.topic, "Design & Patterns");
+  assert.equal(parsed.exam, "Final");
+  assert.ok(!practiceHref("generate", { module: "m", sources: [], exam: "x", view: "cards" }).includes("view="), "generate has no views");
+});
+
+test("Practice addresses without a view fall back to what older links meant", () => {
+  assert.equal(parsePracticeParams("").view, "dashboard");
+  assert.equal(parsePracticeParams("?tab=practice&mode=smart").view, "papers");
+  assert.equal(parsePracticeParams("?mode=weak").view, "cards");
+  assert.equal(parsePracticeParams("?view=nonsense").view, "dashboard");
+  assert.equal(parsePracticeParams("?view=tutorials").view, "tutorials");
+});
+
+test("old /flashcards addresses are sent to the matching Practice view with their parameters", () => {
+  assert.equal(legacyPracticeUrl(""), "/practice?view=cards");
+  assert.equal(legacyPracticeUrl("?mode=weak"), "/practice?mode=weak&view=cards");
+  const old = legacyPracticeUrl("?tab=practice&mode=smart&module=2026-27%2FECS505U&source=a.pdf&auto=1&exam=Final");
+  assert.ok(old.startsWith("/practice?"));
+  assert.ok(!old.includes("tab="));
+  const parsed = parsePracticeParams(old.slice(old.indexOf("?")));
+  assert.equal(parsed.view, "papers");
+  assert.deepEqual(parsed.sources, ["a.pdf"]);
+  assert.equal(parsed.module, "2026-27/ECS505U");
+  assert.equal(parsed.exam, "Final");
+  assert.equal(parsed.auto, true);
 });

@@ -116,7 +116,7 @@ using a subscription needs the desktop app.
   Codex command line on this computer, and never has internet access. Answers
   cite the file they came from, and each quote is checked against your files.
 
-### Flashcards
+### Flashcards (in Practice)
 
 A full spaced-repetition app over the CSV files in your folder.
 
@@ -135,7 +135,7 @@ A full spaced-repetition app over the CSV files in your folder.
 
 ### Practice papers
 
-The **Practice** tab on the flashcards page generates exam practice from your own course, only when you ask for it.
+The **Practice** section (`/practice`, formerly `/flashcards`) generates exam practice from your own course, only when you ask for it.
 
 - **Three types.** An exam paper (multiple-choice plus written questions, in the style of your past papers), an MCQ quiz, or simple exercises with worked solutions.
 - **Written from your files.** Past papers found in the module and anything you add (PDF, Word, PowerPoint or text; kept in the module's My Files) are the source. Lectures and seminars can be ticked in too. Add a short request such as "harder, more calculations" to steer it.
@@ -442,7 +442,8 @@ the CLI, it:
 app/                 the site
   page.tsx           workspace: dashboard, reader, all-files
   chat/              the "ask about this" assistant: panel + context scoping
-  flashcards/        the spaced-repetition app
+  practice/          Practice: spaced-repetition cards, practice papers and tutorial sheets
+  flashcards/        redirect from the old /flashcards address to /practice
   connect/           AI settings — the only login
   generate/          the conversion workspace
   markdown.tsx       the Markdown renderer, shared by reader and preview
