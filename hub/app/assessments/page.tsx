@@ -214,6 +214,8 @@ export default function AssessmentsPage() {
   function jumpTo(id: string) {
     const target = document.getElementById(anchorId(id));
     if (!target) return;
+    // A row folded under "N more" is hidden until its <details> opens.
+    for (let fold = target.closest("details"); fold; fold = fold.parentElement?.closest("details") ?? null) fold.open = true;
     const calm = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "center" });
     target.focus({ preventScroll: true });
