@@ -11,13 +11,19 @@
 
 import type { ChatCitation, ChatTurn } from "./ai/chat.ts";
 import type { ActionState, ChatAction, ProposedAction } from "./ai/chat-actions.ts";
+import { mergeAttachments, parseAttachment, type Attachment } from "./attachments.ts";
 
 export const CHATS_PATH = ".study-hub/chats.json";
 /** Older conversations past this are dropped when a new one is saved. */
 export const MAX_SAVED_CHATS = 30;
 const GUARD = { "x-study-hub-host": "1" };
 
-export type SavedTurn = ChatTurn & { actions?: ProposedAction[] };
+/** `attachments` are files the student added with this question; they stay in scope for the rest of the conversation. */
+export type SavedTurn = ChatTurn & { actions?: ProposedAction[]; attachments?: Attachment[] };
+
+/** Every file attached so far in a conversation, latest copy of each name. */
+export const conversationAttachments = (turns: SavedTurn[]): Attachment[] =>
+  mergeAttachments([], turns.flatMap((t) => t.attachments ?? []));
 
 export type SavedChat = {
   id: string;
@@ -60,6 +66,10 @@ export function parseTurn(value: unknown): SavedTurn | null {
   if (t.ungrounded === true) turn.ungrounded = true;
   if (t.usedWebSearch === true) turn.usedWebSearch = true;
   if (Array.isArray(t.actions)) turn.actions = t.actions.map(parseAction).filter((a): a is ProposedAction => a !== null);
+  if (Array.isArray(t.attachments)) {
+    const files = t.attachments.map(parseAttachment).filter((a): a is Attachment => a !== null);
+    if (files.length) turn.attachments = files;
+  }
   return turn;
 }
 

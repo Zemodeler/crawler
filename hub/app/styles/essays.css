@@ -68,3 +68,7 @@
 .es-badge.check{background:var(--warn-bg);color:var(--warn)}
 .es-chat-messages{display:flex;flex-direction:column;gap:12px;max-height:52vh;overflow:auto}
 .es-chat .chat-input-row textarea{font:inherit}
+.es-field{display:grid;gap:6px;font-size:var(--text-sm);font-weight:600}
+.es-files{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-weight:400}
+.es-files .btn{padding:6px 12px;font-size:var(--text-xs)}
+.es-files .chat-keep{margin:0 0 0 4px}

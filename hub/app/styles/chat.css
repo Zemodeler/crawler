@@ -63,3 +63,12 @@
 .chat-action-failed,.chat-action-refused{border-color:var(--warn);background:var(--warn-bg)}
 a.chat-citation{text-decoration:none}
 a.chat-citation:hover{text-decoration:underline}
+/* Files attached to a question (not in the library) */
+.chat-attached,.chat-pending{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;white-space:normal}
+.chat-pending{margin:0 0 8px}
+.chat-file{display:inline-flex;align-items:center;gap:4px;font-size:var(--text-xs);font-weight:600;padding:3px 9px;border-radius:var(--radius-full);background:var(--surface-2);border:1px solid var(--border);color:var(--text)}
+.chat-file button{border:0;background:none;color:var(--text-muted);cursor:pointer;font-size:var(--text-sm);line-height:1;padding:0 0 0 2px}
+.chat-attach-error{flex-basis:100%;font-size:var(--text-xs);color:var(--danger)}
+.chat-input-row .chat-attach{padding:0 12px;font-size:var(--text-lg);align-self:stretch}
+.chat-keep{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--text-xs);color:var(--text-muted)}
+.chat-keep input{accent-color:var(--accent)}

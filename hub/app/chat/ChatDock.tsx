@@ -31,7 +31,18 @@ import { formatUsd } from "../../lib/ai/models.ts";
 import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
 import { hasAnyConnection, isHosted, loadSettings } from "../../lib/ai/settings.ts";
 import type { AiClient, AiError } from "../../lib/ai/types.ts";
-import { emptyChatFile, loadChats, newChatId, saveChats, upsertChat, type ChatFile, type SavedTurn } from "../../lib/chat-store.ts";
+import { ATTACH_ACCEPT, MAX_ATTACHMENTS, attachmentContext, mergeAttachments, readAttachment, type Attachment } from "../../lib/attachments.ts";
+import {
+  conversationAttachments,
+  emptyChatFile,
+  loadChats,
+  newChatId,
+  saveChats,
+  upsertChat,
+  type ChatFile,
+  type SavedTurn,
+} from "../../lib/chat-store.ts";
+import { uploadOwnFile } from "../../lib/own-files.ts";
 import {
   ACTIVE_MODULE_EVENT,
   addDeadline,
@@ -117,6 +128,13 @@ export default function ChatDock() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [applying, setApplying] = useState("");
+  /** Files picked for the next question, not sent yet. */
+  const [pending, setPending] = useState<Attachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState("");
+  /** Also copy picked files into the module's My Files folder. */
+  const [keepCopy, setKeepCopy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<{ message: string; hint?: string } | null>(null);
   const [spent, setSpent] = useState({ tokens: 0, costUsd: 0, messages: 0 });
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -305,14 +323,18 @@ export default function ChatDock() {
     persist(chat.id, chat.turns);
   };
 
-  const send = async (text = input, base: SavedTurn[] = turns) => {
-    const question = text.trim();
+  const send = async (text = input, base: SavedTurn[] = turns, files: Attachment[] = pending) => {
+    const question = text.trim() || (files.length ? `I attached ${files.map((f) => f.name).join(", ")}. What should I do with it?` : "");
     if (!question || !client || !scope || sending || base.length >= MAX_CHAT_TURNS) return;
     setInput("");
     writeDraft("");
+    setPending([]);
+    setAttachError("");
     setError(null);
     const id = chatId;
-    const historySoFar: SavedTurn[] = [...base, { role: "user", content: question }];
+    const historySoFar: SavedTurn[] = [...base, { role: "user", content: question, ...(files.length ? { attachments: files } : {}) }];
+    // Files attached anywhere in this conversation stay readable for the rest of it.
+    const attached = attachmentContext(conversationAttachments(historySoFar));
     setTurns(historySoFar);
     // Saved before the reply, so a question asked just before changing page is not lost.
     persist(id, historySoFar);
@@ -324,14 +346,20 @@ export default function ChatDock() {
         client,
         scopeLabel: scope.scopeLabel,
         contextLabel: scope.contextLabel,
-        contextBlock: scope.contextBlock,
+        contextBlock: [scope.contextBlock, attached.block].filter(Boolean).join("\n\n"),
         history: forHistory(historySoFar),
         question,
         webSearch: false,
-        extracts: scope.extracts,
-        allText: scope.allText,
+        extracts: new Map([...scope.extracts, ...attached.extracts]),
+        allText: [scope.allText, attached.text].filter(Boolean).join("\n\n"),
         signal: controller.signal,
-        instructions: actionInstructions(modules),
+        instructions: [
+          actionInstructions(modules),
+          attached.extracts.length
+            ? "The student attached files that are not in their library (marked as attached). Read them as course material; " +
+              "when one states a deadline the Deadlines list does not have, propose it with add_deadline and say where the file states it."
+            : "",
+        ].filter(Boolean).join("\n"),
       });
       const deadlines = await fetchDeadlines().catch(() => []);
       const { prose, lines } = extractActionLines(turn.content);
@@ -353,8 +381,9 @@ export default function ChatDock() {
       if (controller.signal.aborted) {
         setTurns(base);
         persist(id, base);
-        setInput(question);
-        writeDraft(question);
+        setInput(text);
+        writeDraft(text);
+        setPending(files);
       } else {
         const aiError = err as AiError;
         setError({ message: aiError.message || "Something went wrong.", hint: aiError.hint });
@@ -363,6 +392,35 @@ export default function ChatDock() {
       abortRef.current = null;
       setSending(false);
     }
+  };
+
+  /** Reads picked files on this computer; with `keepCopy`, also saves each into the module's My Files. */
+  const attach = async (list: FileList | null) => {
+    const picked = [...(list ?? [])];
+    if (!picked.length) return;
+    setAttaching(true);
+    setAttachError("");
+    const read: Attachment[] = [];
+    const problems: string[] = [];
+    for (const file of picked.slice(0, MAX_ATTACHMENTS)) {
+      try {
+        const attachment = await readAttachment(file);
+        if (keepCopy && scopeKey) {
+          try {
+            attachment.savedPath = (await uploadOwnFile(scopeKey, file)).path;
+          } catch (err) {
+            problems.push(`${file.name} was read but not saved to your module: ${(err as Error).message}`);
+          }
+        }
+        read.push(attachment);
+      } catch (err) {
+        problems.push((err as Error).message);
+      }
+    }
+    if (read.some((a) => a.savedPath)) window.dispatchEvent(new CustomEvent(LIBRARY_CHANGED_EVENT));
+    setPending((current) => mergeAttachments(current, read));
+    setAttachError(problems.join(" "));
+    setAttaching(false);
   };
 
   /** Runs one proposed change against the library, after the student clicked Apply. */
@@ -457,7 +515,7 @@ export default function ChatDock() {
         </button>
       </div>
       <div className="chat-toggle-note">
-        No internet. Answers come only from this module&rsquo;s files and your saved deadlines
+        No internet. Answers come only from this module&rsquo;s files, files you attach and your saved deadlines
         {scope ? ` (${scope.linkedFiles.length} file${scope.linkedFiles.length === 1 ? "" : "s"} read)` : ""}. You can also ask it to add, date or
         tick off deadlines; nothing changes until you click Apply.
       </div>
@@ -522,10 +580,22 @@ export default function ChatDock() {
           {turns.map((turn, i) => (
             <div key={i} className={`chat-msg ${turn.role}`}>
               {turn.content}
+              {turn.attachments && turn.attachments.length > 0 && (
+                <div className="chat-attached">
+                  {turn.attachments.map((a) => (
+                    <span key={a.name} className="chat-file" title={a.savedPath ? `Saved to ${a.savedPath}` : "Not saved to your library"}>
+                      {a.name}
+                      {a.truncated ? " (first part)" : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
               {turn.role === "assistant" && turn.citations && turn.citations.length > 0 && (
                 <div className="chat-citations">
-                  {turn.citations.map((citation, j) => {
+                  {turn.citations.map((citation, j, all) => {
                     if (citation.kind !== "file") return null;
+                    // One chip per file and verdict, however many quotes came from it.
+                    if (all.findIndex((c) => c.kind === "file" && c.sourceFile === citation.sourceFile && c.verdict === citation.verdict) !== j) return null;
                     const label = citation.verdict === "verified" ? `From ${citation.sourceFile}` : `Check ${citation.sourceFile}`;
                     const className = `chat-citation ${citation.verdict === "verified" ? "verified" : "unverified"}`;
                     const url = scope?.fileUrls[citation.sourceFile];
@@ -604,7 +674,42 @@ export default function ChatDock() {
           </div>
         ) : (
           <>
+            {(pending.length > 0 || attachError || attaching) && (
+              <div className="chat-pending">
+                {pending.map((a) => (
+                  <span key={a.name} className="chat-file">
+                    {a.name}
+                    {a.savedPath ? " · saved" : ""}
+                    <button aria-label={`Remove ${a.name}`} onClick={() => setPending((p) => p.filter((x) => x.name !== a.name))}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {attaching && <span className="chat-file">Reading…</span>}
+                {attachError && <small className="chat-attach-error">{attachError}</small>}
+              </div>
+            )}
             <div className="chat-input-row">
+              <button
+                className="btn btn-ghost chat-attach"
+                onClick={() => fileRef.current?.click()}
+                disabled={!canSend || attaching || pending.length >= MAX_ATTACHMENTS}
+                aria-label="Attach a file that is not in your library"
+                title="Attach a brief, rubric or any file that is not in your library"
+              >
+                +
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept={ATTACH_ACCEPT}
+                multiple
+                hidden
+                onChange={(event) => {
+                  void attach(event.target.files);
+                  event.target.value = "";
+                }}
+              />
               <textarea
                 ref={inputRef}
                 rows={2}
@@ -628,11 +733,17 @@ export default function ChatDock() {
                   Stop
                 </button>
               ) : (
-                <button className="btn btn-primary" onClick={() => void send()} disabled={!canSend || !input.trim()}>
+                <button className="btn btn-primary" onClick={() => void send()} disabled={!canSend || (!input.trim() && !pending.length)}>
                   Send
                 </button>
               )}
             </div>
+            {scopeKey && (
+              <label className="chat-keep">
+                <input type="checkbox" checked={keepCopy} onChange={(event) => setKeepCopy(event.target.checked)} />
+                Also save attached files to {scope?.contextLabel ?? "this module"} (My Files)
+              </label>
+            )}
             {turns.length > 0 && (
               <div className="chat-meta-row">
                 <span>

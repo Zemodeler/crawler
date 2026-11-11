@@ -17,6 +17,7 @@
  */
 
 import type { ChatCitation, ChatTurn } from "./ai/chat.ts";
+import { parseAttachment, type Attachment } from "./attachments.ts";
 import { parseTurn } from "./chat-store.ts";
 
 export const ESSAYS_PATH = ".study-hub/essays.json";
@@ -59,6 +60,8 @@ export type Essay = {
   review: { summary: string; marks: EssayMark[]; dropped: number; at: string; citations: ChatCitation[] } | null;
   readings: { intro: string; items: Reading[]; at: string; usedWebSearch: boolean } | null;
   chat: EssayTurn[];
+  /** Files the student added for this essay that are not in the library: the brief, a rubric, a reading. */
+  attachments: Attachment[];
   created: string;
   updated: string;
 };
@@ -67,7 +70,10 @@ export type EssayFile = { version: 1; essays: Essay[] };
 
 export const emptyEssayFile = (): EssayFile => ({ version: 1, essays: [] });
 
-export function newEssay(input: Pick<Essay, "title" | "question" | "brief" | "wordLimit" | "due" | "hours"> & { deadlineId?: string }, now = new Date()): Essay {
+export function newEssay(
+  input: Pick<Essay, "title" | "question" | "brief" | "wordLimit" | "due" | "hours"> & { deadlineId?: string; attachments?: Attachment[] },
+  now = new Date(),
+): Essay {
   const at = now.toISOString();
   return {
     id: `essay-${now.getTime().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -83,6 +89,7 @@ export function newEssay(input: Pick<Essay, "title" | "question" | "brief" | "wo
     review: null,
     readings: null,
     chat: [],
+    attachments: input.attachments ?? [],
     created: at,
     updated: at,
   };
@@ -157,6 +164,7 @@ function parseEssay(value: unknown): Essay | null {
         }
       : null,
     chat: Array.isArray(e.chat) ? e.chat.map(parseTurn).filter((t): t is EssayTurn => t !== null) : [],
+    attachments: Array.isArray(e.attachments) ? e.attachments.map(parseAttachment).filter((a): a is Attachment => a !== null) : [],
     created: str(e.created),
     updated: str(e.updated),
   };
@@ -185,6 +193,9 @@ export function essayBlock(essay: Essay): string {
     essay.due ? `Due: ${longDay(essay.due)}` : "",
     essay.hours ? `Time the student will give it: ${essay.hours} hours in total` : "",
     essay.brief ? `Brief and marking criteria, as the student pasted them:\n${essay.brief}` : "",
+    essay.attachments.length
+      ? `Files the student attached for this essay (each is in SOURCE MATERIAL; a brief or rubric among them counts as the brief): ${essay.attachments.map((a) => a.name).join(", ")}`
+      : "",
     `Current draft (${wordCount(essay.text)} words):`,
     essay.text.trim() || "(nothing written yet)",
   ].filter(Boolean).join("\n");

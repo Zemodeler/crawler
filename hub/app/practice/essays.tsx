@@ -39,6 +39,8 @@ import {
 } from "../../lib/essay.ts";
 import { isExamLike } from "../../lib/exam-focus.ts";
 import { fetchDeadlines, fetchTree, loadModule, moduleCode, type Deadline } from "../../lib/library.ts";
+import { ATTACH_ACCEPT, MAX_ATTACHMENTS, attachmentContext, mergeAttachments, readAttachment, type Attachment } from "../../lib/attachments.ts";
+import { uploadOwnFile } from "../../lib/own-files.ts";
 import { extractFile } from "../../lib/source-extract.ts";
 import { buildModuleScope, type ChatScope } from "../chat/chat-context.ts";
 import { Markdown } from "../markdown.tsx";
@@ -112,6 +114,13 @@ export default function Essays({ course }: { course: string }) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileRef = useRef<EssayFile | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  /** Attachments for the essay being created, before it exists. */
+  const [newFiles, setNewFiles] = useState<Attachment[]>([]);
+  const [attaching, setAttaching] = useState(false);
+  const [keepCopy, setKeepCopy] = useState(false);
+  const attachRef = useRef<HTMLInputElement>(null);
+  /** Which essay the shared file picker adds to; null is the one being created. */
+  const attachTarget = useRef<Essay | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -219,7 +228,8 @@ export default function Essays({ course }: { course: string }) {
     try {
       const { client, scope: base } = await ensureAi();
       const essayText = essayBlock(target);
-      const extracts = new Map(base.extracts);
+      const attached = attachmentContext(target.attachments);
+      const extracts = new Map([...base.extracts, ...attached.extracts]);
       extracts.set("Essay", { path: "Essay", text: essayText, chunks: [] });
       const webSearch = kind === "readings" && client.chatCapabilities().webSearch;
       const today = londonDay(new Date().toISOString());
@@ -234,12 +244,14 @@ export default function Essays({ course }: { course: string }) {
         client,
         scopeLabel: `their essay "${target.title}" for the module "${moduleName}"`,
         contextLabel: moduleName,
-        contextBlock: [base.contextBlock, "### FILE: Essay (the student's essay, brief and current draft)", fenceUntrusted("Essay", essayText)].join("\n\n"),
+        contextBlock: [base.contextBlock, attached.block, "### FILE: Essay (the student's essay, brief and current draft)", fenceUntrusted("Essay", essayText)]
+          .filter(Boolean)
+          .join("\n\n"),
         history: kind === "chat" ? target.chat.slice(-8) : [],
         question: asked,
         webSearch,
         extracts,
-        allText: [base.allText, essayText].join("\n\n"),
+        allText: [base.allText, attached.text, essayText].filter(Boolean).join("\n\n"),
         signal: controller.signal,
         instructions,
         style: kind === "chat" ? "conversation" : "document",
@@ -295,6 +307,76 @@ export default function Essays({ course }: { course: string }) {
     }
   }
 
+  /**
+   * Reads files the student picked (a brief, a rubric, a reading not in the
+   * library) for one essay, or for the essay being created when `target` is
+   * null. With `keepCopy`, each is also saved to the module's My Files.
+   */
+  async function attachFiles(list: FileList | null, target: Essay | null) {
+    const picked = [...(list ?? [])];
+    if (!picked.length) return;
+    setAttaching(true);
+    setNotice("");
+    const read: Attachment[] = [];
+    const problems: string[] = [];
+    for (const file of picked.slice(0, MAX_ATTACHMENTS)) {
+      try {
+        const attachment = await readAttachment(file);
+        if (keepCopy && hosted) {
+          try {
+            attachment.savedPath = (await uploadOwnFile(course, file)).path;
+          } catch (err) {
+            problems.push(`${file.name} was read but not saved to your module: ${(err as Error).message}`);
+          }
+        }
+        read.push(attachment);
+      } catch (err) {
+        problems.push((err as Error).message);
+      }
+    }
+    if (target) update(target.id, (e) => ({ attachments: mergeAttachments(e.attachments, read) }));
+    else setNewFiles((current) => mergeAttachments(current, read));
+    setNotice(problems.join(" ") || (read.length ? `Added ${read.map((a) => a.name).join(", ")}. Study Hub reads ${read.length === 1 ? "it" : "them"} with every answer.` : ""));
+    setAttaching(false);
+  }
+
+  /** The attached files with a remove button, and the button that adds more. */
+  function removeAttachment(target: Essay | null, name: string) {
+    if (target) update(target.id, (e) => ({ attachments: e.attachments.filter((a) => a.name !== name) }));
+    else setNewFiles((f) => f.filter((a) => a.name !== name));
+  }
+
+  function attachmentList(files: Attachment[], target: Essay | null) {
+    return (
+      <div className="es-files">
+        {files.map((a) => (
+          <span key={a.name} className="chat-file" title={a.savedPath ? `Saved to ${a.savedPath}` : "Kept with this essay only"}>
+            {a.name}
+            {a.truncated ? " (first part)" : ""}
+            <button type="button" aria-label={`Remove ${a.name}`} onClick={() => removeAttachment(target, a.name)}>×</button>
+          </span>
+        ))}
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={attaching || files.length >= MAX_ATTACHMENTS}
+          onClick={() => {
+            attachTarget.current = target;
+            attachRef.current?.click();
+          }}
+        >
+          {attaching ? "Reading…" : "Attach a file"}
+        </button>
+        {hosted && (
+          <label className="chat-keep">
+            <input type="checkbox" checked={keepCopy} onChange={(e) => setKeepCopy(e.target.checked)} />
+            Also save to this module (My Files)
+          </label>
+        )}
+      </div>
+    );
+  }
+
   function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -311,8 +393,10 @@ export default function Essays({ course }: { course: string }) {
       due: due && /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : null,
       hours: Number.isFinite(hours) && hours > 0 ? hours : null,
       ...(linked ? { deadlineId: linked.id } : {}),
+      attachments: newFiles,
     });
     replaceFile({ version: 1, essays: [made, ...(fileRef.current?.essays || [])] });
+    setNewFiles([]);
     setCreating(false);
     setSelected(made.id);
     setTask("plan");
@@ -325,6 +409,21 @@ export default function Essays({ course }: { course: string }) {
   }
 
   const segments = essay?.review ? markedSegments(essay.text, essay.review.marks) : [];
+
+  /** One hidden picker for every "Attach a file" button; `attachTarget` says which essay it is for. */
+  const picker = (
+    <input
+      ref={attachRef}
+      type="file"
+      accept={ATTACH_ACCEPT}
+      multiple
+      hidden
+      onChange={(e) => {
+        void attachFiles(e.target.files, attachTarget.current);
+        e.target.value = "";
+      }}
+    />
+  );
 
   if (loadError) return <div className="pv-page"><p role="alert">{loadError}</p></div>;
   if (!file) return <div className="pv-page"><p className="pv-meta">Reading your essays…</p></div>;
@@ -359,6 +458,10 @@ export default function Essays({ course }: { course: string }) {
             <label>Title<input name="title" maxLength={200} placeholder="e.g. Coursework 2: Design patterns report" /></label>
             <label>The question or task<textarea name="question" rows={3} maxLength={4000} placeholder="Paste the essay question" /></label>
             <label>Brief and marking criteria (optional)<textarea name="brief" rows={5} maxLength={20000} placeholder="Paste the brief or rubric: feedback is measured against it" /></label>
+            <div className="es-field">
+              <span>Or attach the brief, rubric or any reading that is not in your library</span>
+              {attachmentList(newFiles, null)}
+            </div>
             <div className="es-form-row">
               <label>Word limit<input name="words" type="number" min="1" step="1" /></label>
               <label>Due date<input name="due" type="date" /></label>
@@ -388,6 +491,8 @@ export default function Essays({ course }: { course: string }) {
           </ul>
         )}
         {saveError && <p role="alert">{saveError}</p>}
+        {notice && <p className="pv-meta" role="status">{notice}</p>}
+        {picker}
       </div>
     );
   }
@@ -400,6 +505,7 @@ export default function Essays({ course }: { course: string }) {
 
   return (
     <div className="es-work">
+      {picker}
       <header className="es-head">
         <button className="pv-link" onClick={() => { abortRef.current?.abort(); setSelected(""); }}>← All essays</button>
         <input
@@ -427,6 +533,10 @@ export default function Essays({ course }: { course: string }) {
           <label>Hours you will give it
             <input type="number" min="1" step="0.5" value={essay.hours ?? ""} onChange={(e) => update(essay.id, { hours: Number(e.target.value) > 0 ? Number(e.target.value) : null })} />
           </label>
+        </div>
+        <div className="es-field">
+          <span>Files for this essay (brief, rubric, readings not in your library)</span>
+          {attachmentList(essay.attachments, essay)}
         </div>
         <button className="text-link es-delete" onClick={() => remove(essay)}>Delete this essay</button>
       </details>
