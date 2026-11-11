@@ -8,6 +8,7 @@ import { readHidden, writeHidden } from "../lib/hidden-modules.ts";
 import { chosenAssistant, watchSync } from "../lib/setup.ts";
 import type { SubjectId } from "../lib/subject-profiles.ts";
 import { formatDue, latestDate, placeDate } from "./calendar/deadline-ui.tsx";
+import { undatedTodos } from "../lib/todos.ts";
 import { LIBRARY_CHANGED_EVENT } from "./shell/AppShell.tsx";
 import { SubjectControl, useModuleSubject } from "./subject-control.tsx";
 
@@ -343,6 +344,7 @@ export default function ModuleOverview({
               return d.module === moduleCode(m) && d.status !== "cancelled" && t !== undefined && t >= now;
             })
             .sort((a, b) => placeDate(a)!.getTime() - placeDate(b)!.getTime())[0];
+          const undated = undatedTodos(deadlines, [moduleCode(m)]).length;
           const [code, ...rest] = m.split(" - ");
           return (
             // The gear is a sibling of the card: a button cannot hold another button.
@@ -366,7 +368,8 @@ export default function ModuleOverview({
                   {stats.reviewed > 0 && ` · ${stats.reviewed} cards reviewed`}
                 </span>
                 <span className="module-card-next">
-                  {next ? <>Next: <b>{next.title}</b>, {formatDue(next, "short")}</> : "No upcoming deadlines"}
+                  {next ? <>Next: <b>{next.title}</b>, {formatDue(next, "short")}</> : undated ? null : "No upcoming deadlines"}
+                  {undated > 0 && <>{next ? " · " : ""}{undated} to do with no date</>}
                 </span>
               </button>
               <ModuleSettings

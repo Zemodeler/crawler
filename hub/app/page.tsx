@@ -9,6 +9,7 @@ import { hasAnyConnection, isHosted } from "../lib/ai/settings.ts";
 import {
   ACTIVE_MODULE_EVENT,
   fetchDeadlines,
+  setDeadlineDone,
   fetchTree,
   getModuleProfile,
   loadModule,
@@ -721,6 +722,7 @@ export default function Home() {
                 deadlines={deadlines}
                 modules={allModules}
                 yearModules={yearModules}
+                onDone={(id) => setDeadlineDone(id, true).then(() => fetchDeadlines()).then(setDeadlines).catch(() => {})}
               />
             )}
             {library && (

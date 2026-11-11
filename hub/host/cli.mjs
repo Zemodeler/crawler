@@ -47,6 +47,9 @@ export const CLI_SETTINGS = {
       "--include-partial-messages",
       "--disallowed-tools",
       "Bash,PowerShell,Read,Write,Edit,Glob,Grep,NotebookEdit,Task",
+      // --print cannot ask for permission, so the web tools must be allowed up front or every search is refused.
+      "--allowed-tools",
+      "WebSearch,WebFetch",
     ],
     modelFlag: "--model",
   },
@@ -528,17 +531,30 @@ function classifyFailure(kind, output, failed) {
   };
 }
 
+/** Claude Code's web tools, and the line a web-enabled run appends when it used one. */
+const WEB_TOOLS = new Set(["WebSearch", "WebFetch", "web_search", "web_fetch"]);
+export const WEB_SEARCHED_MARKER = "[[studyhub:web-searched]]";
+
 /**
  * Reads claude's `--output-format stream-json --include-partial-messages`
  * stdout: one JSON event per line, with lines split across chunks. Text deltas
  * build the running answer; the final `result` event is the real answer.
  */
-function claudeStream(onText) {
+export function claudeStream(onText) {
   let pending = "";
   let text = "";
   let result = null;
   let resultError = null;
   let other = "";
+  let searched = false;
+  // A search counts only once it returned something: a refused or failed call
+  // (no permission in --print mode, a network error) is not a search.
+  const webCalls = new Set();
+  const noteCall = (block) => {
+    if (block?.type === "tool_use" && WEB_TOOLS.has(String(block.name || "")) && block.id) webCalls.add(block.id);
+    // The API's own server-side search returns its result in the same message.
+    if (block?.type === "web_search_tool_result" && Array.isArray(block.content)) searched = true;
+  };
   const line = (raw) => {
     const trimmed = raw.trim();
     if (!trimmed) return;
@@ -553,10 +569,17 @@ function claudeStream(onText) {
     if (event?.type === "stream_event") {
       const inner = event.event;
       if (inner?.type === "message_start" && text && !text.endsWith("\n\n")) text += "\n\n";
+      if (inner?.type === "content_block_start") noteCall(inner.content_block);
       if (inner?.type === "content_block_delta" && inner.delta?.type === "text_delta" && typeof inner.delta.text === "string") {
         text += inner.delta.text;
         onText?.(text);
       }
+    } else if (event?.type === "assistant") {
+      if (Array.isArray(event.message?.content)) event.message.content.forEach(noteCall);
+    } else if (event?.type === "user") {
+      // Tool results come back as the next user turn.
+      for (const block of Array.isArray(event.message?.content) ? event.message.content : [])
+        if (block?.type === "tool_result" && webCalls.has(block.tool_use_id) && !block.is_error) searched = true;
     } else if (event?.type === "result") {
       const said = typeof event.result === "string" ? event.result : "";
       if (event.is_error) {
@@ -584,6 +607,10 @@ function claudeStream(onText) {
     },
     get resultError() {
       return resultError;
+    },
+    /** True once a web tool claude called during the run returned a result. */
+    get searched() {
+      return searched;
     },
     /** stdout that was not a stream event, for error messages and old CLIs. */
     get other() {
@@ -737,7 +764,9 @@ export function startCli(cli, kind, prompt, model, webAccess, { onText, onActivi
           message: `\`${kind}\` finished but returned no text${said ? `: ${said}` : ""}.`,
           detail: redactSecrets(stderr.trim()).slice(0, 900),
         });
-      settle(resolve, text);
+      // The answer is plain text all the way to the page, so a web-enabled chat
+      // run says whether it really searched with a marker line the client strips.
+      settle(resolve, webAccess && stream?.searched ? `${text}\n${WEB_SEARCHED_MARKER}` : text);
     });
 
     child.stdin.on("error", () => {});

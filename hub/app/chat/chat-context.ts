@@ -24,6 +24,10 @@ export type ChatScope = {
    *  citation can never "verify" against material the model was never given. */
   extracts: Map<string, Extract>;
   allText: string;
+  /** File name (as cited) -> where it opens in the library, so a citation can link to the course file. */
+  fileUrls: Record<string, string>;
+  /** The course files part of `contextBlock`, kept apart so the deadlines can be swapped without re-reading files. */
+  filesBlock: string;
 };
 
 const MODULE_TEXT_BUDGET = 130_000;
@@ -40,6 +44,31 @@ function readingOrder(file: LocalFile): number {
   return 3;
 }
 
+function deadlinePart(deadlines: Deadline[], now: Date) {
+  const text = [`Today is ${describeToday(now)}.`, "", deadlinesBlock(deadlines, now, { ids: true })].join("\n");
+  const block = [
+    "### FILE: Deadlines (the student's saved deadline list across all their modules)",
+    fenceUntrusted("Deadlines", text),
+  ].join("\n\n");
+  return { text, block };
+}
+
+/**
+ * The same scope with a fresh deadline list, after the student applied a
+ * change: the course files are not read again.
+ */
+export function withDeadlines(scope: ChatScope, deadlines: Deadline[], now: Date): ChatScope {
+  const { text, block } = deadlinePart(deadlines, now);
+  const extracts = new Map(scope.extracts);
+  extracts.set("Deadlines", { path: "Deadlines", text, chunks: [] });
+  return {
+    ...scope,
+    extracts,
+    contextBlock: [block, scope.filesBlock].filter(Boolean).join("\n\n"),
+    allText: [...extracts.values()].map((e) => e.text).join("\n\n"),
+  };
+}
+
 /**
  * The scope for the always-available assistant: the whole module the student
  * has open, plus their saved deadline list. Deadlines are exposed to the model
@@ -52,13 +81,11 @@ export async function buildModuleScope(
   deadlines: Deadline[],
   now: Date,
 ): Promise<ChatScope> {
-  const deadlineText = [`Today is ${describeToday(now)}.`, "", deadlinesBlock(deadlines, now)].join("\n");
-  const extracts = new Map<string, Extract>([["Deadlines", { path: "Deadlines", text: deadlineText, chunks: [] }]]);
+  const deadline = deadlinePart(deadlines, now);
+  const extracts = new Map<string, Extract>([["Deadlines", { path: "Deadlines", text: deadline.text, chunks: [] }]]);
   const linkedFiles: string[] = [];
-  const blocks: string[] = [
-    "### FILE: Deadlines (the student's saved deadline list across all their modules)",
-    fenceUntrusted("Deadlines", deadlineText),
-  ];
+  const fileUrls: Record<string, string> = {};
+  const blocks: string[] = [];
 
   let left = MODULE_TEXT_BUDGET;
   let binaries = 0;
@@ -83,6 +110,7 @@ export async function buildModuleScope(
     const text = extract.text.length > cap ? extract.text.slice(0, cap) : extract.text;
     extracts.set(file.path, { ...extract, text });
     linkedFiles.push(file.path);
+    if (file.url) fileUrls[file.name] = fileUrls[file.path] = file.url;
     const shown = text.length < extract.text.length ? `${text}\n[...truncated...]` : text;
     blocks.push(`### FILE: ${file.name}`, fenceUntrusted(file.path, shown));
     left -= text.length;
@@ -95,9 +123,11 @@ export async function buildModuleScope(
   return {
     scopeLabel: `their module "${module}" and their saved deadline list`,
     contextLabel: module,
-    contextBlock: blocks.join("\n\n"),
+    contextBlock: [deadline.block, ...blocks].join("\n\n"),
+    filesBlock: blocks.join("\n\n"),
     linkedFiles,
     extracts,
     allText: [...extracts.values()].map((e) => e.text).join("\n\n"),
+    fileUrls,
   };
 }

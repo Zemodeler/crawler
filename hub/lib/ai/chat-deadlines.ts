@@ -38,7 +38,8 @@ const latest = (d: Deadline): number => {
   return d.window ? new Date(d.window.to.iso).getTime() + DAY_MS - 1 : Infinity;
 };
 
-export function deadlinesBlock(deadlines: Deadline[], now: Date): string {
+/** `ids` adds each deadline's id, so the assistant can name one in an action. */
+export function deadlinesBlock(deadlines: Deadline[], now: Date, options: { ids?: boolean } = {}): string {
   const live = deadlines.filter((d) => d.status !== "cancelled").sort((a, b) => placed(a) - placed(b) || a.title.localeCompare(b.title));
   if (!live.length) return "No deadlines are saved yet.";
   const lines = live.slice(0, MAX_LINES).map((d) => {
@@ -50,6 +51,7 @@ export function deadlinesBlock(deadlines: Deadline[], now: Date): string {
     if (["needs-check", "conflict", "tbc"].includes(d.status) && !(d.due === null && d.window))
       parts.push(`date uncertain (${d.checkReason || d.status})`);
     if (d.userNote) parts.push(`student's note: ${d.userNote}`);
+    if (options.ids) parts.push(`id: ${d.id}`);
     return `- ${parts.join(" | ")}`;
   });
   if (live.length > MAX_LINES) lines.push(`(${live.length - MAX_LINES} later deadlines not shown)`);

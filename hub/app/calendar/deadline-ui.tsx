@@ -13,6 +13,7 @@ import {
   type DeadlineSource,
   type DeadlineStatus,
 } from "../../lib/library.ts";
+import { undatedTodos } from "../../lib/todos.ts";
 
 const TZ = "Europe/London";
 
@@ -106,15 +107,21 @@ export function teachingWeek(deadlines: Deadline[], at: Date | number): Teaching
 /** "Teaching week 4 · Semester A". */
 export const weekLabel = (week: TeachingWeek) => `Teaching week ${week.week} · ${week.term.replace(/^\S+\s+/, "")}`;
 
+/** Undated to-dos shown before the rest fold away. */
+const UNDATED_SHOWN = 5;
+
 /** Overview tile: what is due in the next week across this year's modules. */
 export function NextSevenDays({
   deadlines,
   modules,
   yearModules,
+  onDone,
 }: {
   deadlines: Deadline[];
   modules: string[];
   yearModules: string[];
+  /** Ticks an undated to-do off; absent, the list is read-only. */
+  onDone?: (id: string) => Promise<void>;
 }) {
   const codes = new Set(yearModules.map(moduleCode));
   // Read the clock after mount, never during render.
@@ -130,8 +137,36 @@ export function NextSevenDays({
       return start !== undefined && end !== undefined && end >= now && start <= week;
     })
     .sort((a, b) => placeDate(a)!.getTime() - placeDate(b)!.getTime());
-  const unsure = deadlines.filter((d) => codes.has(d.module) && needsAttention(d)).length;
+  // Undated work (formative labs, weekly exercises) has no day to fall in, but is still to do.
+  const undated = undatedTodos(deadlines, codes);
+  const [ticking, setTicking] = useState("");
+  const unsure = deadlines.filter((d) => codes.has(d.module) && needsAttention(d) && !undated.includes(d)).length;
   const thisWeek = now ? teachingWeek(deadlines, now) : null;
+  const todoRow = (d: Deadline) => (
+    <li key={d.id} className="todo-row">
+      <a href={`/calendar#${encodeURIComponent(d.id)}`} className="deadline-row">
+        <span className="deadline-when">{d.formative ? "Formative" : "No date"}</span>
+        <ModuleDot modules={modules} code={d.module} />
+        <span className="deadline-title">
+          {d.title} <small>{d.module}</small>
+        </span>
+      </a>
+      {onDone && (
+        <button
+          type="button"
+          className="btn btn-ghost todo-done"
+          disabled={ticking === d.id}
+          aria-label={`Mark ${d.title} done`}
+          onClick={() => {
+            setTicking(d.id);
+            onDone(d.id).finally(() => setTicking(""));
+          }}
+        >
+          {ticking === d.id ? "Saving..." : "Done"}
+        </button>
+      )}
+    </li>
+  );
 
   return (
     <section className="panel next-week">
@@ -159,6 +194,18 @@ export function NextSevenDays({
         </ul>
       ) : (
         <p className="quiet">Nothing due in the next 7 days.</p>
+      )}
+      {undated.length > 0 && (
+        <div className="todo-undated">
+          <h4>To do, no date</h4>
+          <ul className="deadline-rows">{undated.slice(0, UNDATED_SHOWN).map(todoRow)}</ul>
+          {undated.length > UNDATED_SHOWN && (
+            <details>
+              <summary>{undated.length - UNDATED_SHOWN} more with no date</summary>
+              <ul className="deadline-rows">{undated.slice(UNDATED_SHOWN).map(todoRow)}</ul>
+            </details>
+          )}
+        </div>
       )}
       {unsure > 0 && (
         <p className="quiet">

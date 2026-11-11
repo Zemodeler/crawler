@@ -255,7 +255,7 @@ export function buildFocus(input: FocusInput): FocusItem[] {
 export type PracticeTarget = "practice" | "generate";
 
 /** The sub-views of the Practice section. "dashboard" is its landing page. */
-export const PRACTICE_VIEWS = ["dashboard", "cards", "papers", "tutorials"] as const;
+export const PRACTICE_VIEWS = ["dashboard", "cards", "papers", "tutorials", "essays"] as const;
 export type PracticeView = (typeof PRACTICE_VIEWS)[number];
 
 export type PracticeLinkOptions = {

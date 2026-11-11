@@ -16,6 +16,7 @@ import {
 } from "../../lib/practice-view.ts";
 import { loadTutorials, type TutorialSheet } from "../../lib/tutorial.ts";
 import Dashboard from "./dashboard.tsx";
+import Essays from "./essays.tsx";
 import Practice, { type PapersLaunch } from "./practice.tsx";
 type Confidence = 1 | 2 | 3 | 4 | 5;
 type Card = {
@@ -581,6 +582,7 @@ export default function PracticeHub() {
             ))}
           </nav>
           {view === "dashboard" && <Dashboard key={course} course={course} onOpen={openView} />}
+          {view === "essays" && <Essays key={course} course={course} />}
           {(view === "papers" || view === "tutorials") && (
             <Practice
               // What the address asked for is part of the key, so choosing the same tab again (which

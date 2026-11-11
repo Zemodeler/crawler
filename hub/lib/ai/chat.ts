@@ -49,12 +49,16 @@ export function buildChatSystemPrompt(
   contextLabel: string,
   contextBlock: string,
   webSearchAllowed: boolean,
+  extra: { instructions?: string; style?: ChatStyle } = {},
 ): string {
   return [
     "You are the Universal Study Hub study assistant. A student is asking you about",
     `${scopeLabel}. Answer their question directly and helpfully, in plain sentences —`,
-    "this is a conversation, not a document, so no headings or markdown tables.",
+    extra.style === "document"
+      ? "this answer is a working document the student keeps, so short headings and bullet lists are welcome, but no tables."
+      : "this is a conversation, not a document, so no headings or markdown tables.",
     "",
+    extra.instructions ?? "",
     "GROUNDING, the same discipline this app uses everywhere else:",
     "- Prefer the SOURCE MATERIAL below over anything else you know.",
     "- After your answer, on new lines, cite every source you actually relied on, starting",
@@ -159,7 +163,13 @@ export function windowHistory(turns: ChatTurn[]): ChatMessage[] {
   return kept.map((turn) => ({ role: turn.role, content: turn.content }));
 }
 
+/** "conversation" keeps replies as plain sentences; "document" allows headings and lists. */
+export type ChatStyle = "conversation" | "document";
+
 export type SendChatOptions = {
+  /** Task-specific rules added to the system prompt (actions, essay feedback formats). */
+  instructions?: string;
+  style?: ChatStyle;
   client: AiClient;
   scopeLabel: string;
   contextLabel: string;
@@ -183,7 +193,10 @@ export async function sendChatMessage(options: SendChatOptions): Promise<{ turn:
   // The client is the authority on whether it can actually honour this, not
   // the caller's own toggle state — see each transport's `chatCapabilities()`.
   const webSearch = options.webSearch && options.client.chatCapabilities().webSearch;
-  const system = buildChatSystemPrompt(options.scopeLabel, options.contextLabel, options.contextBlock, webSearch);
+  const system = buildChatSystemPrompt(options.scopeLabel, options.contextLabel, options.contextBlock, webSearch, {
+    instructions: options.instructions,
+    style: options.style,
+  });
 
   const result = await options.client.chat({
     system,

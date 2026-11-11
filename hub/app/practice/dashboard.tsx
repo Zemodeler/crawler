@@ -119,6 +119,7 @@ const ACTION_BUTTON: Record<PracticeView, string> = {
   cards: "Start revising",
   tutorials: "Open the exercises",
   papers: "Make a paper",
+  essays: "Work on an essay",
 };
 
 export default function Dashboard({ course, onOpen }: { course: string; onOpen: OpenView }) {

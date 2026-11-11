@@ -27,6 +27,8 @@ import {
 const GENERATE_TIMEOUT_MS = 200_000;
 const GUARD_HEADER = "x-study-hub-host";
 const BASE = "/api/ai";
+/** Kept in step with WEB_SEARCHED_MARKER in host/cli.mjs (the page cannot import host code). */
+const WEB_SEARCHED_MARKER = "[[studyhub:web-searched]]";
 
 export type CliStatus = {
   present: boolean;
@@ -483,7 +485,10 @@ export function createHostClient(
         chatRequest.signal,
         GENERATE_TIMEOUT_MS,
       );
-      const text = String(response.text || "");
+      const raw = String(response.text || "").trimEnd();
+      // The host appends this line only when the CLI really called a web tool (see host/cli.mjs).
+      const searched = webAccess && raw.endsWith(WEB_SEARCHED_MARKER);
+      const text = searched ? raw.slice(0, -WEB_SEARCHED_MARKER.length).trimEnd() : String(response.text || "");
       chatRequest.onProgress?.({ phase: "streaming", chars: text.length });
       return {
         text,
@@ -491,10 +496,9 @@ export function createHostClient(
         costUsd: null,
         model: target.model,
         transport: "subscription",
-        // The host relays plain text — it cannot report whether the CLI chose
-        // to search, only whether it was allowed to. Claiming "used" here would
-        // be a guess, so this stays false rather than conflating the two.
-        usedWebSearch: false,
+        // True only when the host saw claude call a web tool in this run, never
+        // merely because web access was allowed.
+        usedWebSearch: searched,
       };
     },
 

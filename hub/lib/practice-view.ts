@@ -33,6 +33,7 @@ export const VIEW_LABEL: Record<PracticeView, string> = {
   cards: "Cards",
   papers: "Papers",
   tutorials: "Tutorial sheets",
+  essays: "Essays",
 };
 
 export const VIEW_ORDER: readonly PracticeView[] = PRACTICE_VIEWS;

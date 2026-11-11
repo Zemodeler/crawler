@@ -7,21 +7,54 @@
  * chat-context.ts), through the configured AI connection, normally the Claude
  * or Codex command line on this computer. It never has internet access: web
  * search is not offered and every request asks for it to be off.
+ *
+ * It can also propose changes to the deadline list ("give this lab a date",
+ * "add the formative quiz"); each one is a card the student applies or
+ * dismisses (see chat-actions.ts). Conversations are saved in the module's
+ * .study-hub folder after every turn (see chat-store.ts), because each page is
+ * its own load and the panel would otherwise forget everything on the way.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { MAX_CHAT_TURNS, sendChatMessage, type ChatTurn } from "../../lib/ai/chat.ts";
+import {
+  actionDate,
+  actionInstructions,
+  actionsSummary,
+  checkAction,
+  extractActionLines,
+  type ActionModule,
+  type ChatAction,
+} from "../../lib/ai/chat-actions.ts";
 import { formatUsd } from "../../lib/ai/models.ts";
 import { createConfiguredAiClient } from "../../lib/ai/provider.ts";
 import { hasAnyConnection, isHosted, loadSettings } from "../../lib/ai/settings.ts";
 import type { AiClient, AiError } from "../../lib/ai/types.ts";
-import { ACTIVE_MODULE_EVENT, fetchDeadlines, fetchTree, loadModule, pickModule } from "../../lib/library.ts";
-import { buildModuleScope, type ChatScope } from "./chat-context.ts";
-import { CHAT_ASK_EVENT, CHAT_STATE_EVENT, CHAT_TOGGLE_EVENT } from "../shell/AppShell.tsx";
+import { emptyChatFile, loadChats, newChatId, saveChats, upsertChat, type ChatFile, type SavedTurn } from "../../lib/chat-store.ts";
+import {
+  ACTIVE_MODULE_EVENT,
+  addDeadline,
+  fetchDeadlines,
+  fetchTree,
+  loadModule,
+  moduleCode,
+  pickModule,
+  removeDeadline,
+  resolveDeadline,
+  setDeadlineDone,
+  type LibraryTree,
+} from "../../lib/library.ts";
+import { buildModuleScope, withDeadlines, type ChatScope } from "./chat-context.ts";
+import { CHAT_ASK_EVENT, CHAT_STATE_EVENT, CHAT_TOGGLE_EVENT, LIBRARY_CHANGED_EVENT } from "../shell/AppShell.tsx";
 
 const OPEN_KEY = "studyhub:chat:open";
-const SUGGESTIONS = ["What's due in the next two weeks?", "What topics does this module cover?", "What should I revise first?"];
+const DRAFT_KEY = "studyhub:chat:draft";
+const SUGGESTIONS = [
+  "What's due in the next two weeks?",
+  "What should I revise first?",
+  "Is there anything on the course site that isn't in my deadlines yet?",
+];
 
 function rememberOpen(open: boolean) {
   try {
@@ -30,6 +63,39 @@ function rememberOpen(open: boolean) {
     /* only a convenience across page loads */
   }
 }
+function readDraft(): string {
+  try {
+    return sessionStorage.getItem(DRAFT_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+function writeDraft(text: string) {
+  try {
+    if (text) sessionStorage.setItem(DRAFT_KEY, text);
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* the draft just does not follow to the next page */
+  }
+}
+
+/** Each module code once, in the newest academic year that has it. */
+function actionModules(tree: LibraryTree): ActionModule[] {
+  const seen = new Map<string, ActionModule>();
+  for (const y of [...tree.years].sort((a, b) => b.year.localeCompare(a.year)))
+    for (const folder of y.modules) {
+      const code = moduleCode(folder);
+      if (!seen.has(code)) seen.set(code, { code, year: y.year });
+    }
+  return [...seen.values()];
+}
+
+/** What a turn reads like to the model on later turns: its answer plus what became of its proposals. */
+const forHistory = (turns: SavedTurn[]): ChatTurn[] =>
+  turns.map((t) => {
+    const summary = actionsSummary(t.actions);
+    return { role: t.role, content: summary ? `${t.content}\n\n${summary}` : t.content };
+  });
 
 export default function ChatDock() {
   const [available, setAvailable] = useState(false);
@@ -42,15 +108,28 @@ export default function ChatDock() {
   /** The module `scope` was built for, as `<year>/<module>`. */
   const [scopeKey, setScopeKey] = useState("");
   const [switchedTo, setSwitchedTo] = useState("");
-  const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [modules, setModules] = useState<ActionModule[]>([]);
+  const [turns, setTurns] = useState<SavedTurn[]>([]);
+  const [chatId, setChatId] = useState(newChatId);
+  const [saved, setSaved] = useState<ChatFile>(emptyChatFile);
+  const [saveError, setSaveError] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [applying, setApplying] = useState("");
   const [error, setError] = useState<{ message: string; hint?: string } | null>(null);
   const [spent, setSpent] = useState({ tokens: 0, costUsd: 0, messages: 0 });
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
+  // The latest values for async work that outlives a render (a reply arriving, a save finishing).
+  const savedRef = useRef(saved);
+  const keyRef = useRef(scopeKey);
+  useEffect(() => {
+    savedRef.current = saved;
+    keyRef.current = scopeKey;
+  }, [saved, scopeKey]);
 
   // Hosted only: the library, the deadlines and the command line all live in
   // the desktop app. Not on first-run setup, where nothing is synced yet.
@@ -62,24 +141,54 @@ export default function ChatDock() {
     } catch {
       /* closed by default */
     }
+    const draft = readDraft();
     queueMicrotask(() => {
       setAvailable(true);
       setOpen(remembered);
+      if (draft) setInput(draft);
     });
   }, []);
 
-  const loadScope = useCallback(async () => {
+  /** Writes one conversation into the module's saved file, as the open one. */
+  const persist = useCallback((id: string, next: SavedTurn[]) => {
+    const key = keyRef.current;
+    if (!key) return;
+    const file = upsertChat(savedRef.current, id, next);
+    savedRef.current = file;
+    setSaved(file);
+    saveChats(key, file).then(
+      () => setSaveError(""),
+      (err: Error) => setSaveError(err.message || "Could not save this conversation."),
+    );
+  }, []);
+
+  /** Reads the open module; `fresh` starts a new conversation instead of reopening the saved one. */
+  const loadScope = useCallback(async (fresh = false) => {
     setScopeState("loading");
     try {
       const [tree, deadlines] = await Promise.all([fetchTree(), fetchDeadlines()]);
+      setModules(actionModules(tree));
       const picked = pickModule(tree);
       if (!picked) {
         setScope(await buildModuleScope("no module yet", [], deadlines, new Date()));
         setScopeKey("");
+        keyRef.current = "";
+        setSaved(emptyChatFile());
       } else {
-        const files = await loadModule(tree, picked.year, picked.module);
+        const key = `${picked.year}/${picked.module}`;
+        const [files, chats] = await Promise.all([
+          loadModule(tree, picked.year, picked.module),
+          loadChats(key).catch(() => emptyChatFile()),
+        ]);
         setScope(await buildModuleScope(picked.module, files, deadlines, new Date()));
-        setScopeKey(`${picked.year}/${picked.module}`);
+        setScopeKey(key);
+        keyRef.current = key;
+        const file = fresh ? { ...chats, current: null } : chats;
+        savedRef.current = file;
+        setSaved(file);
+        const current = file.current ? file.chats.find((c) => c.id === file.current) : undefined;
+        setTurns(current ? current.turns : []);
+        setChatId(current ? current.id : newChatId());
       }
       setSwitchedTo("");
       setScopeState("ready");
@@ -147,6 +256,7 @@ export default function ChatDock() {
       setOpen(true);
       rememberOpen(true);
       setInput(text);
+      writeDraft(text);
       requestAnimationFrame(() => {
         const box = inputRef.current;
         if (!box) return;
@@ -180,17 +290,32 @@ export default function ChatDock() {
     abortRef.current?.abort();
     setTurns([]);
     setError(null);
+    setShowHistory(false);
     setSpent({ tokens: 0, costUsd: 0, messages: 0 });
-    void loadScope();
+    void loadScope(true);
   };
 
-  const send = async (text = input) => {
-    const question = text.trim();
-    if (!question || !client || !scope || sending || turns.length >= MAX_CHAT_TURNS) return;
-    setInput("");
+  const reopen = (id: string) => {
+    const chat = saved.chats.find((c) => c.id === id);
+    if (!chat || sending) return;
+    setChatId(chat.id);
+    setTurns(chat.turns);
     setError(null);
-    const historySoFar: ChatTurn[] = [...turns, { role: "user", content: question }];
+    setShowHistory(false);
+    persist(chat.id, chat.turns);
+  };
+
+  const send = async (text = input, base: SavedTurn[] = turns) => {
+    const question = text.trim();
+    if (!question || !client || !scope || sending || base.length >= MAX_CHAT_TURNS) return;
+    setInput("");
+    writeDraft("");
+    setError(null);
+    const id = chatId;
+    const historySoFar: SavedTurn[] = [...base, { role: "user", content: question }];
     setTurns(historySoFar);
+    // Saved before the reply, so a question asked just before changing page is not lost.
+    persist(id, historySoFar);
     setSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -200,14 +325,25 @@ export default function ChatDock() {
         scopeLabel: scope.scopeLabel,
         contextLabel: scope.contextLabel,
         contextBlock: scope.contextBlock,
-        history: historySoFar,
+        history: forHistory(historySoFar),
         question,
         webSearch: false,
         extracts: scope.extracts,
         allText: scope.allText,
         signal: controller.signal,
+        instructions: actionInstructions(modules),
       });
-      setTurns((prev) => [...prev, turn]);
+      const deadlines = await fetchDeadlines().catch(() => []);
+      const { prose, lines } = extractActionLines(turn.content);
+      const actions = lines.map((line) => checkAction(line, deadlines, modules));
+      const answer: SavedTurn = {
+        ...turn,
+        content: prose || (actions.length ? "Here is what I can change for you:" : turn.content),
+        ...(actions.length ? { actions, ungrounded: false } : {}),
+      };
+      const next = [...historySoFar, answer];
+      setTurns(next);
+      persist(id, next);
       setSpent((prev) => ({
         tokens: prev.tokens + (result.usage.inputTokens || 0) + (result.usage.outputTokens || 0),
         costUsd: prev.costUsd + (result.costUsd || 0),
@@ -215,8 +351,10 @@ export default function ChatDock() {
       }));
     } catch (err) {
       if (controller.signal.aborted) {
-        setTurns((prev) => prev.slice(0, -1));
+        setTurns(base);
+        persist(id, base);
         setInput(question);
+        writeDraft(question);
       } else {
         const aiError = err as AiError;
         setError({ message: aiError.message || "Something went wrong.", hint: aiError.hint });
@@ -224,6 +362,51 @@ export default function ChatDock() {
     } finally {
       abortRef.current = null;
       setSending(false);
+    }
+  };
+
+  /** Runs one proposed change against the library, after the student clicked Apply. */
+  async function runAction(action: ChatAction) {
+    if (action.type === "add_deadline") {
+      const place = modules.find((m) => m.code === action.module);
+      if (!place) throw new Error(`${action.module} is not one of your modules.`);
+      await addDeadline({
+        module: place.code,
+        year: place.year,
+        title: action.title,
+        kind: action.kind,
+        date: actionDate(action),
+        ...(action.weight !== undefined ? { weight: action.weight } : {}),
+        ...(action.formative !== undefined ? { formative: action.formative } : {}),
+        ...(action.note ? { note: action.note } : {}),
+      });
+    } else if (action.type === "set_date") await resolveDeadline(action.id, { date: actionDate(action) });
+    else if (action.type === "mark_done") await setDeadlineDone(action.id, action.done);
+    else await removeDeadline(action.id);
+  }
+
+  const settle = async (turnIndex: number, actionIndex: number, apply: boolean) => {
+    const proposal = turns[turnIndex]?.actions?.[actionIndex];
+    if (!proposal || proposal.state !== "proposed" || applying) return;
+    const update = (patch: Partial<typeof proposal>) => {
+      const next = turns.map((t, i) =>
+        i !== turnIndex ? t : { ...t, actions: t.actions!.map((a, j) => (j === actionIndex ? { ...a, ...patch } : a)) },
+      );
+      setTurns(next);
+      persist(chatId, next);
+    };
+    if (!apply || !proposal.action) return update({ state: "dismissed" });
+    setApplying(`${turnIndex}:${actionIndex}`);
+    try {
+      await runAction(proposal.action);
+      update({ state: "applied" });
+      const deadlines = await fetchDeadlines();
+      setScope((current) => (current ? withDeadlines(current, deadlines, new Date()) : current));
+      window.dispatchEvent(new CustomEvent(LIBRARY_CHANGED_EVENT));
+    } catch (err) {
+      update({ state: "failed", error: (err as Error).message || "Study Hub could not make that change." });
+    } finally {
+      setApplying("");
     }
   };
 
@@ -244,6 +427,11 @@ export default function ChatDock() {
   const subscription = loadSettings().transport === "subscription";
   const atCap = turns.length >= MAX_CHAT_TURNS;
   const canSend = aiState === "ready" && scopeState === "ready" && !sending;
+  // A question saved without its reply: the page changed or the app closed while it was being answered.
+  const unanswered = !sending && turns.length > 0 && turns[turns.length - 1].role === "user";
+  const others = saved.chats.filter((c) => c.id !== chatId || turns.length === 0);
+  const fmtWhen = (iso: string) =>
+    new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 
   return (
     <aside className="chat-panel" aria-labelledby="chat-title">
@@ -254,13 +442,24 @@ export default function ChatDock() {
             {scopeState === "ready" && scope ? scope.contextLabel : scopeState === "error" ? "Could not read your library" : "Reading your module…"}
           </small>
         </div>
+        {scopeKey && (
+          <button
+            className="chat-history-toggle"
+            onClick={() => setShowHistory((v) => !v)}
+            aria-expanded={showHistory}
+            title="Saved conversations for this module"
+          >
+            History
+          </button>
+        )}
         <button onClick={() => toggle(false)} aria-label="Close the study assistant">
           ×
         </button>
       </div>
       <div className="chat-toggle-note">
         No internet. Answers come only from this module&rsquo;s files and your saved deadlines
-        {scope ? ` (${scope.linkedFiles.length} file${scope.linkedFiles.length === 1 ? "" : "s"} read)` : ""}.
+        {scope ? ` (${scope.linkedFiles.length} file${scope.linkedFiles.length === 1 ? "" : "s"} read)` : ""}. You can also ask it to add, date or
+        tick off deadlines; nothing changes until you click Apply.
       </div>
       {switchedTo && (
         <div className="chat-estimate callout">
@@ -271,65 +470,124 @@ export default function ChatDock() {
         </div>
       )}
 
-      <div className="chat-messages" ref={messagesRef}>
-        {aiState === "none" && (
-          <p className="chat-empty">
-            No AI connection is set up. <a href="/connect">Set one up</a> to use this.
-          </p>
-        )}
-        {aiState === "error" && <p className="chat-empty">{clientError}</p>}
-        {scopeState === "error" && (
-          <p className="chat-empty">
-            Could not read your module.{" "}
-            <button className="text-link" onClick={() => void loadScope()}>
-              Try again
-            </button>
-          </p>
-        )}
-        {(aiState === "checking" || (aiState === "ready" && scopeState === "loading")) && <p className="chat-empty">Getting ready…</p>}
-        {canSend && turns.length === 0 && (
-          <div className="chat-empty">
-            <p>Ask about {scope?.contextLabel} or your deadlines.</p>
-            <div className="chat-suggestions">
-              {SUGGESTIONS.map((s) => (
-                <button key={s} onClick={() => void send(s)}>
-                  {s}
+      {showHistory ? (
+        <div className="chat-messages chat-history">
+          <p className="chat-history-note">Conversations are saved in this module&rsquo;s folder and reopen when you come back.</p>
+          {others.length === 0 && <p className="chat-empty">No other saved conversations for this module yet.</p>}
+          <ul>
+            {others.map((c) => (
+              <li key={c.id}>
+                <button onClick={() => reopen(c.id)} disabled={sending}>
+                  <span>{c.title}</span>
+                  <small>
+                    {fmtWhen(c.updated)} · {c.turns.length} message{c.turns.length === 1 ? "" : "s"}
+                  </small>
                 </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {turns.map((turn, i) => (
-          <div key={i} className={`chat-msg ${turn.role}`}>
-            {turn.content}
-            {turn.role === "assistant" && turn.citations && turn.citations.length > 0 && (
-              <div className="chat-citations">
-                {turn.citations.map((citation, j) =>
-                  citation.kind === "file" ? (
-                    <span
-                      key={j}
-                      className={`chat-citation ${citation.verdict === "verified" ? "verified" : "unverified"}`}
-                      title={citation.evidence}
-                    >
-                      {citation.verdict === "verified" ? `From ${citation.sourceFile}` : `Check ${citation.sourceFile}`}
-                    </span>
-                  ) : null,
-                )}
+              </li>
+            ))}
+          </ul>
+          <button className="btn btn-ghost" onClick={() => setShowHistory(false)}>
+            Back to the conversation
+          </button>
+        </div>
+      ) : (
+        <div className="chat-messages" ref={messagesRef}>
+          {aiState === "none" && (
+            <p className="chat-empty">
+              No AI connection is set up. <a href="/connect">Set one up</a> to use this.
+            </p>
+          )}
+          {aiState === "error" && <p className="chat-empty">{clientError}</p>}
+          {scopeState === "error" && (
+            <p className="chat-empty">
+              Could not read your module.{" "}
+              <button className="text-link" onClick={() => void loadScope()}>
+                Try again
+              </button>
+            </p>
+          )}
+          {(aiState === "checking" || (aiState === "ready" && scopeState === "loading")) && <p className="chat-empty">Getting ready…</p>}
+          {canSend && turns.length === 0 && (
+            <div className="chat-empty">
+              <p>Ask about {scope?.contextLabel} or your deadlines, or tell it to change one.</p>
+              <div className="chat-suggestions">
+                {SUGGESTIONS.map((s) => (
+                  <button key={s} onClick={() => void send(s)}>
+                    {s}
+                  </button>
+                ))}
               </div>
-            )}
-            {turn.role === "assistant" && turn.ungrounded && (
-              <div className="chat-ungrounded">Not tied to a quote from your files: check before relying on it.</div>
-            )}
-          </div>
-        ))}
-        {sending && <div className="chat-msg assistant chat-thinking">Thinking…</div>}
-      </div>
+            </div>
+          )}
+          {turns.map((turn, i) => (
+            <div key={i} className={`chat-msg ${turn.role}`}>
+              {turn.content}
+              {turn.role === "assistant" && turn.citations && turn.citations.length > 0 && (
+                <div className="chat-citations">
+                  {turn.citations.map((citation, j) => {
+                    if (citation.kind !== "file") return null;
+                    const label = citation.verdict === "verified" ? `From ${citation.sourceFile}` : `Check ${citation.sourceFile}`;
+                    const className = `chat-citation ${citation.verdict === "verified" ? "verified" : "unverified"}`;
+                    const url = scope?.fileUrls[citation.sourceFile];
+                    return url ? (
+                      <a key={j} className={className} title={citation.evidence} href={url} target="_blank" rel="noopener noreferrer">
+                        {label}
+                      </a>
+                    ) : (
+                      <span key={j} className={className} title={citation.evidence}>
+                        {label}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              {turn.actions && turn.actions.length > 0 && (
+                <ul className="chat-actions">
+                  {turn.actions.map((proposal, j) => (
+                    <li key={j} className={`chat-action chat-action-${proposal.state}`}>
+                      <span className="chat-action-label">{proposal.label}</span>
+                      {proposal.error && <small>{proposal.error}</small>}
+                      {proposal.state === "proposed" ? (
+                        <span className="chat-action-buttons">
+                          <button className="btn btn-primary" disabled={Boolean(applying)} onClick={() => void settle(i, j, true)}>
+                            {applying === `${i}:${j}` ? "Applying…" : "Apply"}
+                          </button>
+                          <button className="btn btn-ghost" disabled={Boolean(applying)} onClick={() => void settle(i, j, false)}>
+                            Dismiss
+                          </button>
+                        </span>
+                      ) : (
+                        <small className="chat-action-state">
+                          {{ applied: "Applied", dismissed: "Dismissed", failed: "Could not apply", refused: "Not possible", proposed: "" }[proposal.state]}
+                        </small>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {turn.role === "assistant" && turn.ungrounded && (
+                <div className="chat-ungrounded">Not tied to a quote from your files: check before relying on it.</div>
+              )}
+            </div>
+          ))}
+          {unanswered && canSend && (
+            <div className="chat-estimate callout">
+              No reply arrived for your last question (the page changed or the app closed).{" "}
+              <button className="text-link" onClick={() => void send(turns[turns.length - 1].content, turns.slice(0, -1))}>
+                Ask again
+              </button>
+            </div>
+          )}
+          {sending && <div className="chat-msg assistant chat-thinking">Thinking…</div>}
+        </div>
+      )}
 
       {spent.messages > 0 && !subscription && (
         <div className="chat-estimate">
           {spent.tokens.toLocaleString()} tokens{spent.costUsd ? `, ${formatUsd(spent.costUsd)}` : ""} this conversation.
         </div>
       )}
+      {saveError && <div className="chat-estimate callout callout-warn">{saveError}</div>}
       {error && (
         <div className="chat-estimate callout callout-warn">
           <b>Could not send that</b>
@@ -350,11 +608,14 @@ export default function ChatDock() {
               <textarea
                 ref={inputRef}
                 rows={2}
-                placeholder="Ask a question…"
+                placeholder="Ask a question, or tell it what to change…"
                 aria-label="Your question"
                 value={input}
                 disabled={!canSend}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={(event) => {
+                  setInput(event.target.value);
+                  writeDraft(event.target.value);
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
@@ -375,7 +636,7 @@ export default function ChatDock() {
             {turns.length > 0 && (
               <div className="chat-meta-row">
                 <span>
-                  {turns.length}/{MAX_CHAT_TURNS} turns
+                  {turns.length}/{MAX_CHAT_TURNS} turns · saved
                 </span>
                 <button onClick={startFresh}>Start a new conversation</button>
               </div>
