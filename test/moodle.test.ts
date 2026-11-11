@@ -855,3 +855,52 @@ test("knows QMUL", () => {
   assert.equal(adapter.displayName, "Queen Mary University of London");
   assert.equal(getUniversity("nowhere"), null);
 });
+
+/* ------------------------------------------------------------- practice quizzes */
+
+const QUESTION = (slot: number, number: number | null, html: string) => ({
+  slot, type: number === null ? "description" : "multianswer", number: number ?? undefined, maxmark: number === null ? 0 : 2,
+  html: `<div class="que"><div class="info"><h3 class="no">Question</h3><input type="hidden" value="qaid=1&amp;sesskey=SECRETKEY" /></div><div class="content"><div class="formulation">${html}</div></div></div><script>var x;</script>`,
+});
+
+test("a practice quiz's questions come from the attempt the student already has", async () => {
+  const { adapter, calls } = adapterWith({
+    mod_quiz_get_user_attempts: () => json({ attempts: [{ id: 70, state: "finished" }, { id: 71, state: "inprogress" }] }),
+    mod_quiz_get_attempt_data: (call) => call.params.get("page") === "0"
+      ? json({ nextpage: 1, questions: [QUESTION(1, null, "<p>Formula sheet attached.</p>")] })
+      : json({ nextpage: -1, questions: [QUESTION(2, 1, '<p>P(A) = <input type="text" value="0.25 my answer" /></p>')] }),
+  });
+  const [checkIn, practice] = ofKind(await adapter.listItems(CREDENTIALS, COURSE), "quiz");
+  assert.equal(checkIn?.questions, undefined);
+  assert.match(practice?.questions ?? "", /^# Practice quiz/);
+  assert.match(practice?.questions ?? "", /## Question 1 \(2 marks\)\n\nP\(A\) = \[1\]/);
+  assert.doesNotMatch(practice?.questions ?? "", /my answer|SECRETKEY|var x/);
+  // Only the practice quiz is read, from attempt 71, and nothing is ever started or saved.
+  assert.equal(calls.filter((c) => c.params.get("wsfunction") === "mod_quiz_get_user_attempts").map((c) => c.params.get("quizid")).join(), "1002");
+  assert.deepEqual(calls.filter((c) => c.params.get("wsfunction") === "mod_quiz_get_attempt_data").map((c) => c.params.get("attemptid")), ["71", "71"]);
+  assert.ok(!calls.some((c) => /start_attempt|save_attempt|process_attempt/.test(c.params.get("wsfunction") ?? "")));
+});
+
+test("a finished attempt is read through its review; no attempt means no questions", async () => {
+  const review = adapterWith({
+    mod_quiz_get_user_attempts: () => json({ attempts: [{ id: 80, state: "finished" }] }),
+    mod_quiz_get_attempt_review: () => json({ questions: [QUESTION(1, 1, "<p>Why?</p>")] }),
+  });
+  const [, practice] = ofKind(await review.adapter.listItems(CREDENTIALS, COURSE), "quiz");
+  assert.match(practice?.questions ?? "", /## Question 1 \(2 marks\)\n\nWhy\?/);
+  assert.equal(review.calls.find((c) => c.params.get("wsfunction") === "mod_quiz_get_attempt_review")?.params.get("attemptid"), "80");
+
+  const none = adapterWith();
+  const [, untouched] = ofKind(await none.adapter.listItems(CREDENTIALS, COURSE), "quiz");
+  assert.equal(untouched?.questions, undefined);
+  assert.ok(!none.calls.some((c) => /attempt_data|attempt_review|start_attempt/.test(c.params.get("wsfunction") ?? "")));
+});
+
+test("a quiz behind Safe Exam Browser is never read, whatever its name", async () => {
+  const { adapter, calls } = adapterWith({
+    mod_quiz_get_quizzes_by_courses: () => json({ quizzes: [{ id: 9, coursemodule: 99, name: "Mock in-term test", browsersecurity: "safebrowser" }] }),
+  });
+  const [quiz] = ofKind(await adapter.listItems(CREDENTIALS, COURSE), "quiz");
+  assert.equal(quiz?.questions, undefined);
+  assert.ok(!calls.some((c) => c.params.get("wsfunction") === "mod_quiz_get_user_attempts"));
+});

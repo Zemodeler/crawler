@@ -5,6 +5,7 @@
 
 import { decodeEntities, sanitizeSegment } from "./naming.ts";
 import type { Category, ModulePlacement, VleFile, VleItem } from "./types.ts";
+import { PRACTICE_QUIZZES } from "./quiz-text.ts";
 
 type Rule = { category: Category; tests: RegExp[] };
 
@@ -64,7 +65,7 @@ export type FileJob = {
   category: Category;
   reason: string;
   file: VleFile;
-  /** Set on a page activity's HTML job: the page body, so it need not be downloaded. */
+  /** Content written as is, with nothing to download: a page's HTML body, or a practice quiz's Markdown. */
   html?: string;
 };
 
@@ -127,6 +128,21 @@ export function planFiles(items: VleItem[], placement: ModulePlacement): FilePla
         const { category, reason } = categorize({ filename: file.filename, activity: item.title, activityType: "assign" });
         drafts.push({ vleId, category, reason, file, dirs: [], name: sanitizeSegment(file.filename), sectionIndex: Infinity });
       }
+    } else if (item.kind === "quiz" && item.questions) {
+      // A practice quiz's questions sit with the past papers: practice papers copy how it asks.
+      const vleId = `moodle:quiz:${item.activityId}`;
+      if (!claim(vleId)) continue;
+      const name = sanitizeSegment(`${decodeEntities(item.title)}.md`);
+      drafts.push({
+        vleId,
+        category: "Past Papers",
+        reason: "practice quiz",
+        file: { filename: name, filepath: "/", url: item.url, size: item.questions.length, mimetype: "text/markdown", modified: null },
+        html: item.questions,
+        dirs: [PRACTICE_QUIZZES],
+        name,
+        sectionIndex: Infinity,
+      });
     } else if (item.kind === "page") {
       const activity = decodeEntities(item.activity);
       const section = decodeEntities(item.section);

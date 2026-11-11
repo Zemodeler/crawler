@@ -21,6 +21,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 // host can never allow a write the page would refuse, or the reverse.
 import { isSafeRelativePath, isWritablePath } from "../lib/course-format.ts";
 import { PROFILES } from "../lib/subject-profiles.ts";
+import { isLocationFile, seatsInText, validStudentId } from "../lib/exam-seat.ts";
 import { readDeadlineFile, withDeadlineLock, writeDeadlineFile } from "../../src/deadline-store.ts";
 
 const YEAR = /^\d{4}-\d{2}$/;
@@ -290,6 +291,39 @@ function moduleDir(root, module) {
   } catch {
     return null;
   }
+}
+
+/** Location lists are small; anything bigger is not one, and reading it would stall the page. */
+const MAX_SEAT_FILE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Every room listed next to `studentId` in one module's location files (names
+ * like "Student test location.pdf"), read through the sync's extracted-text
+ * cache so a file already read by the sync is not parsed again.
+ */
+export async function findSeats(root, module, studentId) {
+  const dir = moduleDir(root, module);
+  if (!dir) return { error: "Choose one of your modules." };
+  const id = String(studentId ?? "").trim();
+  if (!validStudentId(id)) return { error: "Enter your student ID as digits only." };
+  const files = [];
+  await walk(root, dir, module, files);
+  const candidates = files.filter((f) => isLocationFile(f.path) && f.size <= MAX_SEAT_FILE_BYTES).slice(0, 50);
+  if (!candidates.length) return { matches: [] };
+  // Loaded on demand: the extractors are large and most requests never need them.
+  const { cachedExtract } = await import("../../src/extract/cache.ts");
+  const matches = [];
+  for (const file of candidates) {
+    const full = resolveInside(root, file.path);
+    if (!full) continue;
+    try {
+      const document = await cachedExtract(join(root, ".crawler"), new Uint8Array(await readFile(full)), file.path.split("/").pop());
+      for (const seat of seatsInText(document.pages, id)) matches.push({ path: file.path, modified: file.modified, ...seat });
+    } catch {
+      // An unreadable file has no room in it; the others still count.
+    }
+  }
+  return { matches };
 }
 
 /**

@@ -82,6 +82,8 @@ export type VleItem =
       opens: number | null;
       closes: number | null;
       url: string;
+      /** A practice quiz's questions as Markdown, read from an attempt the student already has. */
+      questions?: string;
     }
   | {
       kind: "event";

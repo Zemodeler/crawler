@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   KIND_LABELS,
+  awarded,
   gradeBand,
+  hasAnswer,
   statusOf,
   studyPackMarkdown,
   studyPackName,
@@ -15,8 +17,19 @@ import {
   type SelfMark,
 } from "../../lib/practice.ts";
 import { Markdown } from "../markdown.tsx";
+import { ClozeQuestion } from "./cloze.tsx";
 
 const LETTERS = "ABCDEF";
+
+/** "6.00", the way the course site's quiz states a question's marks. */
+const marksText = (marks: number) => marks.toFixed(2);
+
+/** The quiz's words for where a question stands. */
+function quizState(question: Question, answer: Answer | undefined): string {
+  if (!hasAnswer(question, answer)) return "Not yet answered";
+  if (question.type === "cloze" && (question.blanks ?? []).some((_, i) => !answer?.blanks?.[i]?.trim())) return "Incomplete answer";
+  return "Answer saved";
+}
 
 export function clock(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -36,17 +49,70 @@ export function Taker({
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
   const [seconds, setSeconds] = useState(0);
+  /** Questions the student flagged to come back to, as on the course site's quiz. */
+  const [flagged, setFlagged] = useState<Set<string>>(() => new Set());
   const total = paper.questions.length;
   const question = paper.questions[index];
+  // A paper written in the format of the module's own online quiz is shown the way that quiz is.
+  const quizStyle = paper.questions.some((q) => q.type === "cloze");
 
   useEffect(() => {
     const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const answered = (q: Question) =>
-    q.type === "mcq" ? answers[q.id]?.choice !== undefined : Boolean(answers[q.id]?.text?.trim());
+  const answered = (q: Question) => hasAnswer(q, answers[q.id]);
   const left = paper.questions.filter((q) => !answered(q)).length;
+  const setBlank = (q: Question, i: number, value: string) =>
+    setAnswers((a) => {
+      const blanks = [...(a[q.id]?.blanks ?? (q.blanks ?? []).map(() => ""))];
+      blanks[i] = value;
+      return { ...a, [q.id]: { blanks } };
+    });
+  const toggleFlag = (id: string) =>
+    setFlagged((all) => {
+      const next = new Set(all);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  /** Where the answer goes: boxes in the text, choices, or a written answer. */
+  function answerArea(q: Question) {
+    if (q.type === "cloze")
+      return <ClozeQuestion question={q} values={answers[q.id]?.blanks ?? []} onChange={(i, value) => setBlank(q, i, value)} />;
+    const prompt = <p className="pr-prompt">{q.prompt}</p>;
+    if (q.type === "mcq")
+      return <>
+        {prompt}
+        <div className="pr-options" role="radiogroup" aria-label="Choices">
+          {q.options.map((option, i) => (
+            <button
+              type="button"
+              role="radio"
+              aria-checked={answers[q.id]?.choice === i}
+              key={i}
+              className={answers[q.id]?.choice === i ? "picked" : ""}
+              onClick={() => setAnswers((a) => ({ ...a, [q.id]: { choice: i } }))}
+            >
+              <b>{LETTERS[i]}</b>
+              <span>{option}</span>
+            </button>
+          ))}
+        </div>
+      </>;
+    return <>
+      {prompt}
+      <label className="pr-written">
+        <span>Your answer. Show your working; you mark it yourself against the model answer afterwards.</span>
+        <textarea
+          rows={7}
+          value={answers[q.id]?.text || ""}
+          onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: { text: e.target.value } }))}
+        />
+      </label>
+    </>;
+  }
 
   function finish() {
     if (left && !window.confirm(`${left} question${left === 1 ? " is" : "s are"} unanswered and will score nothing. Finish anyway?`))
@@ -95,8 +161,8 @@ export function Taker({
           <button
             type="button"
             key={q.id}
-            className={`${i === index ? "current" : ""} ${answered(q) ? "done" : ""}`}
-            aria-label={`Question ${i + 1}${answered(q) ? ", answered" : ""}`}
+            className={`${i === index ? "current" : ""} ${answered(q) ? "done" : ""} ${flagged.has(q.id) ? "flagged" : ""}`}
+            aria-label={`Question ${i + 1}${answered(q) ? ", answered" : ""}${flagged.has(q.id) ? ", flagged" : ""}`}
             aria-current={i === index ? "step" : undefined}
             onClick={() => setIndex(i)}
           >
@@ -105,43 +171,35 @@ export function Taker({
         ))}
       </nav>
 
-      <article className="pr-question">
-        <p className="pr-qmeta">
-          <span>
-            Question {index + 1} of {total}
-          </span>
-          <span>
-            {question.topic} · {question.marks} {question.marks === 1 ? "mark" : "marks"}
-          </span>
-        </p>
-        <p className="pr-prompt">{question.prompt}</p>
-        {question.type === "mcq" ? (
-          <div className="pr-options" role="radiogroup" aria-label="Choices">
-            {question.options.map((option, i) => (
-              <button
-                type="button"
-                role="radio"
-                aria-checked={answers[question.id]?.choice === i}
-                key={i}
-                className={answers[question.id]?.choice === i ? "picked" : ""}
-                onClick={() => setAnswers((a) => ({ ...a, [question.id]: { choice: i } }))}
-              >
-                <b>{LETTERS[i]}</b>
-                <span>{option}</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <label className="pr-written">
-            <span>Your answer. Show your working; you mark it yourself against the model answer afterwards.</span>
-            <textarea
-              rows={7}
-              value={answers[question.id]?.text || ""}
-              onChange={(e) => setAnswers((a) => ({ ...a, [question.id]: { text: e.target.value } }))}
-            />
-          </label>
-        )}
-      </article>
+      {quizStyle ? (
+        <article className="pr-que" aria-labelledby={`que-${question.id}`}>
+          <aside className="pr-que-info">
+            <h2 id={`que-${question.id}`}>
+              Question <b>{index + 1}</b>
+            </h2>
+            <p>{quizState(question, answers[question.id])}</p>
+            <p>Marked out of {marksText(question.marks)}</p>
+            <button type="button" className={`pr-flag${flagged.has(question.id) ? " on" : ""}`} aria-pressed={flagged.has(question.id)}
+              onClick={() => toggleFlag(question.id)}>
+              {flagged.has(question.id) ? "Remove flag" : "Flag question"}
+            </button>
+            <p className="pr-que-topic">{question.topic}</p>
+          </aside>
+          <div className="pr-que-content">{answerArea(question)}</div>
+        </article>
+      ) : (
+        <article className="pr-question">
+          <p className="pr-qmeta">
+            <span>
+              Question {index + 1} of {total}
+            </span>
+            <span>
+              {question.topic} · {question.marks} {question.marks === 1 ? "mark" : "marks"}
+            </span>
+          </p>
+          {answerArea(question)}
+        </article>
+      )}
 
       <footer className="pr-take-foot">
         <button type="button" className="pr-quiet" disabled={index === 0} onClick={() => setIndex(index - 1)}>
@@ -158,7 +216,11 @@ export function Taker({
           </button>
         )}
       </footer>
-      <p className="pr-hint">Keys: 1–4 choose an option, ← → move between questions.</p>
+      <p className="pr-hint">
+        {quizStyle
+          ? "Numbers can be typed as decimals, fractions (1/3) or percentages. Each box is marked on its own. ← → move between questions."
+          : "Keys: 1–4 choose an option, ← → move between questions."}
+      </p>
     </section>
   );
 }
@@ -373,10 +435,25 @@ export function Result({
           <article className={`pr-review ${status}`} key={q.id}>
             <p className="pr-qmeta">
               <span>{q.topic}</span>
-              <span className="pr-status">{STATUS_LABEL[status]}</span>
+              <span className="pr-status">
+                {STATUS_LABEL[status]}
+                {q.type === "cloze" && ` · Mark ${marksText(awarded(q, answer))} out of ${marksText(q.marks)}`}
+              </span>
             </p>
-            <p className="pr-prompt">{q.prompt}</p>
-            {q.type === "mcq" ? (
+            {q.type === "cloze" ? (
+              <>
+                <div className="pr-que-content">
+                  <ClozeQuestion question={q} values={answer?.blanks ?? []} review />
+                </div>
+                {q.modelAnswer && (
+                  <div className="pr-solution">
+                    <h3>Worked solution</h3>
+                    <p>{q.modelAnswer}</p>
+                  </div>
+                )}
+              </>
+            ) : <p className="pr-prompt">{q.prompt}</p>}
+            {q.type === "cloze" ? null : q.type === "mcq" ? (
               <ul className="pr-choices">
                 {q.options.map((option, i) => (
                   <li key={i} className={`${i === q.correctIndex ? "key" : ""} ${answer?.choice === i ? "chosen" : ""}`}>

@@ -11,7 +11,7 @@
 import { AiError, type AiClient, type JsonSchema, type Progress } from "./ai/types.ts";
 import { fenceUntrusted } from "./ai/structured.ts";
 import type { LocalFile } from "./course-fs.ts";
-import { KIND_LABELS, newId, type Paper, type PracticeKind, type Question } from "./practice.ts";
+import { KIND_LABELS, clozeParts, newId, parseNumber, type Blank, type Paper, type PracticeKind, type Question } from "./practice.ts";
 import { extractFile } from "./source-extract.ts";
 
 export const COUNT_LIMITS: Record<PracticeKind, { min: number; max: number; fallback: number }> = {
@@ -25,19 +25,36 @@ const TOTAL_CAP = 100_000;
 /** A paper needs at least this many usable questions or the run is reported as failed. */
 const MIN_USABLE = 3;
 
+/** Answer boxes in one fill-in question, at most. */
+const MAX_BLANKS = 12;
+
+const BLANK_SCHEMA = {
+  type: "object",
+  properties: {
+    kind: { type: "string", enum: ["number", "text", "choice"] },
+    answer: { type: "string", maxLength: 200 },
+    tolerance: { type: "number", minimum: 0 },
+    options: { type: "array", items: { type: "string", maxLength: 200 }, maxItems: 6 },
+    correctIndex: { type: "integer", minimum: -1, maximum: 5 },
+  },
+  required: ["kind", "answer", "tolerance", "options", "correctIndex"],
+  additionalProperties: false,
+};
+
 const QUESTION_SCHEMA = {
   type: "object",
   properties: {
-    type: { type: "string", enum: ["mcq", "short"] },
+    type: { type: "string", enum: ["mcq", "short", "cloze"] },
     topic: { type: "string", minLength: 2, maxLength: 80 },
-    prompt: { type: "string", minLength: 10, maxLength: 1500 },
+    prompt: { type: "string", minLength: 10, maxLength: 2500 },
     options: { type: "array", items: { type: "string", maxLength: 300 }, maxItems: 6 },
     correctIndex: { type: "integer", minimum: -1, maximum: 5 },
+    blanks: { type: "array", items: BLANK_SCHEMA, maxItems: MAX_BLANKS },
     modelAnswer: { type: "string", maxLength: 1800 },
     explanation: { type: "string", minLength: 5, maxLength: 1000 },
     marks: { type: "integer", minimum: 1, maximum: 10 },
   },
-  required: ["type", "topic", "prompt", "options", "correctIndex", "modelAnswer", "explanation", "marks"],
+  required: ["type", "topic", "prompt", "options", "correctIndex", "blanks", "modelAnswer", "explanation", "marks"],
   additionalProperties: false,
 };
 
@@ -51,12 +68,15 @@ export const PAPER_SCHEMA: JsonSchema = {
   additionalProperties: false,
 };
 
+type RawBlank = { kind: "number" | "text" | "choice"; answer: string; tolerance: number; options: string[]; correctIndex: number };
 type RawQuestion = {
-  type: "mcq" | "short";
+  type: "mcq" | "short" | "cloze";
   topic: string;
   prompt: string;
   options: string[];
   correctIndex: number;
+  /** Older callers and tests may leave it out; only a fill-in question needs it. */
+  blanks?: RawBlank[];
   modelAnswer: string;
   explanation: string;
   marks: number;
@@ -66,6 +86,15 @@ type RawPaper = { title: string; questions: RawQuestion[] };
 /* ----------------------------------------------------------------- sources */
 
 /** Which files a paper can be written from, and how each should be presented. */
+/**
+ * A practice quiz the sync read from the course site (Past Papers/Practice
+ * quizzes/): its questions show how the module's online quizzes ask, so a
+ * paper copies that format.
+ */
+export function isPracticeQuizFile(file: Pick<LocalFile, "path">): boolean {
+  return /(^|\/)past papers\/practice quizzes\/[^/]+\.md$/i.test(file.path);
+}
+
 export function sourceRole(file: Pick<LocalFile, "path" | "category">): "past-paper" | "own" | "material" {
   if (file.category === "Past papers") return "past-paper";
   if (/(^|\/)course materials\/my files\//i.test(file.path)) return "own";
@@ -219,18 +248,20 @@ export async function aiPick(options: {
   return { paths: [...chosen], reason: clean(result.data.reason) };
 }
 
-export type SourceBlock = { text: string; used: string[]; unread: string[]; pastPapers: number };
+export type SourceBlock = { text: string; used: string[]; unread: string[]; pastPapers: number; practiceQuizzes: number };
 
-/** Reads the chosen files into one fenced block. Past papers come first so a tight budget never drops them. */
+/** Sort rank: practice quizzes, then past papers, the student's own files, and the rest. */
+const sourceRank = (file: LocalFile) => (isPracticeQuizFile(file) ? -1 : ["past-paper", "own", "material"].indexOf(sourceRole(file)));
+
+/** Reads the chosen files into one fenced block. Practice quizzes and past papers come first so a tight budget never drops them. */
 export async function readSources(files: LocalFile[]): Promise<SourceBlock> {
   const blocks: string[] = [];
   const used: string[] = [];
   const unread: string[] = [];
   let pastPapers = 0;
+  let practiceQuizzes = 0;
   let left = TOTAL_CAP;
-  const ordered = [...files].sort(
-    (a, b) => ["past-paper", "own", "material"].indexOf(sourceRole(a)) - ["past-paper", "own", "material"].indexOf(sourceRole(b)),
-  );
+  const ordered = [...files].sort((a, b) => sourceRank(a) - sourceRank(b));
   for (const file of ordered) {
     if (left < 1_500) {
       unread.push(file.path);
@@ -243,16 +274,59 @@ export async function readSources(files: LocalFile[]): Promise<SourceBlock> {
     }
     const role = sourceRole(file);
     const text = extract.text.slice(0, Math.min(FILE_CAP, left));
-    const label = role === "past-paper" ? "PAST PAPER" : role === "own" ? "STUDENT'S OWN FILE" : "COURSE MATERIAL";
+    const quiz = isPracticeQuizFile(file);
+    const label = quiz ? "PRACTICE QUIZ" : role === "past-paper" ? "PAST PAPER" : role === "own" ? "STUDENT'S OWN FILE" : "COURSE MATERIAL";
     blocks.push(`### ${label}: ${file.name}`, fenceUntrusted(file.path, text));
     used.push(file.path);
-    if (role === "past-paper") pastPapers++;
+    if (quiz) practiceQuizzes++;
+    else if (role === "past-paper") pastPapers++;
     left -= text.length;
   }
-  return { text: blocks.join("\n\n"), used, unread, pastPapers };
+  return { text: blocks.join("\n\n"), used, unread, pastPapers, practiceQuizzes };
 }
 
 /* ------------------------------------------------------------------ prompt */
+
+/** How a fill-in question is written, for papers that copy a practice quiz. */
+const CLOZE_RULES = [
+  'A fill-in question has "type": "cloze". In "prompt", put [1], [2], [3] … where each answer box goes, numbered in order, exactly as the PRACTICE QUIZ places its boxes: inside a sentence ("The answer is [2]"), in a table cell, or after a part label.',
+  'Give one entry in "blanks" per box, in the same order:',
+  '- "kind": "number" for a numeric answer: "answer" is the exact value as a plain decimal (e.g. "0.3333" or "840"), "tolerance" is how far off still counts (0.005 when you ask for 2 decimal places, 0.0005 for 3, 0 for a whole number). Work each value out exactly before rounding.',
+  '- "kind": "text" for a short word or expression: "answer" is the expected text and "options" lists other spellings that also count. "tolerance" 0.',
+  '- "kind": "choice" for a multiple-choice part: "options" are 2 to 6 choices, "correctIndex" the right one, "answer" "" and "tolerance" 0. Put its [n] on a line of its own, where the choices should be listed.',
+  'For a box that is not a choice, set "options" to the extra spellings (or []) and "correctIndex" to -1.',
+  'A table is Markdown: a header row, a "| --- | --- |" row, then one row per line, e.g. "| 1 | [1] |".',
+  'For a fill-in question set the question\'s own "options" to [] and "correctIndex" to -1, "marks" to the whole question\'s marks (like the quiz), and "modelAnswer" to the full worked solution that gives every box\'s value.',
+  'Every question that is not a fill-in one has "blanks": [].',
+];
+
+function quizRules(kind: PracticeKind, count: number): string[] {
+  const copy = [
+    "The PRACTICE QUIZ files are the module's own online quiz from the course site. In them [1], [2], … mark the answer boxes and ( ) marks one choice of a multiple-choice part.",
+    "Copy exactly how that quiz asks: the same layout and multi-part structure (i), ii) or a), b), c)), tables to complete, answer boxes inside sentences, the same instructions about the answer format (for example \"at least 2 digits in decimal\"), and similar marks per question.",
+    "Write NEW questions on the same and neighbouring topics. Never reuse the quiz's own scenarios, numbers or wording of a question.",
+  ];
+  if (kind === "mcq")
+    return [
+      ...copy,
+      `Write exactly ${count} multiple-choice questions, every one with "type": "mcq" and "blanks": [], asked the way the quiz's multiple-choice parts ask (the same kind of options, such as formulas to choose between).`,
+      "Each has 4 options, exactly one of them correct, and the other three plausible mistakes. Never use \"all of the above\" or \"none of the above\": the options are shuffled afterwards.",
+      'Set "modelAnswer" to an empty string and "marks" to 1. "explanation" says why the correct option is right and why the most tempting wrong one is not.',
+    ];
+  if (kind === "exercise")
+    return [
+      ...copy,
+      `Write exactly ${count} short exercises, every one a fill-in question with "type": "cloze" and one to three boxes, each a single step of the kind the quiz asks.`,
+      ...CLOZE_RULES,
+      '"explanation" says which idea the exercise tests and the usual mistake.',
+    ];
+  return [
+    ...copy,
+    `Write exactly ${count} questions in the quiz's format: mostly fill-in questions with several parts, like the quiz's; a part may be a multiple-choice box.`,
+    ...CLOZE_RULES,
+    '"explanation" says which ideas the question tests and the usual mistakes.',
+  ];
+}
 
 function kindRules(kind: PracticeKind, count: number, hasPastPapers: boolean): string[] {
   if (kind === "mcq")
@@ -285,13 +359,18 @@ export function buildPaperPrompt(options: {
   brief: string;
   module: string;
   pastPapers: number;
+  /** Practice quizzes from the course site among the sources: the paper copies their format. */
+  practiceQuizzes?: number;
 }): string {
   const { kind, count, brief, module, pastPapers } = options;
+  const quiz = (options.practiceQuizzes ?? 0) > 0;
   return [
     `You write practice questions for a university student revising the module "${module}".`,
-    ...kindRules(kind, count, pastPapers > 0),
+    ...(quiz ? quizRules(kind, count) : [...kindRules(kind, count, pastPapers > 0), 'Every question has "blanks": [].']),
     "",
-    pastPapers > 0
+    quiz
+      ? "Any PAST PAPER files show the topics and difficulty of the real exam; take the format from the PRACTICE QUIZ."
+      : pastPapers > 0
       ? "The PAST PAPER files show what the real exam looks like. Write NEW questions in that style on the same topics. Never copy a past question, change only its numbers, or reuse its scenario."
       : "There is no past paper, so base the style on the course material and ordinary exam practice for this subject.",
     "Cover different topics across the paper rather than repeating one. Use short topic names a student would recognise, the same wording every time for the same topic.",
@@ -320,6 +399,39 @@ export function shuffled<T>(items: T[], random: () => number = Math.random): T[]
 const clean = (text: string) => text.replace(/\s+\n/g, "\n").trim();
 
 /**
+ * A fill-in question's boxes, or null when it cannot be marked: the prompt
+ * must hold [1] … [n] once each, in order, one per box; a number must parse;
+ * a choice needs distinct options and an in-range key (its options are
+ * shuffled like an MCQ's). A tolerance is capped at a tenth of the answer, so
+ * a careless one cannot mark everything right.
+ */
+export function usableBlanks(prompt: string, raw: RawBlank[], random: () => number = Math.random): Blank[] | null {
+  const markers = clozeParts(prompt).filter((p): p is { blank: number } => typeof p !== "string").map((p) => p.blank);
+  if (!raw.length || raw.length > MAX_BLANKS || markers.length !== raw.length || markers.some((m, i) => m !== i)) return null;
+  const blanks: Blank[] = [];
+  for (const b of raw) {
+    if (b.kind === "number") {
+      const answer = parseNumber(b.answer);
+      if (answer === null) return null;
+      const tolerance = Number.isFinite(b.tolerance) && b.tolerance > 0 ? Math.min(b.tolerance, Math.max(Math.abs(answer) / 10, 0.005)) : 0;
+      blanks.push({ kind: "number", answer, tolerance });
+    } else if (b.kind === "text") {
+      const answer = clean(b.answer);
+      if (!answer) return null;
+      blanks.push({ kind: "text", answer, accept: (b.options ?? []).map(clean).filter(Boolean) });
+    } else {
+      const options = (b.options ?? []).map(clean);
+      const distinct = new Set(options.map((o) => o.toLowerCase()));
+      if (options.length < 2 || options.some((o) => !o) || distinct.size !== options.length) return null;
+      if (!Number.isInteger(b.correctIndex) || b.correctIndex < 0 || b.correctIndex >= options.length) return null;
+      const order = shuffled(options.map((_, i) => i), random);
+      blanks.push({ kind: "choice", options: order.map((i) => options[i]), correctIndex: order.indexOf(b.correctIndex) });
+    }
+  }
+  return blanks;
+}
+
+/**
  * Keeps only questions that can actually be marked: a multiple-choice question
  * needs distinct options and an in-range key, a written one needs a model
  * answer. The options are shuffled here, because models put the right answer
@@ -334,12 +446,28 @@ export function usableQuestions(
   const questions: Question[] = [];
   for (const q of raw) {
     if (kind === "mcq" && q.type !== "mcq") continue;
-    if (kind === "exercise" && q.type !== "short") continue;
+    if (kind === "exercise" && q.type === "mcq") continue;
     const prompt = clean(q.prompt);
     const dedupe = prompt.toLowerCase().replace(/\W+/g, " ");
     if (seen.has(dedupe)) continue;
 
-    if (q.type === "mcq") {
+    if (q.type === "cloze") {
+      const blanks = usableBlanks(prompt, q.blanks ?? [], random);
+      if (!blanks) continue;
+      seen.add(dedupe);
+      questions.push({
+        id: newId("q"),
+        type: "cloze",
+        topic: clean(q.topic),
+        prompt,
+        blanks,
+        options: [],
+        correctIndex: -1,
+        modelAnswer: clean(q.modelAnswer),
+        explanation: clean(q.explanation),
+        marks: Math.min(10, Math.max(1, Math.round(q.marks) || 1)),
+      });
+    } else if (q.type === "mcq") {
       const options = q.options.map(clean);
       const distinct = new Set(options.map((o) => o.toLowerCase()));
       if (options.length < 3 || options.some((o) => !o) || distinct.size !== options.length) continue;
@@ -403,6 +531,9 @@ const BATCH_ABOVE = 6;
 const BATCH_SIZE = 5;
 const STEM_CHARS = 120;
 
+/** Output room per question: a multi-part fill-in question with its worked solution needs more. */
+const tokensPerQuestion = (block: SourceBlock) => (block.practiceQuizzes > 0 ? 1_100 : 700);
+
 const dedupeKey = (prompt: string) => prompt.toLowerCase().replace(/\W+/g, " ");
 
 export async function generatePaper(options: GenerateOptions): Promise<GeneratedPaper> {
@@ -426,11 +557,12 @@ export async function generatePaper(options: GenerateOptions): Promise<Generated
       brief: options.brief,
       module: options.module,
       pastPapers: block.pastPapers,
+      practiceQuizzes: block.practiceQuizzes,
     }),
     messages: [{ role: "user", content: `Source files:\n\n${block.text}` }],
     schema: PAPER_SCHEMA,
     schemaName: "practice_paper",
-    maxOutputTokens: 4_000 + count * 700,
+    maxOutputTokens: 4_000 + count * tokensPerQuestion(block),
     effort: "medium",
     signal: options.signal,
     onProgress: options.onProgress,
@@ -504,11 +636,12 @@ async function generateInBatches(options: GenerateOptions, count: number, block:
         brief: options.brief,
         module: options.module,
         pastPapers: block.pastPapers,
+        practiceQuizzes: block.practiceQuizzes,
       }),
       messages: [{ role: "user", content }],
       schema: PAPER_SCHEMA,
       schemaName: "practice_paper",
-      maxOutputTokens: 4_000 + ask * 700,
+      maxOutputTokens: 4_000 + ask * tokensPerQuestion(block),
       effort: "medium",
       signal: options.signal,
       onProgress: onProgress ? (progress) => onProgress({ ...progress, batch: { index, total } }) : undefined,

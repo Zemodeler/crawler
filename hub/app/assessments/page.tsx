@@ -2,9 +2,10 @@
 
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import {
-  addDeadline, fetchAssessments, fetchDeadlines, fetchTree, getModuleProfile, loadModule, moduleCode, moduleColor,
+  addDeadline, fetchAssessments, fetchDeadlines, fetchTree, findSeats, getModuleProfile, libraryUrl, loadModule, moduleCode, moduleColor,
   removeDeadline, saveActiveModule, setDeadlineDone, type Assessment, type Deadline, type LibraryTree, type LibraryYear,
 } from "../../lib/library.ts";
+import { isQmDeadline, seatFor, timingNotes, validStudentId, type SeatMatch } from "../../lib/exam-seat.ts";
 import { isHosted } from "../../lib/ai/settings.ts";
 import { parseCSV } from "../../lib/course-format.ts";
 import {
@@ -23,6 +24,15 @@ import { dayKey, formatDue, latestDate, placeDate, StatusPill, KIND_LABEL } from
 
 /** How many coursework and lab rows show before the rest fold away. */
 const COMPACT_DEADLINES = 8;
+
+/** The student's ID, kept on this computer only, to find their exam room. */
+const STUDENT_ID_KEY = "studyhub:student-id";
+function readStudentId(): string {
+  try { return localStorage.getItem(STUDENT_ID_KEY) || ""; } catch { return ""; }
+}
+function writeStudentId(id: string) {
+  try { if (id) localStorage.setItem(STUDENT_ID_KEY, id); else localStorage.removeItem(STUDENT_ID_KEY); } catch { /* the room lookup still works this session */ }
+}
 
 /** What the hub has saved about one module, read once for its exam cards. */
 type ModuleData = {
@@ -160,6 +170,10 @@ export default function AssessmentsPage() {
   const [moduleData, setModuleData] = useState<Record<string, ModuleData>>({});
   /** Exam card id -> the files the student ticked instead of the automatic pick. */
   const [manual, setManual] = useState<Record<string, string[]>>({});
+  /** Queen Mary only: the student ID that finds their room, and the rooms found per module (absent while looking). */
+  const [studentId, setStudentId] = useState("");
+  const [editingId, setEditingId] = useState(false);
+  const [seats, setSeats] = useState<Record<string, SeatMatch[]>>({});
 
   useEffect(() => {
     if (!isHosted()) { queueMicrotask(() => setState("unhosted")); return; }
@@ -168,7 +182,7 @@ export default function AssessmentsPage() {
       if (!active) return;
       const latest = [...tree.years].sort((a, b) => b.year.localeCompare(a.year))[0] || null;
       setYear(latest);
-      setAssessments(components); setDeadlines(items); setNow(Date.now()); setState("ready");
+      setAssessments(components); setDeadlines(items); setNow(Date.now()); setStudentId(readStudentId()); setState("ready");
       // Only modules with an exam, test or quiz coming up need their files and progress read.
       for (const folder of latest?.modules || []) {
         const code = moduleCode(folder);
@@ -198,6 +212,21 @@ export default function AssessmentsPage() {
   const done = items.filter((d) => d.done || (!upcomingIds.has(d.id) && isExamLike(d))).sort(order);
   const exams = upcoming.filter(isExamLike);
   const coursework = upcoming.filter((d) => !isExamLike(d));
+  /** Room lists are a Queen Mary practice, so the When and where block shows only for a Queen Mary library. */
+  const qm = deadlines.some(isQmDeadline);
+  const seatModules = qm && studentId ? [...new Set(exams.map((d) => `${year!.year}/${moduleFolder(d)}`))].join("\n") : "";
+
+  // One lookup per module with an exam coming up, again whenever the ID changes.
+  useEffect(() => {
+    if (!seatModules) return;
+    let active = true;
+    for (const key of seatModules.split("\n")) {
+      findSeats(key, studentId).catch((): SeatMatch[] => []).then((matches) => {
+        if (active) setSeats((all) => ({ ...all, [key]: matches }));
+      });
+    }
+    return () => { active = false; };
+  }, [seatModules, studentId]);
 
   async function mutate(action: () => Promise<void>) {
     setBusy(true); setError(""); setNotice("");
@@ -282,6 +311,53 @@ export default function AssessmentsPage() {
   }
   const weightText = (m: ExamModel) => m.weight === null ? "Weight not listed" : `${m.weight}% of module`;
 
+  function saveStudentId(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const id = String(new FormData(event.currentTarget).get("studentId") || "").trim();
+    if (id && !validStudentId(id)) { setError("Enter your student ID as digits only, as it appears on your ID card."); return; }
+    setError(""); writeStudentId(id); setSeats({}); setStudentId(id); setEditingId(false);
+  }
+  function studentIdForm(field: string) {
+    return <form className="asx-id-form" onSubmit={saveStudentId}>
+      <label htmlFor={field}>Your student ID</label>
+      <span className="asx-id-row">
+        <input id={field} name="studentId" inputMode="numeric" autoComplete="off" pattern="\d{6,12}" maxLength={12} defaultValue={studentId} placeholder="e.g. 250123456" />
+        <button type="submit" className="btn btn-ghost">Find my room</button>
+        {studentId && <button type="button" className="text-link" onClick={() => setEditingId(false)}>Cancel</button>}
+      </span>
+      <small className="quiet">Matched against your module&apos;s room lists. Kept on this computer only.</small>
+    </form>;
+  }
+  /** Queen Mary only: the exam time with its quoted details, and the room listed next to the student's ID. */
+  function whenWhere(m: ExamModel, field: string) {
+    if (!qm) return null;
+    const notes = timingNotes(m.d.title, m.d.sources || []);
+    const found = seats[m.key];
+    // A room list that names no test belongs to the first exam after it appeared.
+    const start = placeDate(m.d)?.getTime() ?? Infinity;
+    const previousEnd = Math.max(-Infinity, ...items
+      .filter((x) => x.module === m.d.module && x.id !== m.d.id && isExamLike(x))
+      .map((x) => latestDate(x)?.getTime() ?? Infinity).filter((t) => t < start));
+    const seat = found ? seatFor(found, m.d.title, previousEnd) : null;
+    const change = <button type="button" className="text-link" onClick={() => setEditingId(true)}>Change ID</button>;
+    let where;
+    if (!studentId || editingId) where = studentIdForm(field);
+    else if (!found) where = <span className="quiet">Looking for your room...</span>;
+    else if (seat) where = <>
+      <strong className="asx-room">{seat.room}</strong>
+      <small>From <a className="text-link" href={`${libraryUrl(seat.path)}#page=${seat.page}`} target="_blank" rel="noopener noreferrer">{fileName(seat.path)}</a>
+        {seat.page > 1 && `, page ${seat.page}`} · ID {studentId} · {change}</small>
+    </>;
+    else where = <>
+      <span>Not listed yet</span>
+      <small>No room list in this module mentions ID {studentId}. Check again after your next sync. · {change}</small>
+    </>;
+    return <dl className="asx-where">
+      <div><dt>When</dt><dd><strong>{whenText(m.d)}</strong>{notes.map((n) => <small key={n}>{n}</small>)}</dd></div>
+      <div><dt>Where</dt><dd>{where}</dd></div>
+    </dl>;
+  }
+
   function hero(d: Deadline) {
     const m = examModel(d);
     const big = m.left ? bigCountdown(m.left.label) : { big: "Date TBC", small: "" };
@@ -294,6 +370,7 @@ export default function AssessmentsPage() {
         <h4 id="hero-title"><span className="module-dot" style={{ background: moduleColor(modules, m.folder) }} aria-hidden="true" />{d.title}</h4>
         <p className="asx-meta">{d.module} / {whenText(d)} · {weightText(m)}</p>
         {["needs-check", "conflict", "tbc"].includes(d.status) && <StatusPill status={d.status} deadline={d} />}
+        {whenWhere(m, "student-id-hero")}
         {m.readiness ? <>
           <ReadinessBars readiness={m.readiness} />
           {weakest.length > 0 && <div className="asx-weakest">
@@ -328,6 +405,7 @@ export default function AssessmentsPage() {
         </div>
       </div>
       {["needs-check", "conflict", "tbc"].includes(d.status) && <StatusPill status={d.status} deadline={d} />}
+      {whenWhere(m, `student-id-${anchorId(d.id)}`)}
       {!data || !readiness ? loadingCard() : <>
         <ReadinessBars readiness={readiness} />
         {readiness.topics.length === 0 && <p className="quiet asx-empty-note">

@@ -18,11 +18,24 @@ export const KIND_LABELS: Record<PracticeKind, string> = {
   exercise: "Simple exercises",
 };
 
+/**
+ * One answer box of a fill-in question, in the style of the course site's
+ * online quizzes: a number marked within a tolerance, a short text answer, or
+ * a choice between options.
+ */
+export type Blank =
+  | { kind: "number"; answer: number; tolerance: number }
+  | { kind: "text"; answer: string; accept: string[] }
+  | { kind: "choice"; options: string[]; correctIndex: number };
+
 export type Question = {
   id: string;
-  type: "mcq" | "short";
+  /** "cloze" is a fill-in question: its prompt holds [1], [2], … where each of `blanks` goes. */
+  type: "mcq" | "short" | "cloze";
   topic: string;
   prompt: string;
+  /** The answer boxes of a fill-in question, in the order their markers appear; absent otherwise. */
+  blanks?: Blank[];
   /** The choices of an MCQ, already shuffled; empty for a written question. */
   options: string[];
   /** Index into `options`; -1 for a written question. */
@@ -48,7 +61,8 @@ export type Paper = {
 };
 
 export type SelfMark = "right" | "partly" | "wrong";
-export type Answer = { choice?: number; text?: string; self?: SelfMark };
+/** `blanks` holds a fill-in question's boxes in order: the typed text, or a choice's index as text. */
+export type Answer = { choice?: number; text?: string; self?: SelfMark; blanks?: string[] };
 
 export type Attempt = {
   id: string;
@@ -75,16 +89,87 @@ export const EMPTY_STORE: PracticeStore = { papers: [], attempts: [] };
 
 export type Status = "correct" | "partial" | "wrong" | "skipped";
 
+/**
+ * A typed number: decimals with a point or a comma, an optional sign, a
+ * fraction ("1/3") or a percentage ("33%" is 0.33). Null for anything else.
+ */
+export function parseNumber(text: string): number | null {
+  const t = text.trim().replace(/\s+/g, "").replace(/^\+/, "");
+  if (!t) return null;
+  const plain = (s: string) => (/^-?(\d+([.,]\d*)?|[.,]\d+)(e-?\d+)?$/i.test(s) ? Number(s.replace(",", ".")) : NaN);
+  let value: number;
+  const fraction = t.match(/^(-?[\d.,]+)\/(-?[\d.,]+)$/);
+  if (fraction) value = plain(fraction[1]) / plain(fraction[2]);
+  else if (t.endsWith("%")) value = plain(t.slice(0, -1)) / 100;
+  else value = plain(t);
+  return Number.isFinite(value) ? value : null;
+}
+
+const normalText = (text: string) => text.toLowerCase().replace(/\s+/g, "").replace(/[.]$/, "");
+
+/** Whether one box was answered right. */
+export function blankCorrect(blank: Blank, given: string | undefined): boolean {
+  if (given === undefined || !given.trim()) return false;
+  if (blank.kind === "choice") return Number(given) === blank.correctIndex;
+  if (blank.kind === "text") return [blank.answer, ...blank.accept].some((a) => normalText(a) === normalText(given));
+  const value = parseNumber(given);
+  // A tiny allowance absorbs floating-point noise in answers like 0.1 + 0.2.
+  return value !== null && Math.abs(value - blank.answer) <= blank.tolerance + Math.abs(blank.answer) * 1e-9 + 1e-12;
+}
+
+/** The right answer of one box, as the review shows it. */
+export function blankAnswerText(blank: Blank): string {
+  if (blank.kind === "choice") return blank.options[blank.correctIndex] ?? "";
+  if (blank.kind === "text") return blank.answer;
+  // As many decimal places as the margin needs, so 2/9 with ±0.005 reads 0.222, not 0.2222222222222222.
+  const places = blank.tolerance > 0 ? Math.min(8, Math.max(0, Math.ceil(-Math.log10(blank.tolerance)))) : 8;
+  const value = String(Number(blank.answer.toFixed(places)));
+  return blank.tolerance > 0 ? `${value} (±${blank.tolerance})` : value;
+}
+
+/** What the student put in one box, as the review shows it. */
+export function blankGivenText(blank: Blank, given: string | undefined): string {
+  if (given === undefined || !given.trim()) return "No answer";
+  return blank.kind === "choice" ? blank.options[Number(given)] ?? "No answer" : given.trim();
+}
+
+/** A fill-in prompt split into its text and its boxes ([1] is blank index 0). */
+export function clozeParts(text: string): (string | { blank: number })[] {
+  const parts: (string | { blank: number })[] = [];
+  let last = 0;
+  for (const match of text.matchAll(/\[(\d{1,2})\]/g)) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push({ blank: Number(match[1]) - 1 });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 export function awarded(question: Question, answer: Answer | undefined): number {
   if (!answer) return 0;
   if (question.type === "mcq") return answer.choice === question.correctIndex ? question.marks : 0;
+  if (question.type === "cloze") {
+    const blanks = question.blanks ?? [];
+    if (!blanks.length) return 0;
+    const right = blanks.filter((b, i) => blankCorrect(b, answer.blanks?.[i])).length;
+    // Each box is an equal share of the marks, to two decimals, as the course site marks it.
+    return Math.round((question.marks * right * 100) / blanks.length) / 100;
+  }
   if (answer.self === "right") return question.marks;
   if (answer.self === "partly") return question.marks / 2;
   return 0;
 }
 
+/** Whether a question has an answer, for the "unanswered" count and the skipped status. */
+export function hasAnswer(question: Question, answer: Answer | undefined): boolean {
+  if (question.type === "mcq") return answer?.choice !== undefined;
+  if (question.type === "cloze") return Boolean(answer?.blanks?.some((b) => b?.trim()));
+  return Boolean(answer?.text?.trim() || answer?.self);
+}
+
 export function statusOf(question: Question, answer: Answer | undefined): Status {
-  const given = question.type === "mcq" ? answer?.choice !== undefined : Boolean(answer?.text?.trim() || answer?.self);
+  const given = hasAnswer(question, answer);
   if (!given) return "skipped";
   const got = awarded(question, answer);
   if (got >= question.marks) return "correct";
@@ -141,10 +226,11 @@ export function retryPaper(attempt: Attempt, now = Date.now()): Paper | null {
   const missed = attempt.questions.filter((q) => statusOf(q, attempt.answers[q.id]) !== "correct");
   if (!missed.length) return null;
   const kinds = new Set(missed.map((q) => q.type));
+  const only = kinds.size === 1 ? [...kinds][0] : null;
   return {
     id: newId("paper"),
     title: `Missed questions from ${attempt.title}`,
-    kind: kinds.size > 1 ? "exam" : kinds.has("mcq") ? "mcq" : "exercise",
+    kind: only === "mcq" ? "mcq" : only === "short" ? "exercise" : "exam",
     brief: "The questions missed in an earlier attempt.",
     createdAt: now,
     sources: [],
@@ -212,7 +298,16 @@ function oneLine(text: string): string {
 function yourAnswer(question: Question, answer: Answer | undefined): string {
   if (question.type === "mcq")
     return answer?.choice === undefined ? "No answer" : oneLine(question.options[answer.choice] ?? "No answer");
+  if (question.type === "cloze")
+    return (question.blanks ?? []).map((b, i) => `[${i + 1}] ${oneLine(blankGivenText(b, answer?.blanks?.[i]))}`).join("; ");
   return oneLine(answer?.text || "") || "No answer";
+}
+
+/** The right answer, as the study pack shows it. */
+function correctAnswer(question: Question): string {
+  if (question.type === "mcq") return question.options[question.correctIndex] ?? "";
+  if (question.type === "cloze") return (question.blanks ?? []).map((b, i) => `[${i + 1}] ${blankAnswerText(b)}`).join("; ");
+  return question.modelAnswer;
 }
 
 /**
@@ -243,7 +338,7 @@ export function studyPackMarkdown(attempt: Attempt, date = new Date(attempt.crea
   out.push(`## What you missed (${missed.length})`, "");
   missed.forEach((q, i) => {
     const status = statusOf(q, attempt.answers[q.id]);
-    const correct = q.type === "mcq" ? oneLine(q.options[q.correctIndex] ?? "") : oneLine(q.modelAnswer);
+    const correct = oneLine(correctAnswer(q));
     out.push(
       `### ${i + 1}. ${oneLine(q.topic)}${status === "partial" ? " (partly right)" : status === "skipped" ? " (skipped)" : ""}`,
       "",
@@ -259,7 +354,7 @@ export function studyPackMarkdown(attempt: Attempt, date = new Date(attempt.crea
   out.push("## Recall list", "", "Cover the right-hand side and say each answer out loud.", "");
   out.push("| Question | Answer |", "| --- | --- |");
   for (const q of missed) {
-    const correct = q.type === "mcq" ? q.options[q.correctIndex] ?? "" : q.modelAnswer;
+    const correct = correctAnswer(q);
     out.push(`| ${oneLine(q.prompt).replace(/\|/g, "/")} | ${oneLine(correct).replace(/\|/g, "/")} |`);
   }
   out.push("");

@@ -447,3 +447,15 @@ test("ECS505U regression: every non-page file lands where it should", () => {
   assert.equal(lectures.at(-1), "17 - 505_revision_guide.pdf");
   assert.equal(jobs.filter((j) => j.category === "Other").length, 0);
 });
+
+test("a practice quiz with questions is a Markdown file with the past papers", () => {
+  const quiz: VleItem = {
+    kind: "quiz", id: 3, activityId: 77, title: "Probability demo quiz", opens: null, closes: null,
+    url: "https://qmplus.example/mod/quiz/view.php?id=77", questions: "# Probability demo quiz\n",
+  };
+  const { jobs } = planFiles([quiz, { ...quiz, activityId: 78, questions: undefined }], placement);
+  assert.deepEqual(jobs.map((j) => [j.relativePath, j.vleId, j.category]), [
+    [`${BASE}/Past Papers/Practice quizzes/Probability demo quiz.md`, "moodle:quiz:77", "Past Papers"],
+  ]);
+  assert.equal(jobs[0]?.html, "# Probability demo quiz\n");
+});

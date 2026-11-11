@@ -9,6 +9,7 @@
 import { PROFILES, inferProfile, type SubjectId } from "./subject-profiles.ts";
 import { SUPPORTED_EXTS, inferCategory, topicLabel } from "./course-format.ts";
 import type { LocalFile } from "./course-fs.ts";
+import type { SeatMatch } from "./exam-seat.ts";
 
 const GUARD = { "x-study-hub-host": "1" };
 
@@ -82,6 +83,9 @@ export type NewDeadline = {
   weight?: number; formative?: boolean; note?: string;
 };
 export const fetchAssessments = () => call<{ assessments: Assessment[] }>("/api/library/assessments").then((r) => r.assessments);
+/** Rooms listed next to a student ID in one module's location files (`<year>/<folder>`). */
+export const findSeats = (module: string, studentId: string) =>
+  call<{ matches: SeatMatch[] }>("/api/library/seat", { method: "POST", body: JSON.stringify({ module, studentId }) }).then((r) => r.matches);
 export const addDeadline = (input: NewDeadline) =>
   call<{ deadline: Deadline }>("/api/library/deadlines/add", { method: "POST", body: JSON.stringify(input) }).then((r) => r.deadline);
 export const removeDeadline = (id: string) =>

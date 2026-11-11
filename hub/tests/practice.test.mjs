@@ -101,7 +101,7 @@ test("progression compares the latest attempt with the one before and with the s
 
 const raw = (over = {}) => ({
   type: "mcq", topic: "Averages", prompt: "What is the mean of 2, 4 and 6?",
-  options: ["4", "3", "6", "12"], correctIndex: 0, modelAnswer: "", explanation: "Sum is 12, divided by 3.", marks: 1, ...over,
+  options: ["4", "3", "6", "12"], correctIndex: 0, blanks: [], modelAnswer: "", explanation: "Sum is 12, divided by 3.", marks: 1, ...over,
 });
 
 test("usableQuestions keeps the right option marked after shuffling and drops unmarkable questions", () => {

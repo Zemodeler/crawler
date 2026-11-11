@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { CLI_SETTINGS, cliSearchDirs, findCli, probeAuth, startCli } from "./cli.mjs";
 import { createJobManager, isJobId } from "./jobs.mjs";
-import { addDeadline, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, removeOwnFile, resolveDeadline, writeModuleFile, writeOwnFile, writeOwnNote, MAX_OWN_FILE_BYTES } from "./library.mjs";
+import { addDeadline, findSeats, removeDeadline, setDeadlineDone, readAssessments, libraryRoot, listLibrary, rawStream, readDeadlines, readModuleFile, readTexts, removeOwnFile, resolveDeadline, writeModuleFile, writeOwnFile, writeOwnNote, MAX_OWN_FILE_BYTES } from "./library.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, "..", "dist");
@@ -440,6 +440,12 @@ async function handleLibrary(request, response, url) {
   }
   if (url.pathname === "/api/library/deadlines" && request.method === "GET") {
     sendJson(response, 200, { deadlines: await readDeadlines(root) });
+    return;
+  }
+  if (url.pathname === "/api/library/seat" && request.method === "POST") {
+    const body = await readBody(request).catch(() => ({}));
+    const result = await findSeats(root, body.module, body.studentId);
+    sendJson(response, result.error ? 400 : 200, result.error ? { code: "bad_request", message: result.error } : result);
     return;
   }
   if (url.pathname === "/api/library/assessments" && request.method === "GET") {

@@ -11,6 +11,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { decodeEntities } from "../extract/xml.ts";
+import { isPracticeQuiz, quizMarkdown, type QuizQuestionHtml } from "../quiz-text.ts";
 import { VleError } from "../types.ts";
 import type { Course, Credentials, LoginBrowser, Placement, UniversityAdapter, VleFile, VleItem } from "../types.ts";
 
@@ -186,7 +187,10 @@ type MoodleAssignment = {
   introattachments?: MoodleFile[];
   timemodified?: number;
 };
-type MoodleQuiz = { id: number; coursemodule: number; name: string; timeopen?: number; timeclose?: number };
+type MoodleQuiz = { id: number; coursemodule: number; name: string; timeopen?: number; timeclose?: number; browsersecurity?: string; hasquestions?: number };
+type MoodleQuizAttempt = { id: number; state?: string; preview?: number };
+/** Pages of one attempt read at most; a quiz past this is not a practice quiz. */
+const QUIZ_PAGES = 40;
 type MoodleEvent = { id: number; name: string; timestart: number; modulename?: string | null };
 type MoodleForum = { id: number; type: string; name?: string };
 type MoodleDiscussion = {
@@ -456,15 +460,51 @@ export function createMoodleAdapter(config: MoodleSiteConfig, deps: MoodleDeps =
       "mod_quiz_get_quizzes_by_courses",
       { courseids: [course.id] },
     );
-    return (result.quizzes ?? []).map((q) => ({
-      kind: "quiz",
-      id: q.id,
-      activityId: q.coursemodule,
-      title: q.name,
-      opens: nonZero(q.timeopen),
-      closes: nonZero(q.timeclose),
-      url: stripToken(`${site}/mod/quiz/view.php?id=${q.coursemodule}`),
+    return Promise.all((result.quizzes ?? []).map(async (q) => {
+      const url = stripToken(`${site}/mod/quiz/view.php?id=${q.coursemodule}`);
+      const questions = isPracticeQuiz(q) && q.hasquestions !== 0 ? await practiceQuestions(credentials, q.id, q.name, url) : null;
+      return {
+        kind: "quiz" as const,
+        id: q.id,
+        activityId: q.coursemodule,
+        title: q.name,
+        opens: nonZero(q.timeopen),
+        closes: nonZero(q.timeclose),
+        url,
+        ...(questions ? { questions } : {}),
+      };
     }));
+  }
+
+  /**
+   * A practice quiz's questions as Markdown, from an attempt the student
+   * already has: the open one, else the latest finished one's review. Never
+   * starts, saves or submits an attempt. Null when there is no attempt or the
+   * course site will not show it.
+   */
+  async function practiceQuestions(credentials: Credentials, quizid: number, title: string, url: string): Promise<string | null> {
+    try {
+      const { attempts = [] } = await ws<{ attempts?: MoodleQuizAttempt[] }>(credentials, "mod_quiz_get_user_attempts", { quizid, status: "all" });
+      const own = attempts.filter((a) => !a.preview).sort((a, b) => b.id - a.id);
+      const open = own.find((a) => a.state === "inprogress");
+      const finished = own.find((a) => a.state === "finished");
+      const questions: QuizQuestionHtml[] = [];
+      if (open) {
+        for (let page = 0, read = 0; page >= 0 && read < QUIZ_PAGES; read++) {
+          const data = await ws<{ questions?: QuizQuestionHtml[]; nextpage?: number }>(credentials, "mod_quiz_get_attempt_data", { attemptid: open.id, page });
+          questions.push(...(data.questions ?? []));
+          page = typeof data.nextpage === "number" ? data.nextpage : -1;
+        }
+      } else if (finished) {
+        const data = await ws<{ questions?: QuizQuestionHtml[] }>(credentials, "mod_quiz_get_attempt_review", { attemptid: finished.id, page: -1 });
+        questions.push(...(data.questions ?? []));
+      }
+      return questions.length ? quizMarkdown(decodeEntities(title), url, questions) : null;
+    } catch (error) {
+      // A quiz that cannot be read is just left out; an expired sign-in still stops the sync.
+      if (error instanceof VleError && error.code === "invalid_token") throw error;
+      return null;
+    }
   }
 
   async function eventItems(credentials: Credentials, course: Course): Promise<VleItem[]> {

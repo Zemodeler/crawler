@@ -344,7 +344,8 @@ async function syncUnlocked(options: SyncOptions): Promise<SyncResult> {
             placement,
             items,
             // Spoken lectures are not read for deadlines: too easy to misquote.
-            manifest: [...manifest.values()].filter((e) => e.module === course.shortname && e.category !== "Transcripts" && currentFiles.has(e.vleId)),
+            // Nor are practice quiz questions: they describe made-up exams.
+            manifest: [...manifest.values()].filter((e) => e.module === course.shortname && e.category !== "Transcripts" && !e.vleId.startsWith("moodle:quiz:") && currentFiles.has(e.vleId)),
             deadlines,
             now,
             ...(options.ai ? { ai: options.ai } : {}),
@@ -479,7 +480,7 @@ async function syncFile(ctx: FileContext): Promise<{ result: FileResult; line?: 
   const display = job.relativePath.split("/").slice(-1)[0] ?? job.relativePath;
 
   try {
-    /* Page bodies already have their content; everything else is downloaded. */
+    /* Page bodies and practice quizzes already have their content; everything else is downloaded. */
     const fetchTo = async (target: string): Promise<{ sha256: string }> => {
       const tmp = join(root, STATE_DIR, "tmp", randomBytes(8).toString("hex"));
       const got = job.html !== undefined ? await writeHtml(tmp, job.html) : await downloadTo(ctx.adapter, ctx.credentials, job.file, tmp);
